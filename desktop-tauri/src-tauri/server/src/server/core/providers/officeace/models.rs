@@ -314,6 +314,18 @@ pub async fn refresh(credential: &OfficeAceCredential, force: bool) -> ModelRefr
         }
     };
     let models = attach_rates(models, &rates);
+    // 一条事实留痕：上游给了几条读数、几条对上了目录。少了这条，「只有 4 个模型显示倍率」
+    // 就分不清是**上游只发布这几个**还是**两边命名对不上**（后者才需要改匹配规则）。
+    let with_rate = models.iter().filter(|model| model.get("credits").is_some()).count();
+    crate::server::logging::log(
+        "[OfficeAce]",
+        &format!(
+            "模型倍率：上游给了 {} 条读数，对上目录 {} 条（目录共 {} 条）",
+            rates.len(),
+            with_rate,
+            models.len()
+        ),
+    );
     let count = models.len();
     with_state(|slot| {
         *slot = Some(CatalogState {
