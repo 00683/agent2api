@@ -78,6 +78,118 @@ pub fn last_refreshed_at() -> i64 {
     with_state(|slot| slot.as_ref().map(|state| state.fetched_at).unwrap_or(0))
 }
 
+/// 每模型倍率的**最后一份非空读数**（`model_name` 小写 → `cost_coefficient`）。
+///
+/// 为什么要单独留一份，而不是「每次刷新都现取」：倍率走的是控制面那条 V11 签名链
+/// （临时 AK/SK，约 2 小时过期），而模型目录走的是**不过期**的网关 Basic —— 两条链寿命不同。
+/// 一过期就「取不到 ⇒ 清空」，会让已经有读数的列变成一片 `—`，看起来像「上游不给倍率」，
+/// 而真实情况只是我们手上那把临时凭据到期了。宁可旧一点也不假空。
+static RATES: OnceLock<Mutex<Vec<(String, f64)>>> = OnceLock::new();
+
+fn rates_slot() -> &'static Mutex<Vec<(String, f64)>> {
+    RATES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn current_rates() -> Vec<(String, f64)> {
+    rates_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 记下这份新读数并返回「本次该用哪一份」：**空表不许把已有读数抹掉**
+/// （上游整个挂了与真的没有倍率，回的都是空数组，分不清就不该当"没有"处理）。
+fn remember_rates(rows: Vec<(String, f64)>) -> Vec<(String, f64)> {
+    if rows.is_empty() {
+        return current_rates();
+    }
+    let mut guard = rates_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = rows.clone();
+    rows
+}
+
+/// 解析 `{models: [{model_name, cost_coefficient, …}]}`。
+///
+/// `cost_coefficient` 两种形态都收（JSON 数字与 `"0.30"` 字符串）：上游这条链里
+/// 「数值其实是字符串」是**已经踩过一次**的形态（订阅/额度那批字段就是字符串，
+/// 见 `subscription.rs`），而倍率解不出来只会静默少一列，不会报错。
+/// 没有 `model_name`、数解不出来或**负数**的条目丢掉 —— 负数不是倍率，是脏数据。
+pub fn parse_rates(payload: &Value) -> Vec<(String, f64)> {
+    let rows = payload.get("models").and_then(Value::as_array);
+    let mut out: Vec<(String, f64)> = Vec::new();
+    for row in rows.into_iter().flatten() {
+        let Some(name) = row.get("model_name").and_then(Value::as_str) else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let value = match row.get("cost_coefficient") {
+            Some(Value::Number(number)) => number.as_f64(),
+            Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        };
+        let Some(value) = value.filter(|value| value.is_finite() && *value >= 0.0) else {
+            continue;
+        };
+        out.push((name.to_lowercase(), value));
+    }
+    out
+}
+
+/// 把倍率并进目录条目：写 `credits` 文本（界面那一列读它，与别家同一键同名同格式）。
+///
+/// ── 只按**精确 id** 匹配，不做前缀借用 ──────────────────────
+/// 参考实现的面板 `rateFor()` 允许「表里没有这个 id 就蹭同名前缀」，它自己都警告这
+/// 样出来的数是「看起来合理但是错的」（`glm-5.3` 蹭到 `glm-5` 的倍率）。倍率是给人
+/// 决定用哪个模型的依据，**错一个数量级比空着坏得多** —— 所以这里宁可留 `—`。
+/// 大小写不敏感（目录 id 与倍率表的命名偶有大小写差），分隔符不参与匹配。
+pub fn attach_rates(models: Vec<Value>, rates: &[(String, f64)]) -> Vec<Value> {
+    if rates.is_empty() {
+        return models;
+    }
+    models
+        .into_iter()
+        .map(|mut model| {
+            let id = model
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            if let Some((_, value)) = rates.iter().find(|(name, _)| *name == id) {
+                if let Some(object) = model.as_object_mut() {
+                    object.insert(
+                        "credits".to_string(),
+                        Value::String(credits_text(*value)),
+                    );
+                }
+            }
+            model
+        })
+        .collect()
+}
+
+/// 倍率数字 → 界面文本（`x0.7 credits`）：整数不带小数点，其余最多两位并裁尾零。
+/// 两位是必要的 —— 实测读数里有 `0.25` 这种，一位会显示成 `0.3`。
+/// 与 `trae::models::credits_text`、`catpaw::catalog::rate_text` 同一取向（本仓第 3 份，
+/// 三家的上游给的形态各不相同，先各自保留；要合并得连键名口径一起谈）。
+fn credits_text(rate: f64) -> String {
+    let rounded = (rate * 100.0).round() / 100.0;
+    let plain = if (rounded - rounded.trunc()).abs() < 1e-9 {
+        format!("{}", rounded.trunc() as i64)
+    } else {
+        format!("{rounded:.2}")
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    };
+    format!("x{plain} credits")
+}
+
 /// 把一个上游条目映成目录条目（保留上游给的字段，缺的补 `officeace`）。
 fn map_entry(entry: &Value) -> Option<Value> {
     let id = entry
@@ -185,6 +297,18 @@ pub async fn refresh(credential: &OfficeAceCredential, force: bool) -> ModelRefr
     if models.is_empty() {
         return ModelRefreshOutcome::failed("OfficeAce 模型目录为空或格式不认识（保留现有清单）");
     }
+    // 倍率：另一条链（控制面签名），失败就沿用最后一份读数，别抹空（见 `RATES`）。
+    let rates = match super::subscription::fetch_model_token_rates(credential).await {
+        Ok(payload) => remember_rates(parse_rates(&payload)),
+        Err(error) => {
+            crate::server::logging::verbose(
+                "[OfficeAce]",
+                &format!("模型倍率没取到，沿用上一份读数：{}", error.message),
+            );
+            current_rates()
+        }
+    };
+    let models = attach_rates(models, &rates);
     let count = models.len();
     with_state(|slot| {
         *slot = Some(CatalogState {
@@ -250,5 +374,85 @@ mod tests {
     fn accepts_a_bare_array_too() {
         let payload = json!([{"id": "a"}, {"id": "b"}]);
         assert_eq!(2, parse_models(&payload).len());
+    }
+
+    /// 倍率表的读法：两种数值形态都收，脏数据丢掉，`model_name` 归一小写。
+    #[test]
+    fn rates_read_both_number_and_string_shapes() {
+        let payload = json!({"models": [
+            {"model_name": " GLM-5.2 ", "cost_coefficient": 0.7},
+            {"model_name": "deepseek-v4.1-flash", "cost_coefficient": "0.25"},
+            {"model_name": "kimi-k2.6", "cost_coefficient": 0},
+            {"model_name": "", "cost_coefficient": 1},
+            {"cost_coefficient": 1},
+            {"model_name": "no-rate"},
+            {"model_name": "negative", "cost_coefficient": -1},
+            {"model_name": "garbage", "cost_coefficient": "n/a"},
+        ]});
+        let rates = parse_rates(&payload);
+        let names: Vec<&str> = rates.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            vec!["glm-5.2", "deepseek-v4.1-flash", "kimi-k2.6"],
+            names,
+            "空名/缺字段/负数/非数字都不该产出读数：{rates:?}"
+        );
+        assert_eq!(Some(&0.7), rates.iter().find(|(name, _)| name == "glm-5.2").map(|(_, value)| value));
+        // `0` 是合法读数（免费/限免那一档），不许被「非零才算有」滤掉
+        assert!(rates.iter().any(|(name, value)| name == "kimi-k2.6" && *value == 0.0));
+    }
+
+    /// 匹配只认精确 id：表里没有 `glm-5.3` 就**不许**蹭 `glm-5` 的读数
+    /// （参考实现的面板允许借用并自己警告那样会显示一个看起来合理的错倍率）。
+    #[test]
+    fn rates_match_exact_ids_only_and_absent_means_no_key() {
+        let rates = vec![("glm-5.2".to_string(), 0.75f64)];
+        let models = parse_models(&json!({"data": [
+            {"id": "glm-5.2"},
+            {"id": "glm-5.3"},
+            {"id": "GLM-5.2"},
+        ]}));
+        let merged = attach_rates(models, &rates);
+        assert_eq!(
+            Some("x0.75 credits"),
+            merged[0].get("credits").and_then(Value::as_str),
+            "精确命中要落到 credits 上：{}",
+            merged[0]
+        );
+        assert!(
+            merged[1].get("credits").is_none(),
+            "没有这条 id 就不许借用，留 `—`：{}",
+            merged[1]
+        );
+        assert!(
+            merged[2].get("credits").is_some(),
+            "大小写差不该让它落到没匹配上：{}",
+            merged[2]
+        );
+        // 空表 ⇒ 原样返回（连"抹掉已有 credits"都不做，读数由 `remember_rates` 兜）
+        let untouched = attach_rates(merged.clone(), &[]);
+        assert_eq!(
+            merged[0].get("credits"),
+            untouched[0].get("credits"),
+            "空倍率表不该改动条目"
+        );
+    }
+
+    /// `x1` / `x0` / 两位小数 / 裁尾零：格式与别家那一列对齐。
+    #[test]
+    fn the_rate_text_keeps_two_decimals_and_trims_zeros() {
+        assert_eq!("x1 credits", credits_text(1.0));
+        assert_eq!("x0 credits", credits_text(0.0));
+        assert_eq!("x0.25 credits", credits_text(0.25));
+        assert_eq!("x0.2 credits", credits_text(0.2));
+        assert_eq!("x0.08 credits", credits_text(0.083));
+    }
+
+    /// 空读数不许把已有读数抹掉（STS 一过期就整列变 `—` 是假空）。
+    #[test]
+    fn an_empty_rate_table_keeps_the_last_reading() {
+        let fresh = vec![("glm-5.1".to_string(), 0.5f64)];
+        assert_eq!(1, remember_rates(fresh).len());
+        assert_eq!(1, remember_rates(Vec::new()).len(), "空表要回上一份，不是空");
+        assert_eq!("glm-5.1", current_rates()[0].0);
     }
 }

@@ -148,6 +148,17 @@ pub async fn fetch_subscription(credential: &OfficeAceCredential) -> Result<Valu
     .await
 }
 
+/// 每模型使用倍率：`GET /v1/model-token-rates`（控制面，要 V11 签名）。
+///
+/// 响应是 `{models: [{model_name, cost_coefficient, prompt_tokens_per_point, …}]}`，
+/// `cost_coefficient` 就是官方客户端里那颗 `0.30x`。参考实现同源（`quota.mjs` 的
+/// `summary.rates` 与 `/admin/api/model-rates` 那条兜底代理），字段名逐个照抄。
+pub async fn fetch_model_token_rates(
+    credential: &OfficeAceCredential,
+) -> Result<Value, GatewayError> {
+    call(credential, "GET", "/v1/model-token-rates", None, &[]).await
+}
+
 /// 领奖励积分：`POST /v1/subscription/bonus/claim`（body `{}`，幂等）。
 ///
 /// 返回完整响应体（`bonus_skus` 是当前所有奖励活动，含刚领到的）。
