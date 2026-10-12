@@ -58,6 +58,7 @@
 //! ── 硬约束 ──────────────────────────────────────────────────
 //! release 是 `panic=abort`：本文件零 unwrap / expect / panic；持锁期间不做网络。
 
+use std::collections::HashSet;
 use std::sync::{OnceLock, RwLock};
 
 use serde_json::{Value, json};
@@ -142,15 +143,26 @@ pub fn catalog_url() -> String {
 ///
 /// 条目顺序保留上游给的顺序：`/v1/models` 的阅读顺序与官方客户端一致，
 /// 而且"顺序变了"本身就是一条可观察的漂移信号。
+///
+/// ── 按 `config_name` 去重（修复 #177）────────────────────────
+/// 上游 `config_info_list` 里同一条 `config_name` 可能给两遍（实测
+/// `deepseek-v4.1-flash-solo`）：逐条 push 会让管理页画出两行同 id 的模型
+/// （第二行是条"没信息"的残条），连带 `manage_view` 为每条模型合成的那条
+/// 默认映射也重复一条。留第一条（忽略大小写 —— 与下游按名匹配的
+/// `eq_ignore_ascii_case` 同一口径），重复条目直接丢。
 pub fn parse_catalog(payload: &Value) -> Vec<Value> {
     let Some(entries) = payload.get("config_info_list").and_then(Value::as_array) else {
         return Vec::new();
     };
     let mut out = Vec::with_capacity(entries.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(entries.len());
     for entry in entries {
         let config_name = text(entry, "config_name");
         if config_name.is_empty() {
             continue; // 空 id 的条目不能路由，也不能广告
+        }
+        if !seen.insert(config_name.to_lowercase()) {
+            continue; // 同一条 config_name 的重复条目（见函数头「按 config_name 去重」）
         }
         // `false` 才过滤；缺省（None）按启用处理（见模块头）
         if entry.get("config_switch").and_then(Value::as_bool) == Some(false) {

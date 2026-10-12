@@ -296,11 +296,16 @@ pub fn run() {
             }
 
             // 设置先读一次并缓存：窗口事件回调是同步的，需要立即拿到
-            // close_to_tray 才能决定关窗是隐藏还是退出
+            // close_to_tray 才能决定关窗是隐藏还是退出；lightweight 同理 ——
+            // 它决定关窗是「销毁窗口」还是「隐藏」。#188：早先只缓存了前者，
+            // 轻量模式要等设置页读过/存过一次（get_app_settings / save_app_settings）
+            // 才写进缓存，于是「开机自启 → 直接关窗」这条路径上缓存恒为默认 false，
+            // 关窗走了隐藏、轻量模式形同没开。
             let app_settings = settings::load();
             {
                 let state = app.state::<AppState>();
                 state.window.set_close_to_tray(app_settings.close_to_tray);
+                state.window.set_lightweight(app_settings.lightweight_mode);
             }
 
             // ── 旧「当前用户」级安装的清理 + 自启登记刷新（1.x → perMachine 迁移）──
@@ -364,10 +369,26 @@ pub fn run() {
             // 开机自启时不显示窗口（visible(false) 比先显示再隐藏更干净，
             // 不会在任务栏闪一下）。
             //
+            // ── 开机自启 + 轻量模式：窗口整个不建 ──────────────────────
+            // 只 hide 不 destroy 的话，WebView2 那 6 个进程照样常驻（约
+            // 200MB）—— 轻量模式的意义要等用户「打开窗口再关一次」才兑现，
+            // 而自启路径永远走不到那一步（它不经过关窗）。这里直接跳过建窗，
+            // 只留托盘与后端；用户点托盘（或双击图标触发单实例激活）时由
+            // `ensure_main_window` 按同一份参数重建 —— 与轻量模式下「销毁
+            // 再唤起」走的是同一条路径，因此窗口长得完全一样。
+            //
+            // 代价与轻量模式本身一致：跑在 WebView 里的 ZCode 验证码令牌池
+            // 在用户打开窗口前不补货，该通道请求会以 503 落进请求日志（见
+            // `AppSettings::lightweight_mode` 的说明）。关掉轻量模式或非自启
+            // 启动都照旧建窗，不走这条。
+            //
             // 建窗参数（无装饰标题栏、WebView2 保活、桥注入等）只在
             // create_main_window 一处声明：轻量模式下托盘重建也走它，
             // 两边必须长得一模一样。
-            create_main_window(&handle, !launched_by_autostart())?;
+            let autostarted = launched_by_autostart();
+            if !(autostarted && app_settings.lightweight_mode) {
+                create_main_window(&handle, !autostarted)?;
+            }
 
             // 后端负责维护任务的持久化排期，桌面壳不额外触发刷新。
             tauri::async_runtime::spawn(async move {
