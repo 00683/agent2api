@@ -4,7 +4,7 @@
  *
  * ── 从 accounts-data.ts 拆出来的理由 ──────────────────────────
  * 「状态怎么存」与「动作怎么发」是两件事，混在一个文件里已经九百多行（约定单文件 ≤800）。
- * 拆开之后：本文件只回答「现在是什么状态、怎么改」，actions（余额 / 签到 / 连接数 /
+ * 拆开之后：本文件只回答「现在是什么状态、怎么改」，actions（余额 / 连接数 /
  * Clash 缓存 / 行内动作 / 弹窗 / 对外契约）在 accounts-data.ts —— 那个文件再
  * `export * from './accounts-store'`，于是视图侧的 import 路径一行不用改。
  *
@@ -18,12 +18,16 @@
  *   · 高频小改动（连接数每 2 秒一轮）走 `patch({...})` 换新 Map / Set；
  *   · 少量原地可变的结构由各自的动作层维护（见 accounts-data.ts 的说明）。
  * 两条路都经过同一个订阅者集合，React 侧看不出差别。
+ *
+ * （签到相关状态曾在这里：`checkinBusy` 与新手任务弹窗 `onboarding`。签到动作
+ * 迁到「签到中心」后两样都随之离开 —— 新手任务的查询 / 领取缓存现在在
+ * checkin-state.ts，签到完成后自动处理的那条链也在那边。）
  */
 
 import { shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot, type PanelKind } from './accounts-shared'
 import {
   byPriorityOrder, filterCounts, positionMap, providerSummaries, visibleAccounts,
-  type AccountFilter,
+  type AccountFilter, type TokenUsageLookup, type UsageLookup,
 } from './accounts-domain'
 
 /** 弹窗状态：账号设置（单个）/ 批量操作（多选 + 动作），关闭即 null */
@@ -44,9 +48,8 @@ export type AccountsStore = {
   clash: ClashSnapshot | null
   dialog: AccountsDialog
   namesHidden: boolean
-  /** 批量查询余额 / 签到在途（工具条按钮的文案与禁用态） */
+  /** 批量查询余额在途（工具条按钮的文案与禁用态） */
   usageBusy: boolean
-  checkinBusy: boolean
   /** 余额查询在途的账号（行上那颗「余额」按钮的去重闸） */
   usageInflight: ReadonlySet<string>
 }
@@ -83,7 +86,6 @@ let store: AccountsStore = {
   dialog: null,
   namesHidden: loadNamesHidden(),
   usageBusy: false,
-  checkinBusy: false,
   usageInflight: new Set<string>(),
 }
 
@@ -124,17 +126,20 @@ export function findAccount(id: string): AccountRecord | null {
   return allAccounts().find(account => account.id === id) || null
 }
 
-/** 当前可见账号（筛选三维度）与分段计数共用 accounts-domain 的同一份口径 */
-export function visibleList(): AccountRecord[] {
-  return visibleAccounts(allAccounts(), store.filter).slice().sort(byPriorityOrder)
+/** 当前可见账号（筛选三维度）与分段计数共用 accounts-domain 的同一份口径。
+ *  `usageOf`（余额读数查找）与 `tokenUsageOf`（Token 周期消耗读数查找）由调用方
+ *  注入：限流维度把「余额不足已跳过 / Token 限额已跳过」都算进已限流，而两份缓存
+ *  都在 accounts-data（本文件不反向依赖它，避免 store⇄data 成环） */
+export function visibleList(usageOf?: UsageLookup, tokenUsageOf?: TokenUsageLookup): AccountRecord[] {
+  return visibleAccounts(allAccounts(), store.filter, usageOf, tokenUsageOf).slice().sort(byPriorityOrder)
 }
 
 export function providerSummaryList(): Array<{ id: string; label: string; count: number }> {
   return providerSummaries(snapshot())
 }
 
-export function segmentCounts(): Record<string, number> {
-  return filterCounts(allAccounts(), store.filter, providerSummaryList())
+export function segmentCounts(usageOf?: UsageLookup, tokenUsageOf?: TokenUsageLookup): Record<string, number> {
+  return filterCounts(allAccounts(), store.filter, providerSummaryList(), usageOf, tokenUsageOf)
 }
 
 /** 该账号在**全局队列**里的位置（序号与 ↑/↓ 的边界同源） */
