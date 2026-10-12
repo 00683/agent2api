@@ -985,6 +985,9 @@ pub fn shim_js() -> &'static str {
     // ── 排队等待（次数 / 单次秒数）──
     getQueue: function () { return call('GET', '/api/queue'); },
     saveQueue: function (patch) { return call('PUT', '/api/queue', patch); },
+    // ── 验证码令牌池（ZCode 活动套餐通道的补货节奏）──
+    getCaptchaPool: function () { return call('GET', '/api/zcode/captcha-pool'); },
+    saveCaptchaPool: function (patch) { return call('PUT', '/api/zcode/captcha-pool', patch); },
 
     // ── 调试模式 ──
     getDebug: function () { return call('GET', '/api/debug'); },

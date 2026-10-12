@@ -56,6 +56,7 @@
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection};
+use serde_json::Value;
 
 use super::record::{AttemptDetail, RequestEntry, RequestQuery, RunningProgress, SensitiveHit};
 use super::report::normalize_status_filter;
@@ -123,8 +124,13 @@ fn decode_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestEntry> {
         // 隐式转换（手改过的库里写成 2 也照样算「是测试」）
         is_test: row.get::<_, i64>(23)? != 0,
         // 末列是 schema v10 加的（选路决策快照）；旧行 / 没走到选路的行是
-        // NULL —— 读成 Null，展示层不渲染那一段
-        route: row.get(24)?,
+        // NULL —— 读成 Null，展示层不渲染那一段。rusqlite 未开 serde_json
+        // feature，Value 不能直接 FromSql：读 TEXT 再解析，坏值退 Null
+        // （与 decode_json_list 的「坏值退化」同一取向）
+        route: row
+            .get::<_, Option<String>>(24)?
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(Value::Null),
     })
 }
 

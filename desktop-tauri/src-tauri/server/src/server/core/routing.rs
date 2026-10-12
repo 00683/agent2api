@@ -515,7 +515,7 @@ pub struct PlanMeta<'a> {
 /// 时间戳 → 「HH:MM」短文案（原因句里用，按**操作者本机时区** —— 与请求
 /// 统计的切日同一口径：用户看的是「我这里几点恢复」）。跨天时补「明天」前缀。
 fn clock_text(reset_at: i64, now: i64) -> String {
-    use chrono::TimeZone;
+    use chrono::{TimeZone, Timelike};
     let Some(secs) = reset_at.checked_div(1000) else {
         return String::new();
     };
@@ -564,7 +564,7 @@ fn base_order(candidates: &[Value], strategy: RouteStrategy, meta: &PlanMeta<'_>
                 })
                 .collect();
             keyed.sort_by(|a, b| {
-                (a.0, f64::total_cmp(&a.1), a.2).cmp(&(b.0, f64::total_cmp(&b.1), b.2))
+                (a.0, a.1.total_cmp(&b.1), a.2).cmp(&(b.0, b.1.total_cmp(&a.1), b.2))
             });
             keyed.into_iter().map(|(_, _, _, account)| account).collect()
         }
@@ -591,7 +591,7 @@ pub fn plan_route(
         let name = account_name(account, &id);
         let provider = provider_of(account).to_string();
         let share = meta.shares.get(&id).copied().flatten();
-        let mut entry = |state: &'static str, reason: String| PlanEntry {
+        let entry = |state: &'static str, reason: String| PlanEntry {
             account: account.clone(),
             id: id.clone(),
             name: name.clone(),
@@ -658,19 +658,19 @@ pub fn plan_route(
     }
 
     // 基础序（策略）→ 稳定修饰：没沉底的在前 → 没休息的在前 → 没熔断的在前
+    // 三个修饰**跨策略**生效：垫底（Sink）解决的是「每次回到第 1 位再撞一次
+    // 429」，退避解决的是「反复失败反复撞」—— 它们在顺序优先下同样成立；
+    // 若只对轮流 / 余额优先生效，默认策略下这两个开关就是摆设。稳定排序保证
+    // 同档内的先后仍由策略的基础序决定（顺序优先下 = 位次）。
     let mut arranged = base_order(&ordered, meta.strategy, meta);
     let rank_of = |account: &Value, table: &HashMap<String, i64>| -> bool {
         account_id(account)
             .and_then(|id| table.get(id))
-            .map(|until| **until > 0)
+            .map(|until| *until > 0)
             .unwrap_or(false)
     };
-    if meta.strategy != RouteStrategy::Order {
-        // 垫底 / 休息只修饰「非顺序」策略：顺序优先下用户排的位次就是一切，
-        // 再做隐式重排会让「队列第 1 位」的语义变得说不清（修饰信息写进原因句）
-        arranged.sort_by_key(|account| rank_of(account, meta.sunk));
-        arranged.sort_by_key(|account| rank_of(account, meta.resting));
-    }
+    arranged.sort_by_key(|account| rank_of(account, meta.sunk));
+    arranged.sort_by_key(|account| rank_of(account, meta.resting));
     // 熔断的账号放在队尾（所有策略一致）：只有全场都打不开时才轮到它试一次
     arranged.sort_by_key(|account| {
         account_id(account)

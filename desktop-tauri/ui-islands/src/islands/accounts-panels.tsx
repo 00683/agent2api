@@ -328,7 +328,7 @@ function subscriptionText(subscription: unknown): string {
  * 「待生效 今天 23:00 · 过期时间 10月12日 09:00」），刚领到的那笔额度还没开始算。
  * 余额列上什么都不显示，用户会以为没领上；一条徽章回答「领到了、还没到生效时间」。
  */
-function pendingPlans(entry: UsageEntry): Array<Record<string, unknown>> {
+export function pendingPlans(entry: UsageEntry): Array<Record<string, unknown>> {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
   const plans = (entry as Record<string, unknown>).plans
   if (!Array.isArray(plans)) return []
@@ -343,7 +343,7 @@ function pendingPlans(entry: UsageEntry): Array<Record<string, unknown>> {
  * `plan_effective_times`）；它缺失时才退回 `startsAt`（那是领取时间，只在没有
  * 权益的套餐上才等于生效时间）。
  */
-function pendingPlansTitle(plans: Array<Record<string, unknown>>): string {
+export function pendingPlansTitle(plans: Array<Record<string, unknown>>): string {
   const lines = plans.map(plan => {
     const name = String(plan.name || plan.planId || t('套餐'))
     const starts = Number(plan.pendingUntil ?? plan.startsAt)
@@ -363,7 +363,7 @@ function pendingPlansTitle(plans: Array<Record<string, unknown>>): string {
  * 摘要文案刻意压到「数字 + 单位」，完整句（各钱包 / 套餐 / 到期）放进 title ——
  * 余额列是这张表里最窄的几列之一。
  */
-function usageSummary(entry: UsageEntry): { text: string; kind: string; title: string } {
+export function usageSummary(entry: UsageEntry): { text: string; kind: string; title: string } {
   if (entry === undefined) return { text: t('未查询'), kind: 'muted', title: t('尚未查询该账号的余额') }
   if (entry === null) return { text: t('查询中…'), kind: 'muted', title: t('正在查询') }
   const failure = usageFailureOf(entry)
@@ -525,7 +525,7 @@ function grantUsage(plan: Record<string, unknown>): { used: number; total: numbe
  * 不拿 0 或 100 冒充 —— 一条满格的进度条与一条空进度条读起来是相反的意思，
  * 而它们都可能是错的。
  */
-function usagePool(entry: UsageEntry): { planName: string; text: string; percent: number | null } | null {
+export function usagePool(entry: UsageEntry): { planName: string; text: string; percent: number | null } | null {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
   const data = entry as Record<string, unknown>
   const wallets = Array.isArray(data.wallets) ? data.wallets as Array<Record<string, unknown>> : []

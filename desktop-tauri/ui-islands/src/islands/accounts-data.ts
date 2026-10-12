@@ -739,6 +739,30 @@ export async function moveAccount(id: string, direction: 'up' | 'down'): Promise
   }
 }
 
+/**
+ * 拖拽排序的落点：把账号在**全局队列**里挪过 |steps| 位（负 = 向前）。
+ *
+ * 后端只有「与相邻账号交换」一条 move 端点，没有「挪到第 N 位」—— 相邻交换
+ * 连做 |steps| 次的净效果正是「挪到第 N 位」，且每次交换都保持优先级唯一的
+ * 写入侧不变量。这里循环调桥但**只在最后刷新一次**：逐次刷新会让列表重排
+ * N 遍，视觉上闪成一片；中途失败就停手刷新，让界面回到事实。
+ */
+export async function moveAccountSteps(id: string, steps: number): Promise<void> {
+  const count = Math.trunc(steps)
+  if (!Number.isFinite(count) || count === 0) return
+  const direction: 'up' | 'down' = count < 0 ? 'up' : 'down'
+  try {
+    for (let index = 0; index < Math.abs(count); index += 1) {
+      await shared().workbuddyDesktop?.moveAccount?.(id, direction)
+    }
+    await shared().wbApp?.refresh?.()
+    toast(t('✅ 顺序已调整'))
+  } catch (error) {
+    toast(t('调整顺序失败：{message}', { message: errorMessage(error) }), 'err')
+    void shared().wbApp?.refresh?.()
+  }
+}
+
 /** 清除限流标记：单条（model）或全部。后端返回新快照，交给全局刷新对齐。 */
 export async function clearLimits(id: string, model?: string): Promise<void> {
   try {

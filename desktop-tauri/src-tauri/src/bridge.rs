@@ -637,6 +637,12 @@ const BRIDGE_JS: &str = r#"
     getQueue: () => call('GET', '/api/queue'),
     saveQueue: patch => call('PUT', '/api/queue', patch),
 
+    // ── 验证码令牌池（设置页「网关 → 验证码令牌池」）──
+    // ZCode 活动套餐通道令牌池的补货节奏（目标 / 轮询间隔 / 单轮上限），
+    // 存配置（/api/zcode/captcha-pool）。契约同 saveTimeouts。
+    getCaptchaPool: () => call('GET', '/api/zcode/captcha-pool'),
+    saveCaptchaPool: patch => call('PUT', '/api/zcode/captcha-pool', patch),
+
     // ── 调试模式（设置页「通用 → 调试模式」）──
     // 开关存配置（debugMode）：开启后转发层把上游原始报文（凭据类头已脱敏）
     // 落到统一库的 debug_traffic 表，请求日志页的「详情」列据此展示。
@@ -736,6 +742,11 @@ const BRIDGE_JS: &str = r#"
     saveAppSettings: patch => invoke('save_app_settings', { patch }),
     exportAccounts: () => invoke('export_accounts'),
     importAccounts: () => invoke('import_accounts'),
+    // ── 整库备份 / 恢复（设置页「整库备份 / 恢复」）──
+    // 文件由后端按壳选的路径直读直写（见 api/backup_api.rs），壳只负责
+    // 系统对话框；参数名 includeLogs 必须与 Rust 侧 export_database 的形参一致
+    exportDatabase: includeLogs => invoke('export_database', { includeLogs }),
+    importDatabase: () => invoke('import_database'),
   };
 })();
 "#;

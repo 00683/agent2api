@@ -64,6 +64,11 @@
     // 网关：双向箭头（进出的流量）
     traffic: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
       + '<path d="M8 3 4 7l4 4M4 7h16"/><path d="m16 21 4-4-4-4M20 17H4"/></g>',
+    // 路由：一条线分出两条支路（请求分流到不同账号）
+    route: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M4 12h5"/><circle cx="3.5" cy="12" r="1.5"/>'
+      + '<path d="M9 12c3 0 3-6 6-6h4"/><path d="m17 3 3 3-3 3"/>'
+      + '<path d="M9 12c3 0 3 6 6 6h4"/><path d="m17 15 3 3-3 3"/></g>',
     // 重试：环形箭头
     refresh: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
       + '<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></g>',

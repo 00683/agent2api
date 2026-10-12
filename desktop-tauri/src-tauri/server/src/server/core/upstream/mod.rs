@@ -171,7 +171,11 @@ pub struct UpstreamService {
     connections: Connections,
     /// 账号路由的运行期状态（轮转游标 / 粘性 / 退避 / 垫底 / 熔断，
     /// 见 `route_state.rs`）。转发选路读它的快照、请求收尾写它。
-    pub(super) route: route_state::RouteState,
+    /// 字段刻意保持**私有**：子孙模块（rotate / provider_loop）本就看得到，
+    /// 模块外一律走 `route_queue_facts` 的只读快照 —— 状态只该被两条钩子
+    /// 路径改写。Arc 是给 `#[derive(Clone)]` 的：克隆服务句柄（入请求上下文）
+    /// 时状态必须仍是同一份 —— 游标与粘性表分叉就失去意义了。
+    route: std::sync::Arc<route_state::RouteState>,
 }
 
 /// 一次转发的入参
@@ -282,7 +286,7 @@ impl UpstreamService {
             auth,
             in_flight: Arc::new(Mutex::new(HashMap::new())),
             connections: Connections::new(),
-            route: route_state::RouteState::new(),
+            route: std::sync::Arc::new(route_state::RouteState::new()),
         }
     }
 

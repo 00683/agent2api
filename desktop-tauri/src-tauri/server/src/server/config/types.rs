@@ -810,6 +810,69 @@ pub struct QueuePatch {
     pub wait_seconds: Option<i64>,
 }
 
+// ─── ZCode 验证码令牌池（活动套餐通道的补货节奏，见 api/zcode_captcha）──
+
+/// 令牌池的库存目标（`zcodeCaptchaPoolTarget`）：库存低于它前端铸造器才补铸。
+pub const KEY_CAPTCHA_POOL_TARGET: &str = "zcodeCaptchaPoolTarget";
+/// 铸造器轮询库存的间隔毫秒（`zcodeCaptchaPoolPollMs`）。
+pub const KEY_CAPTCHA_POOL_POLL_MS: &str = "zcodeCaptchaPoolPollMs";
+/// 铸造器一轮最多铸几个（`zcodeCaptchaPoolMaxPerRound`）。
+pub const KEY_CAPTCHA_POOL_MAX_PER_ROUND: &str = "zcodeCaptchaPoolMaxPerRound";
+
+/// 默认库存目标：3 个（原 `POOL_TARGET` 硬编码值）。一个够「下一条请求立刻
+/// 有得用」，又不至于铸一堆在 120 秒 TTL 内用不掉的（白白烧阿里云风控配额）。
+pub const DEFAULT_CAPTCHA_POOL_TARGET: i64 = 3;
+/// 默认轮询间隔：2500 毫秒（原 `POLL_MS` 硬编码值），「库存见底到补上」的平滑窗口。
+pub const DEFAULT_CAPTCHA_POOL_POLL_MS: i64 = 2_500;
+/// 默认单轮铸造上限：1 个（原 `MAX_PER_ROUND` 硬编码值）。SDK 同一实例连着
+/// 铸会互相干扰，默认一轮一个最稳。
+pub const DEFAULT_CAPTCHA_POOL_MAX_PER_ROUND: i64 = 1;
+
+/// 库存目标的合法范围 1~10：上限取「吸收突发」够用的量级 —— 目标越大，
+/// 无流量时过期作废的令牌越多（120 秒 TTL），烧的是阿里云风控配额。
+pub const CAPTCHA_POOL_MIN_TARGET: i64 = 1;
+pub const CAPTCHA_POOL_MAX_TARGET: i64 = 10;
+/// 轮询间隔的合法范围 1000~30000 毫秒：下限以下纯浪费本地往返，上限以上
+/// 「缺货到补上」的窗口会长到失去意义。轮询只读库存不铸造，太快不会多铸。
+pub const CAPTCHA_POOL_MIN_POLL_MS: i64 = 1_000;
+pub const CAPTCHA_POOL_MAX_POLL_MS: i64 = 30_000;
+/// 单轮铸造上限的合法范围 1~5：连铸之间固定隔 500ms，5 个已是一轮连铸
+/// 半分多钟都不到的量；再大单轮触发上游风控的风险显著上升。
+pub const CAPTCHA_POOL_MIN_MAX_PER_ROUND: i64 = 1;
+pub const CAPTCHA_POOL_MAX_MAX_PER_ROUND: i64 = 5;
+
+/// ZCode 验证码令牌池的补货节奏（设置页「网关 → 验证码令牌池」区域）。
+///
+/// 与 `QueueSettings` 同一取舍：铸造器每轮轮询 stats、转发层每条活动套餐
+/// 请求都要判一次「库存够不够」，取一份 `Copy` 快照即可。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptchaPoolSettings {
+    /// 库存目标（低于它前端才补铸）
+    pub target: i64,
+    /// 铸造器轮询间隔（毫秒）
+    pub poll_ms: i64,
+    /// 铸造器一轮最多铸几个
+    pub max_per_round: i64,
+}
+
+impl Default for CaptchaPoolSettings {
+    fn default() -> Self {
+        Self {
+            target: DEFAULT_CAPTCHA_POOL_TARGET,
+            poll_ms: DEFAULT_CAPTCHA_POOL_POLL_MS,
+            max_per_round: DEFAULT_CAPTCHA_POOL_MAX_PER_ROUND,
+        }
+    }
+}
+
+/// 验证码令牌池的**部分**更新入参（`None` = 该项不动）。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CaptchaPoolPatch {
+    pub target: Option<i64>,
+    pub poll_ms: Option<i64>,
+    pub max_per_round: Option<i64>,
+}
+
 // ─── 账号路由（策略 / 会话粘性 / 失败退避 / 限流垫底 / 熔断）─────────
 
 /// 路由策略：候选账号怎么排序（`routingStrategy`）。
