@@ -906,7 +906,6 @@ pub const KEY_ROUTING_BREAKER_SUCCESS: &str = "routingBreakerSuccessThreshold";
 
 pub const ROUTING_STRATEGY_ORDER: &str = "order";
 pub const ROUTING_STRATEGY_ROTATE: &str = "rotate";
-pub const ROUTING_STRATEGY_USAGE: &str = "usage";
 
 pub const STICKY_OFF: &str = "off";
 pub const STICKY_TURN: &str = "turn";
@@ -924,11 +923,13 @@ pub const ROUTING_BREAKER_MIN_SUCCESS: i64 = 1;
 pub const ROUTING_BREAKER_MAX_SUCCESS: i64 = 10;
 
 /// 路由策略（`RouteStrategy` 的 Rust 形态；配置里存 `as_str`）
+///
+/// 两档：顺序优先（队列第 1 位接走所有请求）与负载均衡（逐请求轮换）。
+/// 「余额优先（usage）」已下线（2026-10，按用户要求移除）—— 见 `from_id` 的兜底说明。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteStrategy {
     Order,
     Rotate,
-    Usage,
 }
 
 impl RouteStrategy {
@@ -936,14 +937,17 @@ impl RouteStrategy {
         match self {
             Self::Order => ROUTING_STRATEGY_ORDER,
             Self::Rotate => ROUTING_STRATEGY_ROTATE,
-            Self::Usage => ROUTING_STRATEGY_USAGE,
         }
     }
 
+    /// 配置值 → 策略。**未知值一律回落顺序优先**（与旧行为一致）。
+    ///
+    /// 已下线的 `"usage"`（余额优先）单独归到**负载均衡**而不是默认档：那种配置是
+    /// 用户当初显式选的「谁空谁上」，语义上最接近的是「把负载摊开」（rotate），
+    /// 静默退回「排第 1 的接走所有请求」会与他的本意相反。
     pub fn from_id(value: &str) -> Self {
         match value {
-            ROUTING_STRATEGY_ROTATE => Self::Rotate,
-            ROUTING_STRATEGY_USAGE => Self::Usage,
+            ROUTING_STRATEGY_ROTATE | "usage" => Self::Rotate,
             _ => Self::Order,
         }
     }

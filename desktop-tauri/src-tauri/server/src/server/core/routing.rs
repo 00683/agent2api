@@ -459,7 +459,7 @@ fn js_number(value: &Value) -> Option<f64> {
 
 // ─── 策略路由（plan_route）────────────────────────────────────
 //
-// 「顺序优先」之外的两种策略（轮流均摊 / 余额优先）与三种排序修饰
+// 两种策略（顺序优先 / 负载均衡）与三种排序修饰
 // （垫底 / 休息 / 熔断）都落在这里：输入一张**快照**，输出一份**带原因的
 // 排序清单**。转发选路（rotate.rs）按清单从头往后找人；队列端点
 // （api::routing）把整张清单原样画给用户。两条路调的是同一个函数，
@@ -479,8 +479,6 @@ pub struct PlanEntry {
     pub state: &'static str,
     /// 一句「为什么排这 / 为什么跳过」（队列面板与请求详情直接展示）
     pub reason: String,
-    /// 用量占比（「余额优先」的排序依据；`None` = 无读数）
-    pub share: Option<f64>,
     /// 限额恢复时刻（毫秒；0 = 未限流）
     pub reset_at: i64,
 }
@@ -496,8 +494,6 @@ pub struct RoutePlan {
 /// 策略排序要读的**全部外部事实**（一次快照，纯函数不写任何状态）。
 pub struct PlanMeta<'a> {
     pub strategy: RouteStrategy,
-    /// 账号 id → 用量占比（`None` = 无读数；「余额优先」用）
-    pub shares: &'a HashMap<String, Option<f64>>,
     /// 沉底账号 → 沉底时刻（限流垫底）
     pub sunk: &'a HashMap<String, i64>,
     /// 休息中的账号 → 休息截止时刻（失败退避）
@@ -506,7 +502,7 @@ pub struct PlanMeta<'a> {
     pub open: &'a std::collections::HashSet<String>,
     /// 被限制器软跳过的账号（余额不足 / Token 限额，调用方判好传入）
     pub limiter_blocked: &'a std::collections::HashSet<String>,
-    /// 轮转起始位（`None` = 不轮转 —— 顺序 / 余额优先策略）
+    /// 轮转起始位（`None` = 不轮转 —— 顺序优先策略）
     pub cursor: Option<usize>,
     /// 粘性命中的账号 id（`None` = 无命中）
     pub sticky_account: Option<&'a str>,
@@ -547,27 +543,6 @@ fn base_order(candidates: &[Value], strategy: RouteStrategy, meta: &PlanMeta<'_>
                 .map(|offset| sorted[(start + offset) % len].clone())
                 .collect()
         }
-        RouteStrategy::Usage => {
-            let mut keyed: Vec<(u8, f64, usize, Value)> = sorted
-                .into_iter()
-                .enumerate()
-                .map(|(index, account)| {
-                    let share = account_id(&account)
-                        .and_then(|id| meta.shares.get(id))
-                        .copied()
-                        .flatten();
-                    let band = match share {
-                        Some(_) => 0u8,
-                        None => 1u8,
-                    };
-                    (band, share.unwrap_or(0.0), index, account)
-                })
-                .collect();
-            keyed.sort_by(|a, b| {
-                (a.0, a.1.total_cmp(&b.1), a.2).cmp(&(b.0, b.1.total_cmp(&a.1), b.2))
-            });
-            keyed.into_iter().map(|(_, _, _, account)| account).collect()
-        }
     }
 }
 
@@ -590,7 +565,6 @@ pub fn plan_route(
         let id = id.to_string();
         let name = account_name(account, &id);
         let provider = provider_of(account).to_string();
-        let share = meta.shares.get(&id).copied().flatten();
         let entry = |state: &'static str, reason: String| PlanEntry {
             account: account.clone(),
             id: id.clone(),
@@ -598,7 +572,6 @@ pub fn plan_route(
             provider: provider.clone(),
             state,
             reason,
-            share,
             reset_at: rate_limit_reset_at(account, keys, now),
         };
         if excluded.iter().any(|tried| tried == &id) {
@@ -660,7 +633,7 @@ pub fn plan_route(
     // 基础序（策略）→ 稳定修饰：没沉底的在前 → 没休息的在前 → 没熔断的在前
     // 三个修饰**跨策略**生效：垫底（Sink）解决的是「每次回到第 1 位再撞一次
     // 429」，退避解决的是「反复失败反复撞」—— 它们在顺序优先下同样成立；
-    // 若只对轮流 / 余额优先生效，默认策略下这两个开关就是摆设。稳定排序保证
+    // 若只对负载均衡生效，默认策略下这两个开关就是摆设。稳定排序保证
     // 同档内的先后仍由策略的基础序决定（顺序优先下 = 位次）。
     let mut arranged = base_order(&ordered, meta.strategy, meta);
     let rank_of = |account: &Value, table: &HashMap<String, i64>| -> bool {
@@ -684,35 +657,23 @@ pub fn plan_route(
         .map(|(index, account)| {
             let id = account_id(&account).unwrap_or("").to_string();
             let position = index + 1;
-            let share = meta.shares.get(&id).copied().flatten();
             let mut reason = if sticky_hit && Some(id.as_str()) == meta.sticky_account {
                 "会话粘住：这个会话上一轮是它答的，本轮继续用它".to_string()
             } else {
-                match (meta.strategy, share) {
-                    (RouteStrategy::Order, _) => {
+                match meta.strategy {
+                    RouteStrategy::Order => {
                         if position == 1 {
                             "队列第 1 位：顺序优先下它接走所有请求，直到不能答".to_string()
                         } else {
                             format!("队列第 {position} 位：前面的都可用时轮不到它")
                         }
                     }
-                    (RouteStrategy::Rotate, _) => {
+                    RouteStrategy::Rotate => {
                         if position == 1 {
                             "本轮轮到它：轮流均摊下每条请求换下一位".to_string()
                         } else {
                             format!("排在第 {position} 位：等前面的轮完或失败才到它")
                         }
-                    }
-                    (RouteStrategy::Usage, Some(value)) => {
-                        let percent = (value * 100.0).round();
-                        if position == 1 {
-                            format!("用量占比 {percent:.0}% 全场最低 —— 余额优先下它先用")
-                        } else {
-                            format!("用量占比 {percent:.0}%，排在第 {position} 位")
-                        }
-                    }
-                    (RouteStrategy::Usage, None) => {
-                        format!("没有用量读数，按队列位次排在第 {position} 位")
                     }
                 }
             };
@@ -732,7 +693,6 @@ pub fn plan_route(
                 id,
                 state: "usable",
                 reason,
-                share,
                 reset_at: 0,
             }
         })

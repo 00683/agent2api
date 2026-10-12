@@ -55,7 +55,6 @@ pub async fn put_routing(State(_state): State<ServerState>, body: Bytes) -> Resp
         let known = [
             config::ROUTING_STRATEGY_ORDER,
             config::ROUTING_STRATEGY_ROTATE,
-            config::ROUTING_STRATEGY_USAGE,
         ];
         if !known.contains(&text) {
             return errors::management_error(
@@ -209,13 +208,11 @@ pub async fn get_routing_queue(
         .filter_map(|account| routing::account_id(account).map(str::to_string))
         .collect();
     let settings = config::routing_settings();
-    let shares = crate::server::core::usage_records::used_share_facts();
     // 面板只**看**当前状态，不做粘性查找、不前进轮转游标 —— 预演不该刷新
     // 任何会话的计时，也不该消耗下一次轮转
     let (sunk, resting, open) = state.upstream().route_queue_facts(now);
     let meta = routing::PlanMeta {
         strategy: settings.strategy,
-        shares: &shares,
         sunk: &sunk,
         resting: &resting,
         open: &open,
@@ -234,7 +231,6 @@ pub async fn get_routing_queue(
                 .unwrap_or_else(|| entry.provider.clone()),
             "state": entry.state,
             "reason": entry.reason,
-            "share": entry.share,
             "resetAt": if entry.reset_at > 0 { Value::from(entry.reset_at) } else { Value::Null },
             "priority": entry.account.get("priority").cloned().unwrap_or(Value::Null),
         })

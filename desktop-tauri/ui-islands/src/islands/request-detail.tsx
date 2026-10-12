@@ -482,9 +482,10 @@ function RouteReplay({ row }: { row: RequestRow }) {
   if (!route) return null
   const strategy = String(route.strategy || '')
   const sticky = String(route.sticky || '')
-  const strategyLabel = strategy === 'rotate' ? t('轮流均摊')
-    : strategy === 'usage' ? t('余额优先')
-      : strategy === 'order' ? t('顺序优先') : strategy
+  // 只有两档（顺序优先 / 负载均衡）；历史记录里可能留着已下线的 'usage'，
+  // 按它的替代者「负载均衡」显示（后端 RouteStrategy::from_id 也是这么归的）
+  const strategyLabel = strategy === 'rotate' || strategy === 'usage' ? t('负载均衡')
+    : strategy === 'order' ? t('顺序优先') : strategy
   const stickyLabel = sticky === 'auto' ? t('自动') : sticky === 'session' ? t('会话内')
     : sticky === 'turn' ? t('每轮') : sticky === 'off' ? t('关闭') : sticky
   const ordered = Array.isArray(route.ordered) ? route.ordered as Array<Record<string, unknown>> : []

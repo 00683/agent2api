@@ -87,9 +87,9 @@ pub(super) async fn session_for(
 
 /// 本次请求使用的账号（对照 Node 的 selectTargetAccount，三级顺序）。
 ///
-///   1. 按账号页选定的**路由策略**排一份候选清单（`routing::plan_route`：
-///      顺序优先 = 位次；轮流均摊 = 每条请求轮换；余额优先 = 用量占比低的
-///      先用），跳过禁用、余额不足、限额冷却中与已达并发上限的账号，逐个
+///   1. 按设置页选定的**路由策略**排一份候选清单（`routing::plan_route`：
+///      顺序优先 = 位次；负载均衡 = 每条请求轮换），
+///      跳过禁用、余额不足、限额冷却中与已达并发上限的账号，逐个
 ///      向前找——跳过没有可用凭证的记录（避免选到空账号）；
 ///   2. 剩下的启用账号都在限额冷却期 / 已达并发上限 → 先在「未达并发上限」
 ///      的账号里挑恢复最早的一个试一次；一个都没有（全部达到并发上限）→
@@ -149,10 +149,9 @@ pub(super) async fn select_target_account(
     let counts = connection_counts(service);
     let now = logging::now_ms();
     // ── 策略与运行期状态快照（route_state.rs 的那份内存，读不改写）────
-    // shares 全表读一次（账号几条到几十条，微秒级）；粘性查找在这里顺手
-    // 续了最近使用时刻 —— 「auto 档 5 分钟没往来就放手」的计时由它维持。
+    // 粘性查找在这里顺手续了最近使用时刻 —— 「auto 档 5 分钟没往来就放手」
+    // 的计时由它维持。
     let settings = config::routing_settings();
-    let shares = crate::server::core::usage_records::used_share_facts();
     let ttl = routing::sticky_ttl_ms(settings.sticky);
     let snap = service.route.snapshot(conv_key, now, ttl);
     // 轮转游标只在「本请求的第一次选路」前进：429 顺延的后续选路沿用同一
@@ -169,7 +168,6 @@ pub(super) async fn select_target_account(
     };
     let meta = routing::PlanMeta {
         strategy: settings.strategy,
-        shares: &shares,
         sunk: &snap.sunk,
         resting: &snap.resting,
         open: &snap.open,
@@ -532,14 +530,12 @@ pub(super) fn pick_next_account(
     let counts = connection_counts(service);
     let now = logging::now_ms();
     let settings = config::routing_settings();
-    let shares = crate::server::core::usage_records::used_share_facts();
     // 顺延不走粘性（粘住的是「答对了的账号」，刚失败的那个不该被粘回来）；
     // 空会话键使 sticky_lookup 直接返回 None，其余快照（垫底 / 休息 / 熔断）
     // 照常参与排序
     let snap = service.route.snapshot("", now, 0);
     let meta = routing::PlanMeta {
         strategy: settings.strategy,
-        shares: &shares,
         sunk: &snap.sunk,
         resting: &snap.resting,
         open: &snap.open,
@@ -568,7 +564,6 @@ fn decision_json(
             "provider": entry.provider,
             "state": entry.state,
             "reason": entry.reason,
-            "share": entry.share,
         })
     };
     json!({
