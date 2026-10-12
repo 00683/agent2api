@@ -7,6 +7,7 @@
 //!   POST   /api/accounts/import         导入账号（merge：按 uid 匹配，命中更新、未命中追加）
 //!   POST   /api/accounts/current        把账号置顶（仅调整全局优先级）{ id }
 //!   POST   /api/accounts/batch          批量操作 { action, ids, proxy? }
+//!   POST   /api/accounts/reorder        整队重排（分组模式）{ queue: [id, …] }
 //!   POST   /api/accounts/refresh        刷新指定（或当前）账号的 token { id? }
 //!   POST   /api/accounts/refresh-expiring 刷新**全部**已过期/临期的账号凭证（批量）
 //!   GET    /api/accounts/usage          逐账号查询积分/额度（并发，单账号失败不拖垮整批）
@@ -230,6 +231,8 @@ pub async fn dispatch(
         ("POST", "import") => return import_accounts(&state, body).await,
         ("POST", "current") => return set_current(&state, body).await,
         ("POST", "batch") => return batch_accounts(&state, body).await,
+        // 整队重排（账号页分组模式：拖组 / 拖行之后把新顺序整条交上来）
+        ("POST", "reorder") => return reorder_accounts(&state, body).await,
         ("POST", "refresh") => return refresh_account(&state, body).await,
         ("POST", "refresh-expiring") => return refresh_expiring_accounts(&state).await,
         // 余额 / 积分查询（四家混查）实现在 `api::accounts_usage`（拆分见那里的模块头）。
@@ -1363,6 +1366,41 @@ pub async fn patch_account(state: &ServerState, id: &str, body: &Bytes) -> Respo
                 "list": state.store().list_accounts(),
             }))
         }
+        Err(error) => store_error(error),
+    }
+}
+
+// ─── POST /api/accounts/reorder ──────────────────────────────
+
+/// 整队重排（分组模式）：body `{ queue: [账号 id, …] }`，从队首到队尾。
+///
+/// 账号页的拖拽把结果整条交上来 —— 拖整组 = 改组顺位，拖组内的行 = 改组内顺位，
+/// 两者合成一条队列；这里按给定顺序把全局 `priority` 编成 0、1、2…。队列语义没变
+/// （仍是「全局一条按优先级升序尝试的队列」，见 `account_store::priority`），分组
+/// 只是它的展示口径，所以转发链路一行都不用改。
+///
+/// 与 `POST /api/accounts/{id}/move`（相邻交换）的分工：那条服务旧的 ↑/↓ 箭头，
+/// 一次只换两行；这条服务拖拽，一次定整队。校验（必须是全部账号的一个排列）与
+/// 实现见 `account_store::store_order::reorder_accounts`。
+pub async fn reorder_accounts(state: &ServerState, body: &Bytes) -> Response {
+    let payload = match parse_json_body(body, "请求内容不是有效 JSON") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Some(items) = payload.get("queue").and_then(Value::as_array) else {
+        return management_error(400, "缺少 queue 字段（账号 id 数组，从队首到队尾）");
+    };
+    // 非字符串项直接忽略（与 batch 的 ids 解析同一宽容口径），全空则报错
+    let ids: Vec<String> = items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|value| value.to_string())
+        .collect();
+    if ids.is_empty() {
+        return management_error(400, "queue 不能为空");
+    }
+    match state.store().reorder_accounts(&ids) {
+        Ok(result) => ok_json(result),
         Err(error) => store_error(error),
     }
 }

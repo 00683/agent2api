@@ -419,6 +419,11 @@ async fn attempt_queue(
     // 建一次、整条请求共用 —— 选路、429 记账、成功清理三处读的必须是同一个键，
     // 否则冷却会写在一个名字上、查在另一个名字上。
     let cooldown_keys = rotate::CooldownKeys::new(&model);
+    // 会话粘性键（`route_state::conversation_key`）：模型 + 首条用户消息的
+    // 进程内哈希。空串 = 这条请求没有可用的会话特征（无 messages），粘性
+    // 自动不生效。整个请求周期只用这一个键 —— 429 顺延的后续选路查的是
+    // 同一个会话，粘住的账号失败后同样顺延（粘性不等于无条件）。
+    let conv_key = super::route_state::RouteState::conversation_key(&ctx.body);
     let mut tried_ids: Vec<String> = Vec::new();
     // ── 两份独立的预算（见 config::RetrySettings）─────────────────────
     //   - `budget`：同一个账号上还能**原地重发**几次。整份请求共用一份，
@@ -482,8 +487,15 @@ async fn attempt_queue(
             &cooldown_keys,
             &tried_ids,
             ctx.pinned_account,
+            &conv_key,
         )
         .await?;
+        // 决策快照挂进 telemetry（最后一次为准：请求日志的「路由回放」显示
+        // 的是最终承载那次选路的完整排序 —— 与 attempts 明细的换号链互补，
+        // 那边回答「试了谁」，这边回答「当时为什么这么排」）。
+        if let Some(decision) = target.decision.clone() {
+            ctx.telemetry.set_route_decision(decision);
+        }
         // 连接计数改绑到这一轮选中的账号：失败重试换账号时计数跟着走，
         // 于是「一个请求任意时刻只占一个账号」这条口径不需要每个分支各维护一次
         // （429 降级、401 刷新后换号、会话式失败顺延三条路径都经过这里）。
@@ -538,6 +550,25 @@ async fn attempt_queue(
                                     None,
                                     &error.message,
                                 );
+                                // 与内置家的动作 1 同款：还有额度时被 429 的
+                                // 垫底（见那边的说明）
+                                if config::routing_settings().sink && ctx.pinned_account.is_none() {
+                                    service.route.sink_mark(&account_id, logging::now_ms());
+                                }
+                            } else {
+                                // 与内置家的动作 3 同款：失败退避 + 熔断计数
+                                let route_settings = config::routing_settings();
+                                if route_settings.failover_backoff {
+                                    service.route.backoff_mark(&account_id, logging::now_ms());
+                                }
+                                if route_settings.breaker_enabled {
+                                    service.route.breaker_failure(
+                                        &account_id,
+                                        route_settings.breaker_threshold,
+                                        route_settings.breaker_timeout_seconds,
+                                        logging::now_ms(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -924,6 +955,28 @@ async fn attempt_queue(
                     // 口径，见 `RequestEntry::is_success` 的说明。
                     ctx.telemetry
                         .finish_last_attempt(Some(i64::from(response.status().as_u16())), None);
+                    // ── 路由状态的成功钩子（route_state.rs）───────────────
+                    // 熔断恢复计数 / 清退避 / 放出垫底 / 绑粘性。粘性只在
+                    // 「配置开着且有会话键」时绑 —— Turn / Off 档 ttl 为 None。
+                    // 绑定无条件覆盖：会话换到新账号（前一个失败顺延过来）
+                    // 时，粘的必须是现在这个能干活的。
+                    let route_settings = config::routing_settings();
+                    if let Some(account_id) = target.account_id.as_deref() {
+                        if route_settings.breaker_enabled {
+                            service
+                                .route
+                                .breaker_success(account_id, route_settings.breaker_success_threshold);
+                        }
+                        service.route.backoff_clear(account_id);
+                        service.route.sink_clear(account_id);
+                    }
+                    if let (Some(_ttl), true, Some(account_id)) = (
+                        route_settings.sticky.ttl_ms(),
+                        !conv_key.is_empty(),
+                        target.account_id.as_deref(),
+                    ) {
+                        service.route.sticky_bind(&conv_key, account_id, logging::now_ms());
+                    }
                     break (response, wire_model, plan.response);
                 }
                 Err(failure) => {
@@ -1092,6 +1145,13 @@ async fn attempt_queue(
                             );
                             let limit_at =
                                 rotate::account_limit_reset_at(service, &account_id, &wire_model);
+                            // 限流垫底（Sink）：它还**有**额度时被 429 的（额度尽是
+                            // 正常冷却，不算），排到所有没被 429 过的后面 —— 负载
+                            // 摊开，而不是每次都回到队列头再撞一遍。成功一次或
+                            // 重启后放出（见 route_state.rs）。
+                            if config::routing_settings().sink && ctx.pinned_account.is_none() {
+                                service.route.sink_mark(&account_id, logging::now_ms());
+                            }
                             // 日志文案与账号页的「限流」列同口径：以真名为主，
                             // 映射生效时补 `请求名 →` 前缀（见 `limit_model_label`）
                             let limit_label = limit_model_label(&model, &wire_model);
@@ -1196,7 +1256,37 @@ async fn attempt_queue(
                     // 账号」的唯一闸门（429 那条降级路径不受它管，见设置页说明）。
                     if let Some(account_id) = target.account_id.clone() {
                         if !tried_ids.contains(&account_id) {
-                            tried_ids.push(account_id);
+                            tried_ids.push(account_id.clone());
+                            // ── 路由状态的失败钩子（route_state.rs）──────────
+                            // 退避：这次失败的账号休息一会儿再回来（连续失败
+                            // 翻倍，上限 1 小时）；熔断：连续失败到阈值打开。
+                            // 429（额度尽）不走这里 —— 它有自己的冷却机制，
+                            // 且「等重置」比「退避」精确。
+                            let route_settings = config::routing_settings();
+                            if route_settings.failover_backoff {
+                                service.route.backoff_mark(&account_id, logging::now_ms());
+                            }
+                            if route_settings.breaker_enabled {
+                                let opened = service.route.breaker_failure(
+                                    &account_id,
+                                    route_settings.breaker_threshold,
+                                    route_settings.breaker_timeout_seconds,
+                                    logging::now_ms(),
+                                );
+                                if opened {
+                                    logging::console_line(
+                                        "[Upstream]",
+                                        &format!(
+                                            "⛔ 账号 {} 连续失败 {} 次，熔断 {} 秒（到点放行试一次，\
+                                             连续成功 {} 次恢复）",
+                                            account_display(target.account.as_ref().unwrap_or(&serde_json::Value::Null)),
+                                            route_settings.breaker_threshold,
+                                            route_settings.breaker_timeout_seconds,
+                                            route_settings.breaker_success_threshold,
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                     match rotate::pick_next_account(

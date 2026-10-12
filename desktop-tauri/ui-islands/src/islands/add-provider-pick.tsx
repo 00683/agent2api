@@ -54,7 +54,7 @@ export function typeValueOf(value: string): AccountType {
  * 内嵌的图标（与系统里显示的为同一张；AutoClaw / WorkBuddy 各自两地、Cline 两种
  * 账号、Accio / ZCode 两地共用一张 —— 它们本来就是同一个客户端）。
  * 自定义家与没收录图标的家回落到首字母徽章。
- * 导出共用：账号表的提供商徽章（accounts-panels 的 ProviderCell）、模型管理页
+ * 导出共用：账号页的分组带（accounts-panels 的 GroupBandRow）、模型管理页
  * （models-page）与签到中心的提供商行（checkin-page）用同一份映射，别处不要照抄。
  */
 export const PROVIDER_ICONS: Record<string, string> = {

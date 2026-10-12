@@ -748,6 +748,13 @@ pub fn shim_js() -> &'static str {
       return call('POST', '/api/accounts/batch', body);
     },
 
+    // ── 账号路由（与 bridge.rs 的同名方法成对，缺一边会报「桥接方法缺失」）──
+    getRoutingConfig: function () { return call('GET', '/api/routing'); },
+    setRoutingConfig: function (patch) { return call('PUT', '/api/routing', patch || {}); },
+    getRoutingQueue: function (model) {
+      return call('GET', '/api/routing/queue' + (model ? '?model=' + encodeURIComponent(model) : ''));
+    },
+
     // ── 出网代理 ──
     getProxies: function () { return call('GET', '/api/proxies'); },
     testProxy: function (payload) {
@@ -978,6 +985,9 @@ pub fn shim_js() -> &'static str {
     // ── 排队等待（次数 / 单次秒数）──
     getQueue: function () { return call('GET', '/api/queue'); },
     saveQueue: function (patch) { return call('PUT', '/api/queue', patch); },
+    // ── 验证码令牌池（ZCode 活动套餐通道的补货节奏）──
+    getCaptchaPool: function () { return call('GET', '/api/zcode/captcha-pool'); },
+    saveCaptchaPool: function (patch) { return call('PUT', '/api/zcode/captcha-pool', patch); },
 
     // ── 调试模式 ──
     getDebug: function () { return call('GET', '/api/debug'); },
