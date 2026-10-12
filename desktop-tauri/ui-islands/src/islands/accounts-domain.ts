@@ -3,7 +3,8 @@
  *
  * 替换 ui/accounts-groups.js + ui/accounts-model.js 里的纯逻辑部分（那两个文件里的
  * 「标签 / 面板 HTML」字符串生成器随表格一起变成 React 组件，见 accounts-page.tsx）。
- * 本文件不碰 DOM、不读写模块状态，只依赖 window.wbProviders 的 label（运行期读）。
+ * 本文件不碰 DOM、不读写模块状态，只依赖 window.wbProviders 的 label 与
+ * window.wbUnits 的读数格式化（都是运行期读）。
  *
  * ── 对外契约（必须原样保留的调用点）────────────────────────────
  *   · app.js:236  `wbAccountsModel.isLimited`（顶栏「已限流」计数，含余额不足档）
@@ -15,13 +16,19 @@
  * `wbAccountsFilters` / `wbAccountsGroups` 四个对象在页外无任何引用，已随本页合并
  * 进岛里不再挂 window —— 见最终报告）。
  *
- * ── 全局一条队列（优先级不再按 provider 分段）────────────────────
- * 优先级在后端是**全局唯一**的一条队列：四家账号混排，转发时按优先级从小到大逐个
- * 尝试，跳过禁用 / 不支持该模型 / 该模型限流中的账号（见 priority.rs 与 rotate.rs）。
- * 所以筛选与计数都按这一条队列算，positionMap 的序号就是整张表的行序。
+ * ── 全局一条队列 + 按家分组（2026-10 账号页分组化）───────────────
+ * 优先级在后端仍是**全局唯一**的一条队列：转发时按优先级从小到大逐个尝试，跳过
+ * 禁用 / 不支持该模型 / 该模型限流中的账号（见 priority.rs 与 rotate.rs）。
+ * 界面上按家分组显示（`accountGroups`），组顺位 = 各家最靠前的账号的先后 ——
+ * 两者能对上，靠的是队列不变量「同一家的账号连续」（后端新增/导入落在本组末尾、
+ * 拖拽由 `POST /api/accounts/reorder` 整队重编号，见 store_order.rs）。
+ * 于是旧的「全局第 N 位」（`positionMap`）不再直接显示在行上：行上是**组内序号**，
+ * 队列的先后由「组顺位 + 组内序号」共同表达。positionMap 保留给需要绝对位置的地方
+ * （模型测试的候选清单、⋯ 菜单的「已在第一位」判定）。
  */
 
 import { shared, formatTime, type AccountRecord, type AccountsSnapshot, type LimiterRule, type RateLimitInfo, type TokenReading, type UsageEntry } from './accounts-shared'
+import { t } from '../i18n'
 
 /** 缺省 provider id（后端注册表的默认项；旧账号记录没有该字段时的兜底） */
 export const DEFAULT_PROVIDER_ID = 'workbuddy'
@@ -115,10 +122,12 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   accio: { usage: true, edition: true, identifier: 'userId', expiry: 'expiresAt', emailAsName: true },
   'accio-cn': { usage: true, edition: true, identifier: 'userId', expiry: 'expiresAt', emailAsName: true },
   // ZCode 两个地区：本家的运营动作是「限时套餐领取」（claim 位）。
-  // `usage: true` 对应 providers::zcode::balance —— 余额读的是 billing 网关的
-  //   `/zcode-plan/billing/balance`，认**套餐 JWT**（与转发用的 accessToken 不是
-  //   一套凭证）。账号只粘了 accessToken 时后端回可识别的「未配置」，余额列显示成
-  //   中性提示而不是一片红，所以这颗按钮照样渲染。
+  // `usage: true` 对应 providers::zcode::balance —— 它是一条**候选令牌链**：
+  //   有套餐 JWT 时读 billing 网关的 `/zcode-plan/billing/balance`（余额桶 + 到期），
+  //   否则（或 JWT 被拒时）用 accessToken 读开放平台监控接口的窗口限额
+  //   （每 N 小时 / 每周的剩余比例，见 providers::zcode::monitor）。
+  //   两把凭证都没有时后端回可识别的「未配置」，余额列显示成中性提示而不是一片红，
+  //   所以这颗按钮照样渲染。
   // `claim: true` 就是那颗「领套餐」：2026-09-28 起那期（ZCode Trust Build）是
   //   **每天一份新套餐**（plan_id 带日期段），领过之后按钮当天显示「今日已领」、
   //   次日自动恢复 —— 见 `claimedToday`。
@@ -163,6 +172,19 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `expiry: ''` —— BDUSS 没有过期时间字段（无刷新接口，过期只能重登，
   //   这一列对它是空，界面不渲染「有效期」）。
   kuku: { usage: true, edition: false, identifier: 'uid', expiry: '' },
+  // OfficeAce（华为云果办 / OfficeClaw）。各位各有出处：
+  // `usage: true` —— 额度/积分要**控制面签名**（V11-HMAC-SHA256 打 `/v1/subscription`），
+  //   那条链已经实现（`officeace/balance.rs` + 适配器 `query_usage`），所以余额按钮与
+  //   积分列都开。⚠️ 只导入网关 Basic 那一对、没有控制面凭据的账号查不到余额，
+  //   服务端回 400 `usage_not_configured`，界面按「未配置查询」如实显示（不是报错）。
+  // `edition: false` —— 单一入口（自助 OAuth 浏览器登录 / 粘贴网关 Basic 凭据），
+  //   没有国际版。
+  // `expiry: 'expiresAt'` —— 控制面临时凭据约 2 小时到期；只导入网关 Basic
+  //   凭据时没有这个字段，界面不渲染「有效期」（那一半本来也不过期）。
+  // `identifier: 'id'` —— 账号标识渲染的是**账号 id**（`officeace-<hash>`，
+  //   由网关基址 + app key 派生），不是任何凭据本身：面板上显示 `modelAppKey`
+  //   会把网关 key 露在界面上（`identifierOf` 读的是字段**值**，不只是标签）。
+  officeace: { usage: true, edition: false, identifier: 'id', expiry: 'expiresAt' },
 }
 
 /**
@@ -515,26 +537,31 @@ export function tokenCountdownText(remainingMs: number, daily: boolean): string 
   const minutes = Math.ceil(remainingMs / 60_000)
   if (daily) {
     const hours = Math.ceil(remainingMs / 3_600_000)
-    return hours >= 1 ? `今日剩 ${hours} 小时` : `今日剩 ${minutes} 分钟`
+    return hours >= 1 ? t('今日剩 {n} 小时', { n: hours }) : t('今日剩 {n} 分钟', { n: minutes })
   }
-  return minutes >= 1 ? `剩 ${minutes} 分钟` : '剩不到 1 分钟'
+  return minutes >= 1 ? t('剩 {n} 分钟', { n: minutes }) : t('剩不到 1 分钟')
 }
 
-/** Token 数的展示形态：`310000` → `31 万`、`2030000` → `203 万`、`150000000` → `1.5 亿`。 */
+/** units.js 的公开面（本文件只读 formatTokens）：量级词（万 / 亿 与 k / M）已按界面语言
+ *  在那边一处处理，这里不再自己拼字面量。局部窄类型 + 转型而不是 declare global
+ *  —— wbUnits 是多页共享的桥，各岛各 declare 一份会撞 TS2717（同 accounts-panels 的处理）。 */
+type UnitsBridge = { formatTokens?: (value: unknown) => string }
+
+/** Token 数的展示形态：量级词与分档全交给 units.js 的 formatTokens（简体「31万」、
+ *  英文「31k」，设置页那个开关拨一下两处一起变）；拿不到桥时退回裸数字，非数字给「—」。 */
 export function formatTokenCount(value: unknown): string {
   const number = Number(value)
   if (!Number.isFinite(number)) return '—'
-  if (number >= 100_000_000) return `${Number((number / 100_000_000).toFixed(1))} 亿`
-  if (number >= 10_000) return `${Number((number / 10_000).toFixed(1))} 万`
-  return String(Math.round(number))
+  const api = (window as unknown as { wbUnits?: UnitsBridge }).wbUnits
+  return api?.formatTokens ? api.formatTokens(number) : String(Math.round(number))
 }
 
 /** 秒数 → 人能读的间隔文案（`每 90 分钟` 这类），与后端变更提示同一口径：
  * 整小时 / 整分钟进位，其余按秒。 */
 export function formatIntervalSeconds(seconds: number): string {
-  if (seconds > 0 && seconds % 3600 === 0) return `${seconds / 3600} 小时`
-  if (seconds > 0 && seconds % 60 === 0) return `${seconds / 60} 分钟`
-  return `${seconds} 秒`
+  if (seconds > 0 && seconds % 3600 === 0) return t('{n} 小时', { n: seconds / 3600 })
+  if (seconds > 0 && seconds % 60 === 0) return t('{n} 分钟', { n: seconds / 60 })
+  return t('{n} 秒', { n: seconds })
 }
 
 /** 是否为「桌面端实时登录态」账号（凭证实时读客户端文件；可禁用、也可删除） */
@@ -564,9 +591,9 @@ export function isCustomProviderId(provider: string | null | undefined): boolean
 }
 
 export function typeLabel(type: string | undefined): string {
-  if (type === 'enterprise') return '企业'
-  if (type === 'ultimate') return '旗舰'
-  return '个人'
+  if (type === 'enterprise') return t('企业')
+  if (type === 'ultimate') return t('旗舰')
+  return t('个人')
 }
 
 /**
@@ -651,7 +678,25 @@ export function zcodePlanOf(account: AccountRecord | null | undefined): string {
  * 不一致，用户会以为设置里选的与提示里说的不是同一件事。
  */
 export function zcodePlanLabel(plan: string | undefined): string {
-  return plan === ZCODE_PLAN_START ? '活动套餐（Start Plan）' : '编码套餐（Coding Plan）'
+  return plan === ZCODE_PLAN_START ? t('活动套餐（Start Plan）') : t('编码套餐（Coding Plan）')
+}
+
+/**
+ * 套餐状态 → 展示文案。键由后端给（`providers::zcode::balance` 的 `PlanState::key`：
+ * pending / active / expired / unknown），**文案只在前端拼** —— 后端返回中文的话，
+ * 非中文界面里会露出一串看不懂的汉字。
+ *
+ * 三处共用同一份译法：套餐明细弹窗的行内徽章、余额列的「待生效」徽章及其悬停提示。
+ * 认不出的键原样显示（上游将来多一个状态时，界面上看到的是那个键，不是空白）。
+ */
+export function zcodePlanStateLabel(state: unknown): string {
+  switch (String(state ?? '').trim()) {
+    case 'pending': return t('待生效')
+    case 'active': return t('生效中')
+    case 'expired': return t('已过期')
+    case 'unknown': return t('状态未知')
+    default: return String(state ?? '')
+  }
 }
 
 /**
@@ -686,9 +731,10 @@ export function claimedToday(account: AccountRecord | null | undefined): boolean
 /** 「今天领过 N 份」的悬停说明：列出领过的套餐，并说清还能继续领别的 */
 export function claimDoneTitle(account: AccountRecord | null | undefined): string {
   const planIds = claimedPlanIdsToday(account)
-  const names = planIds.length ? `（${planIds.join('、')}）` : ''
-  return `今天（北京时间 ${beijingDay()}）已领取 ${planIds.length} 份${names}；`
-    + '还有其他可领套餐时，点这里可以继续领；活动按自然日发新套餐，明天可再领'
+  const names = planIds.length ? t('（{plans}）', { plans: planIds.join(t('、')) }) : ''
+  return t('今天（北京时间 {day}）已领取 {n} 份{names}；还有其他可领套餐时，点这里可以继续领；活动按自然日发新套餐，明天可再领', {
+    day: beijingDay(), n: planIds.length, names,
+  })
 }
 
 /**
@@ -696,6 +742,17 @@ export function claimDoneTitle(account: AccountRecord | null | undefined): strin
  */
 export function supportsUsageDetail(account: AccountRecord | null | undefined): boolean {
   return Boolean(providerFeatures(providerOf(account)).usageDetail)
+}
+
+/**
+ * 上游套餐名是否为免费版（`^free$`，不区分大小写）。
+ *
+ * 判定必须比**上游原始名**（后端 `plan_name` 取 `package_name_en`，现网给过 `Free`），
+ * 不能比 `planBadgeLabel` 的输出 —— 那是随界面语言变的展示文案（余额格的
+ * `plan-chip.free` 样式类就按这个判）。单独导出，与 `planBadgeLabel` 共用同一口径。
+ */
+export function isFreePlan(planName: unknown): boolean {
+  return /^free$/i.test(String(planName ?? '').trim())
 }
 
 /**
@@ -707,8 +764,8 @@ export function supportsUsageDetail(account: AccountRecord | null | undefined): 
  */
 export function planBadgeLabel(planName: unknown): string {
   const name = String(planName ?? '').trim()
-  if (/^trial$/i.test(name)) return '试用版'
-  if (/^free$/i.test(name)) return '免费版'
+  if (/^trial$/i.test(name)) return t('试用版')
+  if (isFreePlan(name)) return t('免费版')
   return name
 }
 
@@ -768,21 +825,25 @@ export function welfareDoneTitle(state: WelfareState): string {
   // 「不增加福利模型的 token 池」是**故意留在这里**的：这一家有两份账，领到的积分进的
   // 是套餐赠送积分，而用户点完最可能问的下一句就是「那我的福利模型怎么还是没额度」——
   // 答案放在这行说明里，不必再去余额明细里猜（后端 usage 文档的 note 同口径）。
-  return `今天（北京时间 ${state.day}）已由官方确认到账 ${state.confirmed} 项；`
-    + '领到的是套餐赠送积分，不增加福利模型的 token 池；按自然日重置，明天可再领'
+  return t('今天（北京时间 {day}）已由官方确认到账 {n} 项；领到的是套餐赠送积分，不增加福利模型的 token 池；按自然日重置，明天可再领', {
+    day: state.day, n: state.confirmed,
+  })
 }
 
 /** 「去领取」的悬停说明：把台账里已有的读数带上，回答「今天第几次了」。 */
 export function welfareTodoTitle(state: WelfareState): string {
   const tried = state.today && state.attempts > 0
-    ? `今天（北京时间 ${state.day}）已试过 ${state.attempts} 次但官方尚未确认到账，`
+    ? t('今天（北京时间 {day}）已试过 {n} 次但官方尚未确认到账，', { day: state.day, n: state.attempts })
     : ''
-  return `${tried}探测并领取官方每日登录赠送的套餐积分（到账进套餐积分，不增加福利模型 token 池）`
+  return t('{tried}探测并领取官方每日登录赠送的套餐积分（到账进套餐积分，不增加福利模型 token 池）', { tried })
 }
 
-/* ─── 筛选维度（provider / enabled / limit 三维各自独立）───── */
+/* ─── 筛选维度（enabled / limit / q 三维各自独立）─────────────
+   分组模式（账号页按家分组）去掉了「提供商」这一维：家的维度已经由页面结构本身
+   表达（一家一段），再挂一个下拉筛同一件事，只会让「现在看的是哪几家」有两个说法。
+   `q` 是搜索框（账号名 / 备注 / 邮箱 / 标识），与另外两维共用同一条可见性口径。 */
 
-export type AccountFilter = { provider: string; enabled: string; limit: string }
+export type AccountFilter = { enabled: string; limit: string; q: string }
 
 /** 余额读数的查找口（账号 → `usageEntryOf` 的结果）；不传视作「都没有读数」 */
 export type UsageLookup = (account: AccountRecord) => UsageEntry | undefined
@@ -811,8 +872,20 @@ export function isLimitedNow(
     || tokenBlockedOf(account, tokenReadings)
 }
 
-export function matchProvider(account: AccountRecord, filter: AccountFilter): boolean {
-  return filter.provider === 'all' || providerOf(account) === filter.provider
+/** 搜索词是否命中这条账号：账号名 / 备注名 / 邮箱 / 厂商标识 / id 任一含它就留下。
+ *  大小写不敏感（英文邮箱与 id 常见大小写混写）。空词命中一切。 */
+export function matchQuery(account: AccountRecord, filter: AccountFilter): boolean {
+  const q = String(filter.q || '').trim().toLowerCase()
+  if (!q) return true
+  const haystack = [
+    displayNameOf(account),
+    account?.name,
+    account?.nickname,
+    account?.email,
+    identifierOf(account),
+    account?.id,
+  ]
+  return haystack.some(value => String(value || '').toLowerCase().includes(q))
 }
 
 export function matchEnabled(account: AccountRecord, filter: AccountFilter): boolean {
@@ -833,6 +906,18 @@ export function matchLimit(
   return filter.limit === 'limited' ? limited : !limited
 }
 
+/** 单条账号是否通过当前筛选（三个维度的合取）。`visibleAccounts` 就是它在列表上的 filter */
+export function matchesFilter(
+  account: AccountRecord,
+  filter: AccountFilter,
+  usageOf?: UsageLookup,
+  tokenUsageOf?: TokenUsageLookup,
+): boolean {
+  return matchEnabled(account, filter)
+    && matchLimit(account, filter, usageOf, tokenUsageOf)
+    && matchQuery(account, filter)
+}
+
 /** 当前筛选条件下的可见账号（三个维度同时生效） */
 export function visibleAccounts(
   all: AccountRecord[] | null | undefined,
@@ -840,9 +925,7 @@ export function visibleAccounts(
   usageOf?: UsageLookup,
   tokenUsageOf?: TokenUsageLookup,
 ): AccountRecord[] {
-  return (all || []).filter(account => matchProvider(account, filter)
-    && matchEnabled(account, filter)
-    && matchLimit(account, filter, usageOf, tokenUsageOf))
+  return (all || []).filter(account => matchesFilter(account, filter, usageOf, tokenUsageOf))
 }
 
 /**
@@ -852,35 +935,25 @@ export function visibleAccounts(
 export function filterCounts(
   all: AccountRecord[] | null | undefined,
   filter: AccountFilter,
-  summaries: Array<{ id: string }> | null | undefined,
   usageOf?: UsageLookup,
   tokenUsageOf?: TokenUsageLookup,
 ): Record<string, number> {
   const list = all || []
-  const scope = (except: 'provider' | 'enabled' | 'limit') => list.filter(account =>
-    (except === 'provider' || matchProvider(account, filter))
-    && (except === 'enabled' || matchEnabled(account, filter))
-    && (except === 'limit' || matchLimit(account, filter, usageOf, tokenUsageOf)))
+  const scope = (except: 'enabled' | 'limit') => list.filter(account =>
+    (except === 'enabled' || matchEnabled(account, filter))
+    && (except === 'limit' || matchLimit(account, filter, usageOf, tokenUsageOf))
+    && matchQuery(account, filter))
 
   const forEnabled = scope('enabled')
   const forLimit = scope('limit')
-  const forProvider = scope('provider')
-  const counts: Record<string, number> = {
+  return {
     enabledAll: forEnabled.length,
     enabled: forEnabled.filter(isEnabled).length,
     disabled: forEnabled.filter(a => !isEnabled(a)).length,
     limitAll: forLimit.length,
     normal: forLimit.filter(a => isEnabled(a) && !isLimitedNow(a, usageOf?.(a), tokenUsageOf?.(a))).length,
     limited: forLimit.filter(a => isEnabled(a) && isLimitedNow(a, usageOf?.(a), tokenUsageOf?.(a))).length,
-    providerAll: forProvider.length,
   }
-  // 摘要里每一家都要有键（没有账号的家显示 0 并置灰），否则它的徽标会停在旧数字上
-  ;(summaries || []).forEach(item => { counts[`p-${item.id}`] = 0 })
-  forProvider.forEach(account => {
-    const key = `p-${providerOf(account)}`
-    counts[key] = (counts[key] || 0) + 1
-  })
-  return counts
 }
 
 /**
@@ -910,6 +983,69 @@ export function positionMap(all: AccountRecord[] | null | undefined): Map<string
   const map = new Map<string, { position: number; total: number }>()
   ordered.forEach((account, index) => map.set(account.id, { position: index + 1, total: ordered.length }))
   return map
+}
+
+/* ─── 分组（账号页的显示口径）────────────────── */
+
+export type AccountGroup = {
+  /** 这一组的家（provider id） */
+  provider: string
+  /** 家名（后端注册表的 label，取不到回落 id） */
+  label: string
+  /** 组顺位（1 起）：拖动整组改变的就是它 */
+  rank: number
+  /** 组内**全部**账号（按组内优先级升序，不受筛选影响）：组内序号、统计、以及
+   *  「整队重排」时拼队列都用它 —— 折叠起来的组在 DOM 里没有行，只有这里留着全量 */
+  members: AccountRecord[]
+  /** 组内**可见**的账号（members 里通过筛选的那些，顺序同上）：渲染用它 */
+  accounts: AccountRecord[]
+  enabled: number
+  disabled: number
+  limited: number
+}
+
+/**
+ * 按家分组：组序 = 各家**最靠前**那个账号的先后（组内按优先级升序，并列按加入时间）。
+ *
+ * 与后端 `priority::grouped_queue_order` 是同一份规则的同构实现（渲染层拿不到 Rust，
+ * 只能两处各写一遍 —— 改一处必须同步另一处）。两边的顺序之所以总是一致，靠的是
+ * 队列不变量「同一家的账号连续」：组序因此就等于真实队列里的先后。
+ * 拖完一次由后端按拖出来的顺序整队重编号，不变量继续成立。
+ *
+ * `keep` 是可见性谓词（筛选 / 搜索），**只过滤组内的行、不参与定组序**：筛选时
+ * 组序不跳动，被筛掉的行也不会让整组消失（组头还在，只是组内空了）。
+ */
+export function accountGroups(
+  all: AccountRecord[] | null | undefined,
+  keep?: ((account: AccountRecord) => boolean) | null,
+  usageOf?: UsageLookup,
+  tokenUsageOf?: TokenUsageLookup,
+): AccountGroup[] {
+  const ordered = (all || []).slice().sort(byPriorityOrder)
+  const providers: string[] = []
+  const members = new Map<string, AccountRecord[]>()
+  for (const account of ordered) {
+    const provider = providerOf(account)
+    if (!members.has(provider)) {
+      members.set(provider, [])
+      providers.push(provider)
+    }
+    members.get(provider)!.push(account)
+  }
+  return providers.map((provider, index) => {
+    const list = members.get(provider) || []
+    return {
+      provider,
+      label: shared().wbProviders?.labelOf?.(provider) || provider,
+      rank: index + 1,
+      members: list,
+      accounts: keep ? list.filter(keep) : list,
+      enabled: list.filter(isEnabled).length,
+      disabled: list.filter(account => !isEnabled(account)).length,
+      limited: list.filter(account =>
+        isEnabled(account) && isLimitedNow(account, usageOf?.(account), tokenUsageOf?.(account))).length,
+    }
+  })
 }
 
 /* ─── 展示派生 ─────────────────────────────── */
@@ -955,9 +1091,9 @@ export function formatResetText(resetAt: unknown): string {
   // 按自然日求差而不是按 24 小时：今晚 23:50 到明天 00:10 只差 20 分钟，但用户嘴里
   // 它就是「明天」，按毫秒差算会显示成「今天」，与直觉相反
   const days = Math.round((startOfDay(date) - startOfDay(new Date())) / 86400e3)
-  if (days === 0) return `今天 ${clock}`
-  if (days === 1) return `明天 ${clock}`
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`
+  if (days === 0) return t('今天 {clock}', { clock })
+  if (days === 1) return t('明天 {clock}', { clock })
+  return t('{month}月{day}日 {clock}', { month: date.getMonth() + 1, day: date.getDate(), clock })
 }
 
 /**
@@ -974,9 +1110,12 @@ export function editionSuffix(account: AccountRecord | null | undefined): string
   const provider = providerOf(account)
   if (!providerFeatures(provider).edition) return ''
   const edition = accountEdition(account)
-  const suffix = account?.editionLabel || (edition === 'intl' ? '国际版' : '国内版')
+  const custom = account?.editionLabel
+  // 判重比的是注册名里的中文地区词（后端数据，不随界面语言变）；只有最终展示的后缀走 t()
+  const suffix = custom || (edition === 'intl' ? '国际版' : '国内版')
   const label = shared().wbProviders?.labelOf?.(provider) || ''
-  return label.includes(suffix) ? '' : suffix
+  if (label.includes(suffix)) return ''
+  return custom || (edition === 'intl' ? t('国际版') : t('国内版'))
 }
 
 /** 健康标签（结构化；原来由 accountTags 直接拼 HTML，现在交给 React 渲染成 Badge） */
@@ -996,7 +1135,11 @@ export function accountTags(account: AccountRecord): AccountTag[] {
     // 让人以为「没标记就是好的」。判据是后端的 chatSupported，正常配置下不会出现 ——
     // 留着是为了「将来某家处于只有账号管理的过渡期」时界面能自己说清楚
     supportsChat(account)
-      ? null : { text: '仅账号管理', kind: 'plain' as const, title: '该提供商的推理转发尚未接入，账号不参与转发' },
+      ? null : {
+        text: t('仅账号管理'),
+        kind: 'plain' as const,
+        title: t('该提供商的推理转发尚未接入，账号不参与转发'),
+      },
     // 自定义账号没有凭证：既没填 API Key、也没勾「无需鉴权」时，它在选路里会被
     // **静默跳过**（后端 hasCredentials = false，目录也不广告它家的模型）——原样
     // 展示成一条普通账号会让用户完全看不出「为什么加了账号却发不出去请求」。
@@ -1004,23 +1147,26 @@ export function accountTags(account: AccountRecord): AccountTag[] {
     // false —— 其它家的凭证各有各的链路），再限定 id 前缀避免误报。
     isCustomProviderId(providerOf(account)) && account.hasCredentials === false
       ? {
-        text: '未配置凭证',
+        text: t('未配置凭证'),
         kind: 'bad' as const,
-        title: '这条自定义账号既没有 API Key，也没有勾选「无需鉴权」：转发时会被跳过，'
-          + '该提供商下的模型也不会出现在模型列表里。去账号「设置」里补上 Key，或勾选「该上游无需鉴权」',
+        title: t('这条自定义账号既没有 API Key，也没有勾选「无需鉴权」：转发时会被跳过，该提供商下的模型也不会出现在模型列表里。去账号「设置」里补上 Key，或勾选「该上游无需鉴权」'),
       }
       : null,
     // 代理配了解析不出来时明确标出：转发会回退直连，属于需要留意的情况
     account.proxy?.error
-      ? { text: '代理异常', kind: 'bad' as const, title: `${account.proxy.error}（转发时会回退直连）` }
+      ? {
+        text: t('代理异常'),
+        kind: 'bad' as const,
+        title: t('{error}（转发时会回退直连）', { error: account.proxy.error }),
+      }
       : null,
     // 走活动套餐通道时标出来：它不是默认值，而「这条请求到底花的是哪份额度」
     // 恰恰是用户在这个页面上要回答的问题（行上的余额列也可能同时挂着两份）
     zcodePlanOf(account) === ZCODE_PLAN_START
       ? {
-        text: '活动套餐',
+        text: t('活动套餐'),
         kind: 'plain' as const,
-        title: '转发走活动套餐通道（zcode.z.ai 的 Anthropic 端点，用账号里领到的额度）；在账号设置里可切回编码套餐',
+        title: t('转发走活动套餐通道（zcode.z.ai 的 Anthropic 端点，用账号里领到的额度）；在账号设置里可切回编码套餐'),
       }
       : null,
   ].filter((tag): tag is AccountTag => tag !== null)

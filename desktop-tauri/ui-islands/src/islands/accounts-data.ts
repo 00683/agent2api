@@ -34,11 +34,11 @@ import {
   type TokenReading, type UsageEntry,
 } from './accounts-shared'
 import {
-  claimedPlanIdsToday, isDesktopAccount, isEnabled, isLimitedNow, isRateLimited,
+  isDesktopAccount, isEnabled, isLimitedNow, isRateLimited,
   supportsUsage,
 } from './accounts-domain'
 import * as domain from './accounts-domain'
-import { clampPriority, priorityOf } from './accounts-columns'
+import { t } from '../i18n'
 import {
   allAccounts, bump, findAccount, getStore, isPicked, openPanelsFor, panelOpen, patch,
 } from './accounts-store'
@@ -203,7 +203,7 @@ export async function clashOptions(options: { force?: boolean } = {}): Promise<C
       try {
         const data = await shared().workbuddyDesktop?.getProxies?.()
         if (!data || typeof data !== 'object' || !data.clash) {
-          throw new Error(`代理列表响应异常（${typeof data}）`)
+          throw new Error(t('代理列表响应异常（{type}）', { type: typeof data }))
         }
         return data.clash
       } finally {
@@ -259,7 +259,7 @@ export async function proxyPoolOptions(options: { force?: boolean } = {}): Promi
       try {
         const data = await shared().workbuddyDesktop?.getProxyPool?.()
         if (!data || typeof data !== 'object' || !Array.isArray(data.items)) {
-          throw new Error(`代理池响应异常（${typeof data}）`)
+          throw new Error(t('代理池响应异常（{type}）', { type: typeof data }))
         }
         return data.items
       } finally {
@@ -315,7 +315,7 @@ export function ensureProxyPoolOptions(): void {
 /* ─── 弹窗 ─────────────────────────────────── */
 
 export function openSettingsDialog(id: string): void {
-  if (!findAccount(id)) { toast('账号不存在，请刷新后重试', 'err'); return }
+  if (!findAccount(id)) { toast(t('账号不存在，请刷新后重试'), 'err'); return }
   patch({ dialog: { kind: 'settings', id } })
 }
 
@@ -325,7 +325,7 @@ export function closeDialog(): void {
 
 export function openBatchDialog(ids: string[], action = 'enable'): void {
   const selected = (Array.isArray(ids) ? ids : []).filter(id => findAccount(id))
-  if (!selected.length) { toast('请先勾选要操作的账号', 'err'); return }
+  if (!selected.length) { toast(t('请先勾选要操作的账号'), 'err'); return }
   patch({ dialog: { kind: 'batch', ids: selected, action } })
 }
 
@@ -433,7 +433,7 @@ export function usageFailureOf(entry: UsageEntry): { message: string; notConfigu
  *  与真正的失败（红色）—— 只存 error 字符串会丢掉这个判据。 */
 function cacheEntryOf(row: Record<string, unknown>): UsageEntry {
   if (row.usage) return row.usage as Record<string, unknown>
-  return { error: row.error ? String(row.error) : '余额响应为空', code: row.code }
+  return { error: row.error ? String(row.error) : t('余额响应为空'), code: row.code }
 }
 
 /**
@@ -528,7 +528,7 @@ export async function queryUsageFor(id?: string | null): Promise<{ results?: Arr
   }
   if (id) {
     // 后端返回了 0 行才是真的「没数据」（账号刚被删、或 provider 不认这个 id）
-    if (!returned.has(id)) putUsage(id, '未返回余额数据', at)
+    if (!returned.has(id)) putUsage(id, t('未返回余额数据'), at)
     bump()
     return data
   }
@@ -537,7 +537,7 @@ export async function queryUsageFor(id?: string | null): Promise<{ results?: Arr
   // 本轮查询」说成「上游没给数据」—— 与单查那个 bug 同源。判据走 `batchUsageTargets`，
   // 与后端 `resolve_batch_targets` 逐字一致。
   for (const account of batchUsageTargets()) {
-    if (!returned.has(account.id)) putUsage(account.id, '未返回余额数据', at)
+    if (!returned.has(account.id)) putUsage(account.id, t('未返回余额数据'), at)
   }
   bump()
   return data
@@ -553,7 +553,7 @@ export async function queryUsageFor(id?: string | null): Promise<{ results?: Arr
 export async function queryAllUsage(): Promise<void> {
   if (getStore().usageBusy) return
   const targets = batchUsageTargets()
-  if (!targets.length) { toast('暂无可查询余额的账号', 'err'); return }
+  if (!targets.length) { toast(t('暂无可查询余额的账号'), 'err'); return }
   patch({ usageBusy: true })
   // 先写「查询中」再重绘：余额列立刻显示查询中，结果回来了直接换成读数
   targets.forEach(account => putUsage(account.id, null, Date.now()))
@@ -563,16 +563,16 @@ export async function queryAllUsage(): Promise<void> {
     const ok = rows.filter(row => row.usage).length
     // 「未配置查询」不算失败：那些账号成功返回了、只是缺一个可选的凭证
     const skipped = rows.filter(row => row.code === NOT_CONFIGURED_CODE).length
-    const suffix = skipped ? `（${skipped} 个未配置查询凭证）` : ''
+    const suffix = skipped ? t('（{n} 个未配置查询凭证）', { n: skipped }) : ''
     const failed = rows.length - ok - skipped
     toast(ok + skipped === rows.length
-      ? `✅ 已更新 ${ok} 个账号的余额${suffix}`
-      : `已更新 ${ok}/${rows.length} 个账号，${failed} 个失败`, failed ? 'err' : 'ok')
+      ? t('✅ 已更新 {n} 个账号的余额{suffix}', { n: ok, suffix })
+      : t('已更新 {ok}/{total} 个账号，{failed} 个失败', { ok, total: rows.length, failed }), failed ? 'err' : 'ok')
   } catch (error) {
     const message = errorMessage(error)
-    targets.forEach(account => putUsage(account.id, `查询失败：${message}`, Date.now()))
+    targets.forEach(account => putUsage(account.id, t('查询失败：{message}', { message }), Date.now()))
     bump()
-    toast(`余额查询失败：${message}`, 'err')
+    toast(t('余额查询失败：{message}', { message }), 'err')
   } finally {
     patch({ usageBusy: false })
   }
@@ -608,12 +608,12 @@ export async function queryUsageOnce(id: string): Promise<void> {
     // 「未配置」与「失败」—— 提示语要跟着这个分叉走
     const failure = usageFailureOf(usageMap.get(id))
     if (failure?.notConfigured) toast(failure.message, 'ok')
-    else if (failure) toast(`余额查询失败：${failure.message}`, 'err')
-    else toast('✅ 已更新余额')
+    else if (failure) toast(t('余额查询失败：{message}', { message: failure.message }), 'err')
+    else toast(t('✅ 已更新余额'))
   } catch (error) {
-    putUsage(id, `查询失败：${errorMessage(error)}`, Date.now())
+    putUsage(id, t('查询失败：{message}', { message: errorMessage(error) }), Date.now())
     bump()
-    toast(`余额查询失败：${errorMessage(error)}`, 'err')
+    toast(t('余额查询失败：{message}', { message: errorMessage(error) }), 'err')
   }
 }
 
@@ -648,7 +648,7 @@ export async function refreshUsageAfterCheckin(id?: string): Promise<void> {
     try {
       await runUsageQuery(id)
     } catch (error) {
-      putUsage(id, `查询失败：${errorMessage(error)}`, Date.now())
+      putUsage(id, t('查询失败：{message}', { message: errorMessage(error) }), Date.now())
       bump()
     }
     return
@@ -663,44 +663,17 @@ export async function refreshUsageAfterCheckin(id?: string): Promise<void> {
     await queryUsageFor(null)
   } catch (error) {
     const message = errorMessage(error)
-    targets.forEach(account => putUsage(account.id, `查询失败：${message}`, Date.now()))
+    targets.forEach(account => putUsage(account.id, t('查询失败：{message}', { message }), Date.now()))
     bump()
   } finally {
     patch({ usageBusy: false })
   }
 }
 
-/* ─── 行内动作（优先级 / 启用 / 顺序 / 限流 / 代理）───── */
-
-/**
- * 提交一个优先级。失败（409 冲突）时**必须还原显示值**：留着用户输的数字会让人以为
- * 存进去了，而实际的转发顺序没变 —— 下一次刷新时它会悄悄跳回去，那比当场报错更让人
- * 困惑。后端的 409 文案已经带上了占位者的姓名，直接透出即可（前端不知道谁是占位者，
- * 除非再算一遍，而两套算法迟早会分叉）。
- */
-export async function commitPriority(id: string, raw: string): Promise<number | null> {
-  const account = findAccount(id)
-  if (!account) return null
-  const current = priorityOf(account)
-  const text = String(raw ?? '').trim()
-  const parsed = text ? Number(text) : NaN
-  // 非法值 / 未改动：只把显示复原，不发请求（改成同一个值后端也会返回空 changes）
-  if (!Number.isFinite(parsed)) return current
-  const next = clampPriority(parsed)
-  if (next === current) return current
-  try {
-    await shared().workbuddyDesktop?.updateAccount?.(id, { priority: next })
-    toast(`✅ 优先级已改为 ${next}`)
-    // 改完顺序会变，必须重拉：只改本地状态的话行不会重排，看起来「没生效」
-    await shared().wbApp?.refresh?.()
-    return next
-  } catch (error) {
-    toast(`优先级未保存：${errorMessage(error)}`, 'err')
-    // 冲突可能来自别处已经改过的数据（比如另一端刚占了号），补一次刷新让列表回到事实
-    void shared().wbApp?.refresh?.()
-    return current
-  }
-}
+/* ─── 行内动作（启用 / 顺序 / 限流 / 代理）─────
+ * 「优先级」那一组动作随分组化下线：顺序不再由数字表达，改由拖拽整队
+ * （`reorderQueue`）。后端 `PATCH priority` / `move` 端点仍在（别的客户端在用），
+ * 只是账号页不再调它们。 */
 
 /**
  * 启用 / 禁用单个账号（状态列的开关与 ⋯ 菜单的第一项走同一条链）。
@@ -713,28 +686,53 @@ export async function setAccountEnabled(id: string, enabled: boolean): Promise<v
   try {
     await shared().workbuddyDesktop?.updateAccount?.(id, { enabled })
     await shared().wbApp?.refresh?.()
-    toast(enabled ? '✅ 已启用' : '✅ 已禁用')
+    toast(enabled ? t('✅ 已启用') : t('✅ 已禁用'))
   } catch (error) {
-    toast(`操作失败：${errorMessage(error)}`, 'err')
+    toast(t('操作失败：{message}', { message: errorMessage(error) }), 'err')
     // 失败时把开关拨回去：界面上不能留一个「已改」的假象
     void shared().wbApp?.refresh?.()
   }
 }
 
 /**
- * 与全局相邻账号交换优先级。
+ * **整队重排**（分组模式唯一的顺序写入通道）：把新队列整条交给后端。
  *
- * 方向与语义的对应（**极易搞反**）：优先级数值越小越先用，所以
- *   · up   = 与队列里的**上一个**账号交换 = 排得更靠前 = 数值变小
- *   · down = 与队列里的**下一个**账号交换 = 排得更靠后 = 数值变大
- * 来自后端 `move_account(id, "up" | "down")` 的语义（down 找 index + 1，up 找 index - 1）。
+ * 调用方给的是「组顺位 → 组内顺位」展开后的账号 id 列表（从队首到队尾），后端按
+ * 顺序把全局 priority 编成 0、1、2… —— 一次请求落地一条队列，不存在逐条 PATCH
+ * 的中间态（中途失败会留下重号，那会破坏「优先级唯一」这条不变量）。
+ *
+ * 失败必须刷新：界面此时显示的是**用户拖出来的顺序**，而库里还是旧顺序，
+ * 不拉回事实的话，下一次刷新会看到顺序「自己跳回去」。
  */
-export async function moveAccount(id: string, direction: 'up' | 'down'): Promise<void> {
+export async function reorderQueue(ids: string[], note?: string): Promise<boolean> {
+  if (!ids.length) return false
   try {
-    await shared().workbuddyDesktop?.moveAccount?.(id, direction)
+    await shared().workbuddyDesktop?.reorderAccounts?.(ids)
+    toast(note ? t('✅ 已保存：{note}', { note }) : t('✅ 顺序已保存'))
+    await shared().wbApp?.refresh?.()
+    return true
+  } catch (error) {
+    toast(t('顺序未保存：{message}', { message: errorMessage(error) }), 'err')
+    void shared().wbApp?.refresh?.()
+    return false
+  }
+}
+
+/**
+ * 整组启用 / 禁用（分组带的 ⋯ 菜单）：走既有的批量端点，一次改一组。
+ * 与单行开关同一口径（`PATCH enabled`），只是把 ids 换成一组的成员。
+ */
+export async function setGroupEnabled(ids: string[], enabled: boolean): Promise<void> {
+  if (!ids.length) return
+  try {
+    await shared().workbuddyDesktop?.batchAccounts?.({ action: enabled ? 'enable' : 'disable', ids })
+    toast(enabled
+      ? t('✅ 已启用 {n} 个账号', { n: ids.length })
+      : t('✅ 已禁用 {n} 个账号', { n: ids.length }))
     await shared().wbApp?.refresh?.()
   } catch (error) {
-    toast(`调整顺序失败：${errorMessage(error)}`, 'err')
+    toast(t('操作失败：{message}', { message: errorMessage(error) }), 'err')
+    void shared().wbApp?.refresh?.()
   }
 }
 
@@ -742,10 +740,10 @@ export async function moveAccount(id: string, direction: 'up' | 'down'): Promise
 export async function clearLimits(id: string, model?: string): Promise<void> {
   try {
     await shared().workbuddyDesktop?.clearRateLimits?.(id, model || null)
-    toast(model ? `✅ 已清除 ${model} 的限流标记` : '✅ 已清除该账号全部限流标记')
+    toast(model ? t('✅ 已清除 {model} 的限流标记', { model }) : t('✅ 已清除该账号全部限流标记'))
     await shared().wbApp?.refresh?.()
   } catch (error) {
-    toast(`清除失败：${errorMessage(error)}`, 'err')
+    toast(t('清除失败：{message}', { message: errorMessage(error) }), 'err')
   }
 }
 
@@ -780,10 +778,11 @@ export async function applyProxyPick(id: string, value: string, fallback: string
       : { source: 'pool', proxyId: value.slice(POOL_VALUE_PREFIX.length) }
     const result = await shared().workbuddyDesktop?.updateAccount?.(id, { proxy })
     const changes = result?.changes
-    const change = Array.isArray(changes) && changes.length ? changes[0] : '代理已更新'
+    // changes[0] 是后端回报的变更说明（后端文案保持一份事实），没有时给前端兜底一句
+    const change = Array.isArray(changes) && changes.length ? changes[0] : t('代理已更新')
     toast(`✅ ${change}`)
   } catch (error) {
-    toast(`保存失败：${errorMessage(error)}`, 'err')
+    toast(t('保存失败：{message}', { message: errorMessage(error) }), 'err')
   } finally {
     // 成败都重拉：成功让这格显示落库后的值，失败把下拉拨回原值
     await shared().wbApp?.refresh?.()
@@ -795,38 +794,33 @@ export const PROXY_CUSTOM_CURRENT = '__proxy_custom__'
 export const PROXY_CUSTOM_EDIT = '__proxy_custom_edit__'
 
 /**
- * 行上「领套餐」：整条流程（探测 → 确认 → 验证码 → 领取）在 ui/zcode-claim.js，
- * 这里负责发起与**收尾**。
+ * 行上「领套餐」/ 签到中心 ZCode 行：打开**套餐明细**弹窗（zcode-plans-modal.tsx）。
  *
- * ── 为什么要把「今天领过的套餐」传给脚本 ──────────────────────
- * 一个账号可能同时挂着几份可领套餐，上游的「已领取过」是**按套餐**判的
- * （见 `claimedPlanIdsToday`）。台账在本页（账号记录的 `claimPlans`），
- * 判定规则在域层，脚本只负责把它们画进弹窗、并只让选还没领的那几份 ——
- * 日界的算法因此仍然只有域层一处。
+ * ── 为什么是一颗「打开弹窗」的按钮而不是直接开领 ──────────────
+ * 一个账号可能同时挂着几份可领套餐，而上游的「已领取过」是**按套餐**判的
+ * （同一份再领回 1003，换一份照样能领）—— 所以「这次领哪一份」必须由用户看着
+ * 逐份状态来决定。旧版是先探测再弹一个原生确认框，里面既列不出逐份状态、也显示
+ * 不了刚领到还没生效的套餐；现在统一进弹窗：上面是可领取（逐份标「今日已领」、
+ * 逐份点「领取」），下面是账号名下已有的套餐（含**待生效**与已过期）。
  *
- * ── 收尾为什么在本文件而不是那支 legacy 脚本里 ────────────────
- * 领到的是 token 额度：余额列的读数立刻就变了，而那颗按钮的悬停提示也跟着变
- * （后端落的领取台账由重拉账号拿到）。两件事都是本页的 store / 动作
- * （legacy 脚本拿不到），所以脚本只把结果交回来，由这里刷新 ——
- * 与 CodeArts 那条不同（它的入口在签到中心，脚本领完自己调 `wbApp.refresh()`），
- * 是因为这条还得顺带刷本页的余额。
+ * 「今天领过哪几份」与余额读数都由弹窗自己从账号页状态里读（判据只有域层的
+ * `claimedPlanIdsToday` 一处），这里只传 id 与显示名。
  *
- * `already_claimed` 同样算「已领」：上游说这份套餐已经被领掉了（可能是另一台
- * 设备领的），台账该补上它，否则用户会一直点它、每次拿回同一句话。
+ * ── 收尾（刷新余额 / 重拉账号）为什么在弹窗里 ────────────────
+ * 领到的是 token 额度：余额列的读数立刻就变了，领取台账也变了。这两件事都是本页
+ * 的 store（弹窗能订阅到，见那边的 `subscribe`），所以由弹窗领完自己刷 ——
+ * 这里不替它盯流程。
  */
-export async function startZcodeClaim(id: string): Promise<void> {
-  const account = findAccount(id) || undefined
-  const result = (await shared().wbZcodeClaim?.start?.(
-    account,
-    claimedPlanIdsToday(account),
-  )) as { ok?: boolean; failure?: string } | undefined
-  const settled = result?.ok === true || result?.failure === 'already_claimed'
-  if (!settled) return
-  // 余额静默刷新（不 await、不播报：领取结果那条 toast 不能被顶掉，
-  // 理由见 refreshUsageAfterCheckin）
-  void refreshUsageAfterCheckin(id)
-  // 重拉账号状态：领取台账是后端落盘的，弹窗与悬停提示据此更新「哪几份已领」
-  void shared().wbApp?.refresh?.()
+export function openZcodePlans(id: string, name?: string): void {
+  const account = findAccount(id)
+  if (!account) { toast(t('账号不存在，请刷新后重试'), 'err'); return }
+  const modal = shared().wbZcodePlans
+  if (!modal?.open) {
+    // 岛还没挂上（构建产物没更新 / 加载失败）：如实说一句，别静默什么都不做
+    toast(t('套餐明细弹窗未加载，请重启应用后重试'), 'err')
+    return
+  }
+  modal.open({ id, name: name || account.name })
 }
 
 /**
@@ -839,16 +833,25 @@ export async function startZcodeClaim(id: string): Promise<void> {
 
 /** 一行账号的渲染上下文（视图层按它取位置、勾选、余额与连接数） */
 export type RowContext = {
+  /** 全局队列位置（1 起）：⋯ 菜单的「已在第一位」判定、模型测试候选清单用它。
+   *  分组模式下**不再直接显示**（行上是组内序号），见 accounts-domain 模块头 */
   seat: { position: number; total: number }
+  /** 组内序号（1 起）：顺序列的 `#N` 就是它 */
+  rank: number
   picked: boolean
   usageEntry: UsageEntry
   limitsOpen: boolean
   connections: number
 }
 
-export function rowContext(account: AccountRecord, seatMap: Map<string, { position: number; total: number }>): RowContext {
+export function rowContext(
+  account: AccountRecord,
+  seatMap: Map<string, { position: number; total: number }>,
+  rank = 1,
+): RowContext {
   return {
     seat: seatMap.get(account.id) || { position: 1, total: 1 },
+    rank,
     picked: isPicked(account.id),
     usageEntry: usageMap.get(account.id),
     limitsOpen: panelOpen(account.id, 'limits'),
@@ -910,7 +913,6 @@ type AccountsModelApi = {
   isLimited: (account: AccountRecord | null | undefined) => boolean
   accountEdition: typeof domain.accountEdition
   supportsClaim: typeof domain.supportsClaim
-  matchProvider: typeof domain.matchProvider
   matchEnabled: typeof domain.matchEnabled
   matchLimit: typeof domain.matchLimit
   visibleAccounts: typeof domain.visibleAccounts
@@ -955,7 +957,6 @@ const ACCOUNTS_MODEL_API: AccountsModelApi = {
   ),
   accountEdition: domain.accountEdition,
   supportsClaim: domain.supportsClaim,
-  matchProvider: domain.matchProvider,
   matchEnabled: domain.matchEnabled,
   matchLimit: domain.matchLimit,
   visibleAccounts: domain.visibleAccounts,

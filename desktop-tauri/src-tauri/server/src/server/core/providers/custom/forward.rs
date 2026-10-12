@@ -266,6 +266,8 @@ pub(crate) async fn forward(
         headers,
         payload,
         proxy,
+        // 自定义家没有能力位（用户自己配的出口就是唯一口径：配了就代理，没配就直连）
+        system_proxy_when_unset: false,
     };
     let response = send_chat_request(&transport)
         .await
@@ -575,6 +577,8 @@ async fn forward_translated(
         headers,
         payload,
         proxy,
+        // 自定义家没有能力位（用户自己配的出口就是唯一口径：配了就代理，没配就直连）
+        system_proxy_when_unset: false,
     };
     let response = send_chat_request(&transport)
         .await

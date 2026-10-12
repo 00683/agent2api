@@ -38,6 +38,9 @@ pub mod accounts;
 // `/api/accounts/usage` 的查询与结果组装（从 accounts.rs 拆出：余额能力从
 // 「只服务 workbuddy」扩到四家混查时新增，见该文件模块头）
 pub mod accounts_usage;
+// 整库备份 / 恢复（设置页「整库备份 / 恢复」，SQL 文本形态；核心在
+// `db::backup`，替换语义与账号 JSON 导入的 merge 是两条独立通道）
+pub mod backup_api;
 pub mod auto_checkin;
 pub mod billing;
 pub mod captcha;
@@ -83,6 +86,7 @@ pub mod proxies;
 pub mod qoder_umid;
 pub mod queue_api;
 pub mod retry_api;
+pub mod routing_api;
 pub mod sanitize;
 pub mod scheduled_tasks;
 pub mod session;
@@ -93,4 +97,6 @@ pub mod update;
 pub mod upgrade_api;
 // 活动套餐通道的人机验证令牌池（界面铸造 → 网关消费），见该文件模块头
 pub mod zcode_captcha;
+// 令牌池的**补货节奏**设置（目标 / 轮询间隔 / 单轮上限），见该文件模块头
+pub mod zcode_captcha_pool;
 pub mod zcode_claim;

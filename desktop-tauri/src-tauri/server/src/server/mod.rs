@@ -300,6 +300,10 @@ impl ServerState {
         // CodeArts 同理：授权地址由适配器拼（同步无参），而 portal 只认 `port`，
         // 所以端口要在发起登录之前就写在进程级常量里（见该模块 `set_loopback_port`）。
         crate::server::core::providers::codearts::oauth::set_loopback_port(port);
+        // Antigravity 的网页登录同理：Google 授权页完成后要回到
+        // `http://localhost:{port}/oauth-callback`（redirect_uri 由适配器在发起
+        // 登录时本地拼），端口必须在第一次发起之前就位（见该模块 `set_loopback_port`）。
+        crate::server::core::providers::antigravity::oauth::set_loopback_port(port);
         let config_dir = config::config_dir();
         // 与 Node 版一致：verbose 由环境变量 AGENT2API_VERBOSE=1 打开
         // （旧名 WORKBUDDY_VERBOSE 仍可读，新名优先），
@@ -353,6 +357,11 @@ impl ServerState {
         // 位置必须在这里：它得早于下面那次 `restore_cached_catalogs` 预热 ——
         // 各家的目录句柄首次初始化时才读缓存，句柄先被碰到就再也读不回来了。
         core::providers::catalog_cache::install(db.clone());
+        // OfficeAce 模型可用性探测的结论也落同一个库（kv 的 `officeaceModelProbe`
+        // 键）：目录刷新后探一轮、把「这个号打不通」的模型从对外清单里收窄掉。
+        // 与 catalog_cache 同一形态（kv 固定键 + 整份读写），位置只需早于
+        // 第一次 `advertise_models`（那是纯读，未 install 时给空结论 = 不藏）。
+        core::providers::officeace::probe::install(db.clone());
         // ── 旧文件一次性迁移：**本切片起不再自动跑** ────────────────
         // 它现在由用户在升级弹窗里点「升级」触发（`POST /api/upgrade/run`）。
         // 为什么改成手动：需求是「弹窗告诉用户换了 SQLite，点升级才开始导」——

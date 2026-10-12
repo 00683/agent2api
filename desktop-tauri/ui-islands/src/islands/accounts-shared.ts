@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 /**
  * 账号页各文件共用的**类型与全局桥读取**（非岛：`.ts` 不被 import.meta.glob 当岛加载）。
  *
@@ -225,8 +227,23 @@ type ConfirmOptions = {
 export type AccountsBridge = {
   getAccountConnections(): Promise<{ counts?: Record<string, unknown> } | null | undefined>
   updateAccount(id: string, patch: Record<string, unknown>): Promise<{ changes?: string[] } | null | undefined>
+  /** 整队重排（分组模式）：把新队列整条交上去（从队首到队尾的 id 数组） */
+  reorderAccounts(queue: string[]): Promise<unknown>
   moveAccount(id: string, direction: 'up' | 'down'): Promise<unknown>
   clearRateLimits(id: string, model?: string | null): Promise<unknown>
+  /**
+   * 账号路由（策略 / 粘性 / 退避 / 垫底 / 熔断）与候选队列可见化。
+   * `setRoutingConfig` 收**部分**补丁、返回生效后的全量值（与 /api/timeouts
+   * 同一模式）；`getRoutingQueue` 的 model 缺省 = 不限模型的全局队列。
+   */
+  /** 全量会话态（/api/session，app.js 的首屏数据源）；路由面板读 models / lastRequestModel */
+  getState?(): Promise<{
+    models?: Array<{ id?: string; providerLabel?: string }>
+    lastRequestModel?: string | null
+  } | null | undefined>
+  getRoutingConfig(): Promise<Record<string, unknown> | null | undefined>
+  setRoutingConfig(patch: Record<string, unknown>): Promise<Record<string, unknown> | null | undefined>
+  getRoutingQueue(model?: string): Promise<Record<string, unknown> | null | undefined>
   batchAccounts(payload: { action: string; ids: string[]; proxy?: unknown }): Promise<{
     ok?: Array<{ id?: string; changes?: string[] }>
     removed?: unknown[]
@@ -349,9 +366,9 @@ export function poolItemAddress(item: PoolItem): string {
  */
 export function poolItemLabel(item: PoolItem): string {
   const name = item.name || item.id
-  const address = item.resolveError ? '解析失败' : poolItemAddress(item)
-  const parts = [address, item.enabled === false ? '已禁用' : ''].filter(Boolean)
-  return parts.length ? `${name}（${parts.join(' · ')}）` : name
+  const address = item.resolveError ? t('解析失败') : poolItemAddress(item)
+  const parts = [address, item.enabled === false ? t('已禁用') : ''].filter(Boolean)
+  return parts.length ? t('{name}（{parts}）', { name, parts: parts.join(' · ') }) : name
 }
 
 /**
@@ -415,11 +432,17 @@ export type SharedWindow = {
     }) => Promise<unknown>
     remove?: (id: string) => Promise<boolean>
   }
-  /** ZCode「领套餐」流程（ui/zcode-claim.js，本页把账号对象与「今天领过的套餐 id」
-   * 递过去）。第二个参数是**逐份**的领取状态：一个账号可能同时挂着几份可领套餐，
-   * 而上游的「已领取过」是按套餐判的 —— 弹窗据此把已领的那几份标出来、只让选没领的。
+  /**
+   * ZCode 领取的**网络侧**（ui/zcode-claim.js）：`preview` 探测可领取的一份份套餐
+   * （不要验证码，失败时 throw），`claim` 领指定的一份（要验证码，返回业务结果）。
+   * 界面在套餐明细弹窗（zcode-plans-modal.tsx）里，本文件只声明桥的形状。
    */
-  wbZcodeClaim?: { start?: (account: AccountRecord | undefined, claimedPlanIds?: string[]) => Promise<unknown> }
+  wbZcodeClaim?: {
+    preview?: (accountId: string) => Promise<unknown>
+    claim?: (accountId: string, planId: string) => Promise<unknown>
+  }
+  /** ZCode 套餐明细弹窗（zcode-plans-modal.tsx）：可领取 + 名下已有的套餐，逐份领取 */
+  wbZcodePlans?: { open?: (options: { id: string; name?: string }) => void }
   /** CodeArts「领福利」流程（ui/codearts-welfare.js：只读探测 → 确认 → 领取 → 回读） */
   wbCodeArtsWelfare?: { start?: (account: AccountRecord | undefined) => Promise<unknown> }
   /** 「添加账号」弹窗（归另一个代理，本页只调它的 open） */
