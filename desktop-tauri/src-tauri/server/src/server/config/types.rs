@@ -809,3 +809,159 @@ pub struct QueuePatch {
     pub max_waits: Option<i64>,
     pub wait_seconds: Option<i64>,
 }
+
+// ─── 账号路由（策略 / 会话粘性 / 失败退避 / 限流垫底 / 熔断）─────────
+
+/// 路由策略：候选账号怎么排序（`routingStrategy`）。
+///
+///   - `Order`：队列位次（优先级数字）就是一切 —— 现状行为；
+///   - `Rotate`：每条请求轮换到下一位（新会话的起点由位次决定），均摊用量；
+///   - `Usage`：用量占比最低的先用（没有读数的账号按位次排在有读数的后面）。
+///
+/// 智能按窗口重置、手动固定两档讨论后**不做**（用户拍板：只留三种）。
+pub const KEY_ROUTING_STRATEGY: &str = "routingStrategy";
+/// 会话粘性：同一会话尽量跟住答过它的账号（`routingSticky`）。
+///
+///   - `Auto`：跟住，直到上游缓存不值得续（约 5 分钟无往来）；
+///   - `Session`：跟住更久（6 小时内同会话同账号）；
+///   - `Turn`：只在单条请求内不换号（与转发既有行为一致，跨请求不粘）；
+///   - `Off`：每条请求独立选。
+pub const KEY_ROUTING_STICKY: &str = "routingSticky";
+/// 失败退避：转发失败的账号休息一会儿再回来（`routingFailoverBackoff`，默认开）
+pub const KEY_ROUTING_FAILOVER_BACKOFF: &str = "routingFailoverBackoff";
+/// 限流垫底（Sink）：还有额度时被 429 的账号排到队尾，轮一圈才回来
+/// （`routingSink`，默认开）
+pub const KEY_ROUTING_SINK: &str = "routingSink";
+/// 熔断开关（`routingBreakerEnabled`，默认关）
+pub const KEY_ROUTING_BREAKER_ENABLED: &str = "routingBreakerEnabled";
+/// 熔断阈值：连续失败多少次后熔断（`routingBreakerThreshold`）
+pub const KEY_ROUTING_BREAKER_THRESHOLD: &str = "routingBreakerThreshold";
+/// 熔断时长（秒）：熔断后过多久放行试一次（`routingBreakerTimeoutSeconds`）
+pub const KEY_ROUTING_BREAKER_TIMEOUT: &str = "routingBreakerTimeoutSeconds";
+/// 恢复阈值：熔断放行后要连续成功几次才算恢复（`routingBreakerSuccessThreshold`）
+pub const KEY_ROUTING_BREAKER_SUCCESS: &str = "routingBreakerSuccessThreshold";
+
+pub const ROUTING_STRATEGY_ORDER: &str = "order";
+pub const ROUTING_STRATEGY_ROTATE: &str = "rotate";
+pub const ROUTING_STRATEGY_USAGE: &str = "usage";
+
+pub const STICKY_OFF: &str = "off";
+pub const STICKY_TURN: &str = "turn";
+pub const STICKY_SESSION: &str = "session";
+pub const STICKY_AUTO: &str = "auto";
+
+/// 熔断阈值合法范围：1~20 次
+pub const ROUTING_BREAKER_MIN_THRESHOLD: i64 = 1;
+pub const ROUTING_BREAKER_MAX_THRESHOLD: i64 = 20;
+/// 熔断时长合法范围：10~600 秒
+pub const ROUTING_BREAKER_MIN_TIMEOUT: i64 = 10;
+pub const ROUTING_BREAKER_MAX_TIMEOUT: i64 = 600;
+/// 恢复阈值合法范围：1~10 次
+pub const ROUTING_BREAKER_MIN_SUCCESS: i64 = 1;
+pub const ROUTING_BREAKER_MAX_SUCCESS: i64 = 10;
+
+/// 路由策略（`RouteStrategy` 的 Rust 形态；配置里存 `as_str`）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteStrategy {
+    Order,
+    Rotate,
+    Usage,
+}
+
+impl RouteStrategy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Order => ROUTING_STRATEGY_ORDER,
+            Self::Rotate => ROUTING_STRATEGY_ROTATE,
+            Self::Usage => ROUTING_STRATEGY_USAGE,
+        }
+    }
+
+    pub fn from_id(value: &str) -> Self {
+        match value {
+            ROUTING_STRATEGY_ROTATE => Self::Rotate,
+            ROUTING_STRATEGY_USAGE => Self::Usage,
+            _ => Self::Order,
+        }
+    }
+}
+
+/// 会话粘性档位（`StickyMode`）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StickyMode {
+    Off,
+    Turn,
+    Session,
+    Auto,
+}
+
+impl StickyMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => STICKY_OFF,
+            Self::Turn => STICKY_TURN,
+            Self::Session => STICKY_SESSION,
+            Self::Auto => STICKY_AUTO,
+        }
+    }
+
+    pub fn from_id(value: &str) -> Self {
+        match value {
+            STICKY_SESSION => Self::Session,
+            STICKY_TURN => Self::Turn,
+            STICKY_OFF => Self::Off,
+            _ => Self::Auto,
+        }
+    }
+
+    /// 粘性记录的存活时长（毫秒）；`None` = 不粘（Off / Turn）
+    pub fn ttl_ms(&self) -> Option<i64> {
+        match self {
+            Self::Auto => Some(5 * 60 * 1000),
+            Self::Session => Some(6 * 60 * 60 * 1000),
+            Self::Off | Self::Turn => None,
+        }
+    }
+}
+
+/// 账号路由设置（账号页「路由」区域）。转发层逐请求取一次快照
+/// （`Copy`），改完设置下一个请求立即生效 —— 与超时 / 重试同一模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoutingSettings {
+    pub strategy: RouteStrategy,
+    pub sticky: StickyMode,
+    pub failover_backoff: bool,
+    pub sink: bool,
+    pub breaker_enabled: bool,
+    pub breaker_threshold: i64,
+    pub breaker_timeout_seconds: i64,
+    pub breaker_success_threshold: i64,
+}
+
+impl Default for RoutingSettings {
+    fn default() -> Self {
+        Self {
+            strategy: RouteStrategy::Order,
+            sticky: StickyMode::Auto,
+            failover_backoff: true,
+            sink: true,
+            breaker_enabled: false,
+            breaker_threshold: 5,
+            breaker_timeout_seconds: 60,
+            breaker_success_threshold: 2,
+        }
+    }
+}
+
+/// 路由设置的**部分**更新入参（`None` = 该项不动）
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RoutingPatch {
+    pub strategy: Option<RouteStrategy>,
+    pub sticky: Option<StickyMode>,
+    pub failover_backoff: Option<bool>,
+    pub sink: Option<bool>,
+    pub breaker_enabled: Option<bool>,
+    pub breaker_threshold: Option<i64>,
+    pub breaker_timeout_seconds: Option<i64>,
+    pub breaker_success_threshold: Option<i64>,
+}

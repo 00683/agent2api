@@ -214,7 +214,7 @@ pub fn is_reserved(key: &str) -> bool {
 /// 退役后查询按账号各自到期触发，一行一账号才能逐条更新、逐条被选路读取
 /// （kv 整份读改写撑不住这个粒度）。旧快照的数据由 `core::usage_records`
 /// 启动时导入，升级后余额列不会变空白。
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -620,6 +620,18 @@ const V9_SCHEMA: &str = "
 CREATE INDEX IF NOT EXISTS idx_requests_account_ts ON requests(account_id, ts);
 ";
 
+/// 版本 10：requests 补「选路决策快照」一列。
+///
+/// 存整个决策 JSON 的原文（`{strategy, sticky, stickyHit, picked, ordered[],
+/// blocked[]}`，采集侧已截断到各有界条数）。DEFAULT NULL：旧行与「没走到
+/// 选路」的请求都是「没有决策」—— 展示层对两者不渲染同一段，与
+/// `attempt_details` 的 `'[]'` 不同（那表达「空表」是有意的信息，这里 NULL
+/// 就是「没这回事」，不必造一种空形态）。
+const V10_SCHEMA: &str = "
+-- ── requests 补选路决策快照列（schema v10）───────────────────
+ALTER TABLE requests ADD COLUMN route TEXT;
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// 返回 `rusqlite::Result` 而不是本模块自造的字符串错误：调用方 `Db::open`
@@ -685,6 +697,8 @@ fn apply_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
         8 => conn.execute_batch(V8_SCHEMA),
         // v9：requests 补按账号聚合的索引（限制器的 Token 周期消耗聚合，见 V9_SCHEMA）
         9 => conn.execute_batch(V9_SCHEMA),
+        // v10：requests 补「选路决策快照」一列（请求详情的路由回放，见 V10_SCHEMA）
+        10 => conn.execute_batch(V10_SCHEMA),
         _ => Ok(()),
     }
 }

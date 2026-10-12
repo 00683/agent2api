@@ -329,6 +329,12 @@ const BRIDGE_JS: &str = r#"
     clearRateLimits: (id, model) =>
       call('POST', '/api/accounts/' + encodeURIComponent(id) + '/rate-limits/clear',
         model ? { model } : {}),
+    // ── 账号路由（策略 / 粘性 / 退避 / 垫底 / 熔断 + 队列可见化）──
+    getRoutingConfig: () => call('GET', '/api/routing'),
+    setRoutingConfig: patch => call('PUT', '/api/routing', patch || {}),
+    // 候选队列可见化（账号页「路由」面板的数据源）：model 缺省 = 不限模型的全局队列
+    getRoutingQueue: model =>
+      call('GET', '/api/routing/queue' + (model ? '?model=' + encodeURIComponent(model) : '')),
     batchAccounts: payload =>
       call('POST', '/api/accounts/batch', {
         action: String((payload && payload.action) || ''),

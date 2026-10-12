@@ -526,3 +526,72 @@ fn reload_facts() {
         *slot = facts;
     }
 }
+
+// ─── 用量占比事实（「余额优先」策略的排序依据）──────────────────
+
+/// 从一次成功查询的 usage JSON 里提取**用量占比**（0.0 ~ 1.0；`None` = 判不出）。
+///
+/// 各家的归一形状不同，逐档尝试（与前端余额列的取数优先级一致）：
+///   1. `wallets[].remainingPercent`（ZCode 的窗口读数）→ 取**最紧**那只钱包，
+///      used = 100 − min(percent)；
+///   2. `resources[]` 的 total>0（workbuddy 原始资源包响应）→ Σused / Σtotal；
+///   3. `totalLeft` / `available` 顶层读数（workbuddy 简报 / 统一形状）没有
+///      总量伴随 —— 算不出占比，`None`。
+///
+/// unlimited（不限量）按占比 0 算：它永远用不完，「余额优先」下天然排最前 ——
+/// 与 magpie「unknown counts as unused」同一取向。
+fn used_share_of(usage: &Value) -> Option<f64> {
+    let fields = usage.as_object()?;
+    if fields.get("unlimited").map(js_truthy).unwrap_or(false) {
+        return Some(0.0);
+    }
+    if let Some(wallets) = fields.get("wallets").and_then(Value::as_array) {
+        let mut tightest: Option<f64> = None;
+        for wallet in wallets {
+            if let Some(percent) = wallet.get("remainingPercent").and_then(Value::as_f64) {
+                let percent = percent.clamp(0.0, 100.0);
+                if tightest.map(|best| percent < best).unwrap_or(true) {
+                    tightest = Some(percent);
+                }
+            }
+        }
+        if let Some(percent) = tightest {
+            return Some(((100.0 - percent) / 100.0).clamp(0.0, 1.0));
+        }
+    }
+    if let Some(resources) = fields.get("resources").and_then(Value::as_array) {
+        let mut total = 0.0f64;
+        let mut used = 0.0f64;
+        for item in resources {
+            let item_total = item.get("total").and_then(Value::as_f64).unwrap_or(0.0);
+            if item_total > 0.0 {
+                total += item_total;
+                used += item
+                    .get("used")
+                    .and_then(Value::as_f64)
+                    .unwrap_or((item_total - item.get("left").and_then(Value::as_f64).unwrap_or(0.0)).max(0.0));
+            }
+        }
+        if total > 0.0 {
+            return Some((used / total).clamp(0.0, 1.0));
+        }
+    }
+    None
+}
+
+/// 全部账号的用量占比快照（账号 id → `Some(占比)` / `None` 无读数）。
+///
+/// 「余额优先」策略逐请求调用一次（库读全表约几 KB，纳秒到微秒级）；
+/// 读不到库给空表 —— 所有账号都按「无读数」参与排序，退化为队列位次。
+pub fn used_share_facts() -> HashMap<String, Option<f64>> {
+    load_all()
+        .into_iter()
+        .map(|(account_id, record)| {
+            let share = record
+                .usage
+                .as_ref()
+                .and_then(used_share_of);
+            (account_id, share)
+        })
+        .collect()
+}
