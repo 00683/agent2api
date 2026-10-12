@@ -703,25 +703,22 @@ const ANTIGRAVITY: ProviderConfig = {
  */
 const OFFICEACE: ProviderConfig = {
   provider: 'officeace',
-  label: 'OfficeAce 果办',
+  label: t('OfficeAce 果办'),
   desktop: false,
   webLogin: {
-    noteHtml: '打开华为云授权页登录：登录完成后网关会**轮询云端**取回授权码并加入账号列表'
-      + '（不需要装 OfficeAce 桌面端，也无需手工回填回调地址）。',
-    button: '打开授权页',
-    busyText: '等待 OfficeAce 登录完成…',
+    // 整段是一个 t() 键：扫描器只认字符串字面量（拼接串提不到键），所以不拆行
+    noteHtml: t('打开华为云授权页登录：登录完成后网关会自动<b>轮询云端</b>取回授权码并加入账号列表（不需要装 OfficeAce 桌面端，也无需手工回填回调地址）。'),
+    button: t('打开授权页'),
+    busyText: t('等待 OfficeAce 登录完成…'),
   },
-  manualTitle: '粘贴网关凭据',
-  manualNoteHtml: '从别的机器（或 OfficeAce 桌面端 <code>models.json</code>）取三项贴进来：'
-    + '模型网关基址（<code>baseUrl</code>，形如 <code>https://modelgw-…/v2</code>）与'
-    + ' <code>modelAppKey</code> / <code>modelAppSecret</code>。'
-    + '这三项就能转发（网关凭据不过期）；控制面临时凭据（<code>accessKeyId</code> 等）可选，'
-    + '留空则额度/自动续期不可用，但不影响转发。',
+  manualTitle: t('粘贴网关凭据'),
+  manualNoteHtml: t('从别的机器（或 OfficeAce 桌面端 <code>models.json</code>）取三项贴进来：模型网关基址（<code>baseUrl</code>，形如 <code>https://modelgw-…/v2</code>）与 <code>modelAppKey</code> / <code>modelAppSecret</code>。这三项就能转发（网关凭据不过期）；控制面临时凭据（<code>accessKeyId</code> 等）可选，留空则额度/自动续期不可用，但不影响转发。'),
   fields: [
-    { key: 'baseUrl', label: '模型网关基址', placeholder: 'https://modelgw-…huaweicloud-agentarts.com/v2' },
-    { key: 'modelAppKey', label: '网关 Key', placeholder: 'model_app_key' },
-    { key: 'modelAppSecret', label: '网关 Secret', placeholder: 'model_app_secret' },
-    { key: 'name', label: '备注名', optional: true, placeholder: '可选，留空用「OfficeAce 果办」' },
+    // 字段名与 URL 示例不包 t()（各语言相同，与 CodeArts 的 JSON 示例同一处置）
+    { key: 'baseUrl', label: t('模型网关基址'), placeholder: 'https://modelgw-…huaweicloud-agentarts.com/v2' },
+    { key: 'modelAppKey', label: t('网关 Key'), placeholder: 'model_app_key' },
+    { key: 'modelAppSecret', label: t('网关 Secret'), placeholder: 'model_app_secret' },
+    { key: 'name', label: t('备注名'), optional: true, placeholder: t('可选，留空用「OfficeAce 果办」') },
   ],
 }
 
