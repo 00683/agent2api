@@ -122,7 +122,6 @@
 /* 表头文字：主标签 + 小注（优先级「全局队列」/ 限流「按模型」）。
    小注用同色弱化：它只解释口径，不该抢列名的注意力。 */
 .acct-table thead th .th-label { display: inline-flex; align-items: center; gap: 4px; }
-.acct-table thead th .th-hint { font-weight: 400; letter-spacing: 0; opacity: .7; }
 
 /* 表头的「隐藏账号名」眼睛（只在账号列出现）：一颗纯图标小按钮，贴在列名后面。
    默认继承表头小字的灰色、不抢注意力；隐藏生效时常亮主色（.on）——

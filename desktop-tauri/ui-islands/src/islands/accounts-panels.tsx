@@ -1449,7 +1449,7 @@ export function TableHead({ namesHidden, allPicked, somePicked, disabled, onTogg
         </th>
         <th className='cell-order' data-col='order'>
           <span className='th-label' title={t('组内先后：按住左边的把手上下拖动即可调整；整组的先后拖分组带的把手')}>
-            {t('顺序')}<span className='th-hint'>{t('组内')}</span>
+            {t('顺序')}
           </span>
           {grip}
         </th>
@@ -1473,7 +1473,7 @@ export function TableHead({ namesHidden, allPicked, somePicked, disabled, onTogg
         </th>
         <th className='cell-limits' data-col='limits'>
           <span className='th-label' title={t('该账号当前限流中的模型；点徽章看明细')}>
-            {t('限流')}<span className='th-hint'>{t('按模型')}</span>
+            {t('限流')}
           </span>
           {grip}
         </th>

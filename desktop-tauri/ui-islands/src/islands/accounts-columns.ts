@@ -23,8 +23,6 @@ import type { Align } from './accounts-shared'
 export type AccountColumn = {
   key: string
   label: string
-  /** 表头里的小字副标题（如「全局队列」「按模型」） */
-  hint?: string
   /** 表头的悬停说明 */
   title?: string
   align: Align
@@ -56,7 +54,7 @@ export type AccountColumn = {
 export const ACCOUNT_COLUMNS: AccountColumn[] = [
   { key: 'pick', label: t('选择'), align: 'center', legacyAlign: 'left' },
   {
-    key: 'order', label: t('顺序'), hint: t('组内'),
+    key: 'order', label: t('顺序'),
     title: t('组内先后：按住左边的把手上下拖动即可调整；整组的先后拖分组带的把手'),
     align: 'center', legacyAlign: 'left',
   },
@@ -73,7 +71,7 @@ export const ACCOUNT_COLUMNS: AccountColumn[] = [
   },
   { key: 'status', label: t('状态'), align: 'center', legacyAlign: 'left' },
   {
-    key: 'limits', label: t('限流'), hint: t('按模型'),
+    key: 'limits', label: t('限流'),
     title: t('该账号当前限流中的模型；点徽章看明细'),
     align: 'center', legacyAlign: 'left',
   },
