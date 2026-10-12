@@ -227,6 +227,8 @@ type ConfirmOptions = {
 export type AccountsBridge = {
   getAccountConnections(): Promise<{ counts?: Record<string, unknown> } | null | undefined>
   updateAccount(id: string, patch: Record<string, unknown>): Promise<{ changes?: string[] } | null | undefined>
+  /** 整队重排（分组模式）：把新队列整条交上去（从队首到队尾的 id 数组） */
+  reorderAccounts(queue: string[]): Promise<unknown>
   moveAccount(id: string, direction: 'up' | 'down'): Promise<unknown>
   clearRateLimits(id: string, model?: string | null): Promise<unknown>
   /**

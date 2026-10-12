@@ -321,6 +321,13 @@ const BRIDGE_JS: &str = r#"
     refreshAccountToken: id => call('POST', '/api/accounts/refresh', id ? { id } : {}),
     removeAccount: id => call('DELETE', '/api/accounts/' + encodeURIComponent(id)),
     updateAccount: (id, patch) => call('PATCH', '/api/accounts/' + encodeURIComponent(id), patch),
+    // 整队重排（账号页分组模式）：账号拖完组 / 拖完行之后，把**新队列整条**交上来
+    // （从队首到队尾的 id 数组）。后端按顺序把全局 priority 编成 0、1、2…，所以
+    // 「组顺位 + 组内顺位」一次落库，不存在逐条 PATCH 的中间态。
+    reorderAccounts: queue =>
+      call('POST', '/api/accounts/reorder', {
+        queue: Array.isArray(queue) ? queue.map(item => String(item)) : [],
+      }),
     moveAccount: (id, direction) =>
       call('POST', '/api/accounts/' + encodeURIComponent(id) + '/move', {
         direction: direction === 'down' ? 'down' : 'up',
