@@ -135,7 +135,7 @@ fn report_startup_failure(app: &tauri::AppHandle, error: &str) {
 
 /// 创建主窗口 —— 启动建一次；轻量模式下窗口被销毁后，托盘按需重建也走这里。
 ///
-/// 建窗参数（标题 / 无装饰自绘标题栏 / 尺寸 / 默认最大化 / 桥注入 /
+/// 建窗参数（标题 / 装饰与标题栏策略 / 尺寸 / 默认最大化 / 桥注入 /
 /// WebView2 后台保活参数）**只在这一处声明**：重建的窗口是用户「重新打开」
 /// 的界面，任何参数漂移都会表现为「托盘叫回来的窗口和原来长得不一样」，
 /// 所以启动与重建必须共用同一份。
@@ -143,20 +143,35 @@ fn report_startup_failure(app: &tauri::AppHandle, error: &str) {
 /// `visible` 由调用方决定：启动时按「是否开机自启」静默（比先显示再隐藏
 /// 更干净，不会在任务栏闪一下），重建时恒为 true。
 fn create_main_window(app: &AppHandle, visible: bool) -> tauri::Result<tauri::WebviewWindow> {
-    // ── decorations(false)：去掉系统标题栏，换界面自绘的标题栏 ──
-    // 参考 OmniProxy 的 TitleBar：32px 高、左标题右三键，与界面
-    // 同一套配色（titlebar.js 动态创建）。无装饰之后三项原生行为
-    // 的恢复方式（Tauri 2 内建，无需额外代码）：
+    // ── 窗口装饰：两个平台各走一条，差别只在这一处 ────────────────
+    // 共同点是**都保留 32px 自绘标题条**（titlebar.js 动态创建，与界面同一套
+    // 配色），平台差异只在「这三键谁来画、标题栏归谁管」：
+    //
+    //   · Windows / Linux —— `decorations(false)` 去掉系统标题栏，三键由界面
+    //     自绘（右上角矩形键，Windows 11 惯例）。
+    //   · macOS —— 保留系统装饰，但标题栏设为透明叠加（`TitleBarStyle: Overlay`
+    //     + `hidden_title`）：红/黄/绿三颗圆点由 AppKit 画在左上角、盖在网页
+    //     内容之上（Overlay 会一并打开 fullSizeContentView），我们那条 32px
+    //     标题条就是它的背景板，界面只让出红绿灯占的那段左内边距
+    //     （见 ui/css/layout.css 的 .titlebar.is-macos）。
+    //
+    // 为什么 macOS 不用 decorations(false) 自己画三键：自绘的圆点只能是**样子**，
+    // 换不来系统那套行为 —— 长按绿灯进分屏、全屏 Space、窗口圆角与投影、
+    // 失焦自动变灰、按住 Option 的绿灯缩放、以及「双击标题栏」跟随系统偏好
+    // （系统偏好里那一项能设成最小化 / 缩放 / 什么都不做，自绘接不住）。
+    // 代价是 macOS 的建窗参数与 Windows 不再逐字相同（这一处分支的由来）。
+    //
+    // 两个平台共同的脚本侧依赖：
     //   · 拖动 / 双击最大化：前端给标题栏元素声明 `data-tauri-drag-region`
     //     属性 —— Tauri 的 core 脚本监听 mousedown，目标元素带该属性
-    //     才拖动（子元素不带不拖），双击（连击）切最大化；
-    //   · 边缘拖拽缩放：`resizable(true)`（默认即开）下，Windows 端
-    //     的 tao 对无装饰窗口做命中测试，边缘仍可拖拽缩放；
-    //   · 关闭：界面的 ✕ 走 window_close 命令 → CloseRequested，
-    //     与系统关闭按钮同一条事件路径，托盘拦截逻辑不变。
-    // 注：macOS 上这会一并去掉「红绿灯」，本项目面向 Windows
-    // （NSIS 安装包），macOS 如需保留要用 titleBarStyle: Overlay
-    // 另行适配，此处不做特殊处理。
+    //     才拖动（子元素不带不拖），双击（连击）切最大化。Overlay 下这条
+    //     是**必须**的：系统标题栏在透明叠加态不接管拖动。
+    //     已知限制：Overlay 下窗口未聚焦时拖不动标题栏（tauri#4316）——
+    //     第一次按下只把窗口激活，要再拖一次。Tauri 侧的行为，绕不开。
+    //   · 边缘拖拽缩放：`resizable(true)`（默认即开）。
+    //   · 关闭：Windows 侧界面的 ✕ 走 window_close 命令 → CloseRequested，
+    //     与系统关闭按钮同一条事件路径，托盘拦截逻辑不变；macOS 用系统红点，
+    //     走的就是系统那条路（同样是 CloseRequested）。
     // ── WebView2 后台保活参数（Windows 专属）──────────────────────
     // 窗口隐藏或最小化时，Chromium 默认会对后台窗口启用定时器节流
     // （Timer Throttling）与挂起，导致后台验证码铸造循环（ui/zcode-captcha-pool.js）
@@ -170,18 +185,40 @@ fn create_main_window(app: &AppHandle, visible: bool) -> tauri::Result<tauri::We
     // 后面三项才是本 PR 新增的保活开关，与前缀互不冲突，可以并在一串里。
     #[cfg(target_os = "windows")]
     let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+        .decorations(false)
         .additional_browser_args(
             "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
              --disable-background-timer-throttling \
              --disable-backgrounding-occluded-windows \
              --disable-renderer-backgrounding",
         );
-    #[cfg(not(target_os = "windows"))]
-    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()));
+
+    // macOS：`decorations(true)` 不能省 —— tao 建窗时若 decorations 为 false
+    // 会直接走 Borderless 分支并**忽略** title_bar_style（见 tao 的
+    // platform_impl/macos/window.rs），Overlay 就白设了，红绿灯也不会出现。
+    // `hidden_title` 只隐藏系统画的标题文字（不影响窗口标题本身，它仍供系统
+    // 的窗口菜单 / 任务切换使用），不隐藏三键。
+    #[cfg(target_os = "macos")]
+    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        // 圆点位置：x 是首颗圆点到窗口左边缘的距离（系统标准就是 20），
+        // y 是 wry 的 inset 语义 —— 它按 `圆点高 + y` 收窄标题栏容器、让三颗
+        // 圆点在其中垂直居中，所以 20 落在我们那条 32px 标题条里正好上下各
+        // 留 10px。不给这个值就走系统默认（按系统标题栏高度摆，Big Sur+ 是
+        // 28pt），在 32px 的条里会偏高约 2px。
+        // 注意这里定的是**逻辑点**，不随界面缩放（设置里的 80%–130%）变化 ——
+        // 缩放会改变那条 32px 标题条的逻辑高度，此时圆点不再严格居中（最多
+        // 偏 5pt 上下），可接受；系统没给运行时改这个位置的接口。
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 20.0));
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+        .decorations(false);
 
     builder
         .title(app_title())
-        .decorations(false)
         .inner_size(WIN_WIDTH, WIN_HEIGHT)
         .min_inner_size(WIN_MIN_WIDTH, WIN_MIN_HEIGHT)
         .center()
