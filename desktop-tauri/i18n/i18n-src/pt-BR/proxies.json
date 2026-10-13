@@ -66,6 +66,7 @@
   "能否连上上游": "se é possível conectar ao upstream",
   "订阅": "",
   "订阅与 Clash 的出口自动镜像进来": "",
+  "该节点所属订阅已删除，不会再被同步更新，可手动删除清理": "",
   "该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅」区块修改": "",
   "请填写代理名称": "Informe o nome do proxy",
   "读取失败：{reason}": "Falha ao ler: {reason}",

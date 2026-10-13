@@ -908,15 +908,12 @@ function requestCell(entry: RequestEntry, column: VisibleColumn): React.ReactNod
           </span>
         )
       }
-      const speed = tokensPerSecond(entry)
       return (
         <span key={key} className={className}>
           <span className='req-dur-line'>{formatDuration(entry.durationMs)}</span>
           <span className='req-dur-line sub' title={t('首响：上游首帧到达的耗时')}>
             {t('首响 {time}', { time: formatFirstResponse(entry.firstResponseMs) })}
           </span>
-          {/* 生成速度是第二个次读数：只有成功行有 token（失败行清零），拿不到就整行省掉 */}
-          {speed ? <span className='req-dur-line sub' title={SPEED_TIP}>{speed}</span> : null}
         </span>
       )
     }
@@ -937,10 +934,18 @@ function requestCell(entry: RequestEntry, column: VisibleColumn): React.ReactNod
       const line2 = t('缓存读取: {cache} / 命中率: {rate}', {
         cache: formatTokens(entry.cacheReadTokens), rate: cacheRate(entry),
       })
+      // 生成速度跟在命中率后面（**同一行**，不另起一行）：速度是「token ÷ 时间」的
+      // 导出量，归在用量读数一族；只有成功行有 token（失败行清零），拿不到就不加。
+      // 整行 nowrap，超宽省略 —— 完整读数在 title 里（与该列既有手法同一套）
+      const speed = tokensPerSecond(entry)
+      const line2full = speed ? `${line2} · ${speed}` : line2
       return (
-        <span key={key} className={className} title={`${line1}\n${line2}`}>
+        <span key={key} className={className} title={[line1, line2full].filter(Boolean).join('\n')}>
           <span className='req-usage-line'>{line1}</span>
-          <span className='req-usage-line sub'>{line2}</span>
+          <span className='req-usage-line sub'>
+            {line2}
+            {speed ? <span title={SPEED_TIP}> · {speed}</span> : null}
+          </span>
         </span>
       )
     }

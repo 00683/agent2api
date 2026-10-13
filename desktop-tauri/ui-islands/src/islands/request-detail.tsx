@@ -570,13 +570,9 @@ function DetailPane({ row }: { row: RequestRow | null }) {
               <span className='text-[11.5px] text-muted-foreground'>{t('（请求仍在转发中）')}</span>
             </>
           ) : (
-            <>
-              {t('{duration} / 首帧 {first}', {
-                duration: fmtDuration(row.durationMs), first: fmtFirstResponse(row.firstResponseMs),
-              })}
-              {/* 生成速度：失败行 token 清零，fmtTokensPerSecond 给空串，自动省掉 */}
-              {speed ? <span title={SPEED_TIP}> · {speed}</span> : null}
-            </>
+            t('{duration} / 首帧 {first}', {
+              duration: fmtDuration(row.durationMs), first: fmtFirstResponse(row.firstResponseMs),
+            })
           )}
         </Field>
         <Field label={t('重试次数')}>{String(Number(row.attempts) || 1)}</Field>
@@ -592,6 +588,9 @@ function DetailPane({ row }: { row: RequestRow | null }) {
             total: fmtTokens(row.totalTokens),
             cache: fmtTokens(row.cacheReadTokens),
           })}
+          {/* 生成速度跟在缓存读后面（与列表用量列的落点同一语义）；失败行 token
+              清零，fmtTokensPerSecond 给空串，自动省掉 */}
+          {speed ? <span title={SPEED_TIP}> · {speed}</span> : null}
         </Field>
         {/* 测试发起的请求**按需多一行**：它是这一条明细的性质（走的是真实转发链路、但不进报表），
             正常转发的行不必为此多读一行「正常转发」 —— 那种字段每个租户都有时等于没有 */}

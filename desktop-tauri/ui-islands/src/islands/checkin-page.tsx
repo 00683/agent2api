@@ -332,13 +332,18 @@ function OnboardingRow({ row }: { row: { id: string; name: string; provider?: st
           >
             {cache?.status === 'loading' ? t('查询中…') : t('查询任务')}
           </Button>
+          {/* OfficeAce 的「一键领取」是**触发今天的结算**：它的奖励由上游按天
+              自动发放、账本条目一律已到账（待领数恒 0，见后端 onboarding 的
+              build_tasks）—— 可点性因此不看「有几项待领」；别家仍是「有待领才可点」 */}
           <Button
             size='sm'
             variant='outline'
-            disabled={cache?.status !== 'loaded' || unclaimed === 0 || cache?.claiming === true}
+            disabled={cache?.status !== 'loaded' || (provider !== 'officeace' && unclaimed === 0) || cache?.claiming === true}
             onClick={() => void claimOnboarding(row.id)}
           >
-            {cache?.claiming ? t('领取中…') : t('一键领取（{n}）', { n: unclaimed })}
+            {cache?.claiming
+              ? t('领取中…')
+              : unclaimed > 0 ? t('一键领取（{n}）', { n: unclaimed }) : t('领取')}
           </Button>
           {hasDetail ? <span className='ck-chev' aria-hidden>›</span> : null}
         </div>

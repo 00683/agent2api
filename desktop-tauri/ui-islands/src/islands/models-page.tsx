@@ -109,7 +109,7 @@ import {
 } from '@ui'
 import { TableFooter, useClientPaging } from './table-shell'
 import {
-  BOOLEAN_KEYS, capabilitiesOf, capabilityState, capabilityTip, capSourceOf,
+  BOOLEAN_KEYS, CAPABILITY_LABELS, capabilitiesOf, capabilityState, capabilityTip, capSourceOf,
   exactTokens, formatTokens, normalizeOverrides,
   type CapabilityKey,
 } from './model-capability'
@@ -595,6 +595,12 @@ function ModelsPage() {
    * 展示的是**生效值**（清单原值 + 覆盖，归一后读）；被覆盖过的那一项挂一枚
    * 小点（`.cap-mark`，title 说明），未声明的显示 `—`。整格是一个按钮：
    * 点它打开能力弹窗（两列入口同一个 —— 能力是一个整体，没必要各开一个）。
+   *
+   * **来源也标出来**：这两个数正是 models.dev 补得最多的地方（上游普遍不给），
+   * 所以它补的那些值带一条虚线底边（`.filled`）—— 文字上加不了圆点那样的环，
+   * 虚线底边是同一套语义里唯一贴得上去的写法；悬停提示里还会逐项写明
+   * 「；其中 最大输出 Token 由 models.dev 补齐」。不标的话，用户没法知道这个数
+   * 是上游说的还是社区库说的 —— 两者的可信度不一样。
    */
   function budgetCell(model: ManageModel) {
     const caps = capabilitiesOf(model)
@@ -602,20 +608,33 @@ function ModelsPage() {
     const input = typeof caps.maxInputTokens === 'number' ? caps.maxInputTokens : null
     const output = typeof caps.maxOutputTokens === 'number' ? caps.maxOutputTokens : null
     const hint = t('上下文窗口 {input} / 最大输出 Token {output} —— 点击修改模型能力', { input: exactTokens(input), output: exactTokens(output) })
+      + tokenOriginSuffix(model)
     return (
       <button type='button' className='caps-open' title={hint}
         onClick={() => openCapability(model.provider || '', model.id)}>
-        <span className={cn('cap-num', input === null && 'unset')}>
+        <span className={cn('cap-num', input === null && 'unset', capSourceOf(model, 'maxInputTokens') === 'modelsdev' && 'filled')}>
           {formatTokens(input)}
           {overrides.includes('maxInputTokens') ? <i className='cap-mark' title={t('已覆盖上游值')} /> : null}
         </span>
         <span className='cap-sep'>/</span>
-        <span className={cn('cap-num', output === null && 'unset')}>
+        <span className={cn('cap-num', output === null && 'unset', capSourceOf(model, 'maxOutputTokens') === 'modelsdev' && 'filled')}>
           {formatTokens(output)}
           {overrides.includes('maxOutputTokens') ? <i className='cap-mark' title={t('已覆盖上游值')} /> : null}
         </span>
       </button>
     )
+  }
+
+  /**
+   * 悬停提示的**来源尾巴**（只写「不是上游给的」那两档；上游声明/未声明不必写）：
+   * 一格里两个数可能来自不同地方，所以逐项指名，而不是一句笼统的「部分来自
+   * models.dev」。
+   */
+  function tokenOriginSuffix(model: ManageModel): string {
+    const filled = (['maxInputTokens', 'maxOutputTokens'] as const)
+      .filter(key => capSourceOf(model, key) === 'modelsdev')
+      .map(key => CAPABILITY_LABELS[key])
+    return filled.length ? t('；其中 {keys} 由 models.dev 补齐', { keys: filled.join(t('、')) }) : ''
   }
 
   /**
@@ -934,8 +953,32 @@ function ModelsPage() {
                   <th data-col='model'>{t('上游模型')}</th>
                   <th data-col='rate'>{t('倍率')}</th>
                   <th data-col='source'>{t('来源')}</th>
-                  <th data-col='budget'>{t('上下文 / 输出')}</th>
-                  <th data-col='caps'>{t('能力')}</th>
+                  {/* 表头只留短标题，完整口径进问号提示（原括号长标题让表头喧宾夺主）。
+                      这是静态内容：重渲染时逐字不变，不会破坏「静态表头」的约定。
+                      这两枚问号讲的是**同一套视觉语言**（这个值到底是不是上游说的）：
+                      内侧描边 / 虚线底 = models.dev 补的，右上角小点 = 你改过 */}
+                  <th data-col='budget'>
+                    {t('上下文 / 输出')}
+                    <span className='th-help' aria-hidden='true'
+                      title={t('数字带虚线底 = 由 models.dev 补齐；右上角小点 = 你手动覆盖过；— = 未声明。点任意一格可改。')}>
+                      <svg viewBox='0 0 24 24'>
+                        <g fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round'>
+                          <circle cx='12' cy='12' r='9' /><path d='M12 16v-4' /><path d='M12 8h.01' />
+                        </g>
+                      </svg>
+                    </span>
+                  </th>
+                  <th data-col='caps'>
+                    {t('能力')}
+                    <span className='th-help' aria-hidden='true'
+                      title={t('圆点带内侧描边 = 由 models.dev 补齐；右上角小点 = 你手动覆盖过；虚线圈 = 未声明。悬停某一枚可看逐项出处。')}>
+                      <svg viewBox='0 0 24 24'>
+                        <g fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round'>
+                          <circle cx='12' cy='12' r='9' /><path d='M12 16v-4' /><path d='M12 8h.01' />
+                        </g>
+                      </svg>
+                    </span>
+                  </th>
                   {/* 表头只留短标题，完整口径进问号提示（原括号长标题让表头喧宾夺主）。
                       这是静态内容：重渲染时逐字不变，不会破坏「静态表头」的约定 */}
                   <th data-col='alias'>
@@ -955,7 +998,7 @@ function ModelsPage() {
               </table>
             </div>
             {/* 表尾：读数 / 每页条数 / 跳页 / 翻页器由通用表格外壳（table-shell.tsx）统一渲染。
-                左侧说明只剩「自定义家」那一条（内置家原先那句按用户要求移除）；其余四张表
+                左侧说明只剩「自定义家」那一条（内置家原先那句按用户要求移除）；其余几张表
                 的页脚说明也都去掉了，页脚现在是清一色的控制条 */}
             <TableFooter
               className='models-panel-foot'

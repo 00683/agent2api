@@ -285,6 +285,8 @@ type CheckinBridge = {
     unclaimed?: unknown
     settled?: unknown
     settledAt?: unknown
+    /** 后端对本次领取结果的一句话交代（OfficeAce 会回，见 checkin-state 的 claimOnboarding） */
+    message?: unknown
   } | null | undefined>
   /** 成长任务盘点（只读；与 bridge.rs、web_shim.rs 三处成对） */
   getGrowthStatus?(id: string): Promise<{
@@ -772,7 +774,7 @@ export async function submitKeepaliveModels(models: string[]): Promise<void> {
  * 实查发现（`refresh`），后端届时也会清掉记忆。
  */
 async function autoProcessOnboarding(
-  rows: Array<{ id: string; settled?: OnboardingSettledRaw }>,
+  rows: Array<{ id: string; provider?: string; settled?: OnboardingSettledRaw }>,
 ): Promise<void> {
   for (const row of rows) {
     if (settledOf(row.id)) continue
@@ -780,7 +782,11 @@ async function autoProcessOnboarding(
   }
   for (const row of rows) {
     const cache = getCheckinStore().onboarding.get(row.id)
-    if (cache?.status === 'loaded' && cache.unclaimed > 0 && !cache.claiming && !cache.settled) {
+    if (cache?.status !== 'loaded' || cache.claiming || cache.settled) continue
+    // OfficeAce：奖励由上游按天自动发放、账本条目一律已到账（待领数恒 0），
+    // 「有没有待领」判不出「今天结算过没」—— 与官方客户端每小时自动 claim 同一
+    // 动作，这里进来就触发一次（幂等；结算后 settled 置位，当天不再重打）
+    if (row.provider === 'officeace' || cache.unclaimed > 0) {
       await claimOnboarding(row.id)
     }
   }
@@ -889,8 +895,13 @@ export async function claimOnboarding(id: string): Promise<void> {
       settledAt: settled ? numberOf(data?.settledAt) || undefined : undefined,
     })
     const failed = merged.filter(task => task.error && !task.done).length
+    // 后端交代本次结果时以它为准（OfficeAce 会回「本次到账 N 积分」/「今天的
+    // 奖励已发放」——那种上游的账本条目一律已到账，"有几项 done" 的口径不成立）
+    const message = typeof data?.message === 'string' ? data.message.trim() : ''
     if (failed) {
       toast(t('新手福利有 {n} 项领取失败，可重试', { n: failed }), 'err')
+    } else if (message) {
+      toast(message, 'ok')
     } else if (claimedCount) {
       toast(t('✅ 新手福利领取完成，累计 {n} 积分', { n: numberOf(data?.earned) }))
     }
