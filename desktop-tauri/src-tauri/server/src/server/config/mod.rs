@@ -166,6 +166,12 @@ pub struct RuntimeConfig {
     /// 请求就生效），解析一次存下来最省事。默认 `true`，见 `KEY_CAPTCHA_ENABLED`；
     /// 配置项缺失时可由环境变量 `AGENT2API_CAPTCHA_ENABLED` 兜底（默认 1 开、0 关）。
     captcha_enabled: bool,
+    /// models.dev 模型元数据开关（设置页「通用 → models.dev 模型元数据」）。
+    ///
+    /// 它是「这个模型的能力/档位能不能由社区库补」的**联网**总闸，默认 `true`
+    /// （见 `KEY_MODELS_DEV_ENABLED`）。低频读取（只在模型元数据刷新发起时问
+    /// 一次），与 `captcha_enabled` 同一模式解析一次存下来。
+    models_dev_enabled: bool,
     /// 系统提示词设置（设置页「通用 → 系统提示词」）。
     ///
     /// 与 `sanitize_fingerprints` 同一理由（转发层逐请求取一次，改完下一个请求
@@ -239,6 +245,11 @@ impl RuntimeConfig {
     /// 面板机器人校验开关（登录 / 注册端点逐请求判一次）。
     pub fn captcha_enabled(&self) -> bool {
         self.captcha_enabled
+    }
+
+    /// models.dev 模型元数据的**联网刷新**开关（`core::model_meta::refresh` 读）。
+    pub fn models_dev_enabled(&self) -> bool {
+        self.models_dev_enabled
     }
 
     /// 系统提示词设置（界面 / 日志用；转发层要的是下面的借用视图）
@@ -480,6 +491,13 @@ fn build(raw: Map<String, Value>) -> RuntimeConfig {
             .get(KEY_CAPTCHA_ENABLED)
             .and_then(Value::as_bool)
             .unwrap_or_else(env_captcha_enabled),
+        // 只有字面 `false` 算关闭：**默认开**（理由见 KEY_MODELS_DEV_ENABLED）。
+        // 没有环境变量兜底：它不是「部署时才知道要不要开」的东西（Docker 与
+        // 桌面端都一样，内嵌快照保证功能在离线时也有内容）。
+        models_dev_enabled: raw
+            .get(KEY_MODELS_DEV_ENABLED)
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         // 系统提示词：模式非法/缺失 → passthrough（默认），文件读不到 → 内置默认
         // + 一条原因（见 `prompt_from`）
         prompt: prompt_from(&raw),
@@ -910,6 +928,20 @@ pub fn strip_newline_keepalive() -> bool {
         }
     }
     env_strip_newline_keepalive()
+}
+
+/// 只取 models.dev 元数据开关的轻量读取（**不克隆整份 raw**）。
+///
+/// 与 `strip_newline_keepalive` 同一取舍：`core::model_meta::refresh` 每轮问一次，
+/// 而 `current()` 每调一次就克隆整个 `raw` Map。未初始化时给 `true` —— 与
+/// `build(空)` 的口径一致（这个开关**默认开**，见 `KEY_MODELS_DEV_ENABLED`）。
+pub fn models_dev_enabled() -> bool {
+    if let Ok(guard) = CONFIG.read() {
+        if let Some(config) = guard.as_ref() {
+            return config.models_dev_enabled;
+        }
+    }
+    true
 }
 
 /// 只取定时任务设置的轻量读取（**不克隆整份 raw**）。
@@ -1521,6 +1553,20 @@ pub fn set_captcha_enabled(enabled: bool) -> bool {
             .raw
             .insert(KEY_CAPTCHA_ENABLED.to_string(), Value::Bool(enabled));
         config.captcha_enabled = enabled;
+    })
+}
+
+/// 写入 models.dev 模型元数据开关（设置页「通用 → models.dev 模型元数据」）。
+///
+/// 与 `set_captcha_enabled` 同一模式：内存立即生效（下次刷新发起时读它），
+/// 写盘时不吃掉 config.json 里的其它字段。**不清理已装载的索引**：关闭的含义是
+/// 「别再联网拉了」，不是「把已经拿到的元数据扔掉」（见 `KEY_MODELS_DEV_ENABLED`）。
+pub fn set_models_dev_enabled(enabled: bool) -> bool {
+    update(|config| {
+        config
+            .raw
+            .insert(KEY_MODELS_DEV_ENABLED.to_string(), Value::Bool(enabled));
+        config.models_dev_enabled = enabled;
     })
 }
 

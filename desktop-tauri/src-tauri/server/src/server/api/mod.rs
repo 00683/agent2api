@@ -78,6 +78,9 @@ pub mod keys_api;
 pub mod keepalive;
 pub mod logs_api;
 pub mod model_manage;
+// models.dev 模型元数据（开关 / 状态 / 立即刷新）：与「逐家上游目录」的
+// /api/models/refresh 分开，理由见该文件模块头
+pub mod model_meta;
 // 模型测试（模型管理页操作列的「测试」）：挂管理面、走真实转发链路，
 // 只把候选收窄到「这一家 × 这一个账号」并把流量标成测试，见该文件模块头
 pub mod model_test;
@@ -98,6 +101,7 @@ pub mod scheduled_tasks;
 pub mod session;
 pub mod stats_api;
 pub mod storage_api;
+pub mod subscriptions;
 pub mod timeouts_api;
 pub mod update;
 pub mod upgrade_api;

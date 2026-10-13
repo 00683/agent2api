@@ -165,10 +165,32 @@ export function isClashItem(item: ProxyPoolItem): boolean {
   return item.source === 'clash'
 }
 
-/** 只读条目的统一说明（与后端 `CLASH_READONLY_HINT` 同一口径；岛在词典注入之后才求值） */
+/**
+ * 是否订阅节点镜像（内核同步进来的只读条目，见 `core::proxy_pool`）。
+ * 与 Clash 条目同一只读语义：禁用编辑 / 删除 / 启停，测试照常。
+ */
+export function isSubscriptionItem(item: ProxyPoolItem): boolean {
+  return item.source === 'subscription'
+}
+
+/** 只读条目的统一判定（Clash 同步 / 订阅镜像都不给写入口） */
+export function isReadonlyPoolItem(item: ProxyPoolItem): boolean {
+  return isClashItem(item) || isSubscriptionItem(item)
+}
+
+/** 只读条目的统一说明（与后端同口径；岛在词典注入之后才求值） */
 export const CLASH_READONLY_HINT = t(
   '来自 Clash Verge 同步（名称 / 端口 / 启用都跟随 Clash），请到 Clash Verge 中修改',
 )
+
+/** 订阅节点的只读说明（与后端 SUBSCRIPTION_READONLY_HINT 同口径） */
+export const SUBSCRIPTION_READONLY_HINT = t(
+  '该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅」区块修改',
+)
+
+export function readonlyHint(item: ProxyPoolItem): string {
+  return isSubscriptionItem(item) ? SUBSCRIPTION_READONLY_HINT : CLASH_READONLY_HINT
+}
 
 /* ─── store ─────────────────────────────────── */
 
@@ -350,8 +372,8 @@ export async function testItem(item: ProxyPoolItem): Promise<void> {
 export async function toggleItem(item: ProxyPoolItem, enabled: boolean): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.updateProxyPoolItem !== 'function') return
-  if (isClashItem(item)) {
-    toast(CLASH_READONLY_HINT, 'err')
+  if (isReadonlyPoolItem(item)) {
+    toast(readonlyHint(item), 'err')
     return
   }
   const pending = new Set(state.pending)
@@ -373,8 +395,8 @@ export async function toggleItem(item: ProxyPoolItem, enabled: boolean): Promise
 export async function removeItem(item: ProxyPoolItem): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.removeProxyPoolItem !== 'function') return
-  if (isClashItem(item)) {
-    toast(CLASH_READONLY_HINT, 'err')
+  if (isReadonlyPoolItem(item)) {
+    toast(readonlyHint(item), 'err')
     return
   }
   const used = item.usedBy || []
@@ -470,11 +492,13 @@ export async function batchRemove(): Promise<void> {
   // 行内启停 / 单条测试同理 —— 视图侧按钮也按同一组条件禁用
   if (state.batchBusy || state.testing) return
   const picked = items().filter(item => state.selected.has(item.id))
-  const deletable = picked.filter(item => !isClashItem(item))
+  // 只读镜像（Clash 同步 / 订阅节点）跳过 —— 后端同样会拒绝，这里先挡掉
+  // 让提示聚合在一处而不是逐条 400
+  const deletable = picked.filter(item => !isReadonlyPoolItem(item))
   const skipped = picked.length - deletable.length
   if (!deletable.length) {
     toast(skipped
-      ? t('选中的 {n} 条都来自 Clash Verge 同步，不能删除（请到 Clash Verge 里删）', { n: skipped })
+      ? t('选中的 {n} 条都是同步来的只读条目（Clash / 订阅），不能删除', { n: skipped })
       : t('没有可删除的条目'), 'err')
     return
   }
@@ -487,7 +511,7 @@ export async function batchRemove(): Promise<void> {
     ? `<p style="margin-top:6px">${t('其中 <strong>{n}</strong> 条正被账号使用 —— 删除后那些账号会回退直连。', { n: usedCount })}</p>`
     : ''
   const skipHtml = skipped
-    ? `<p style="margin-top:6px">${t('另有 {n} 条来自 Clash Verge 同步，将跳过（请到 Clash Verge 里删）。', { n: skipped })}</p>`
+    ? `<p style="margin-top:6px">${t('另有 {n} 条是同步来的只读条目（Clash / 订阅），将跳过。', { n: skipped })}</p>`
     : ''
   const ok = await wb().wbConfirm?.ask?.({
     title: t('批量删除代理'),
@@ -513,7 +537,7 @@ export async function batchRemove(): Promise<void> {
   }
   patch({ batchBusy: false, batchProgress: null })
   const parts = [t('已删除 {n} 个代理', { n: done })]
-  if (skipped) parts.push(t('跳过 {n} 个（Clash 同步）', { n: skipped }))
+  if (skipped) parts.push(t('跳过 {n} 个（同步只读条目）', { n: skipped }))
   if (failed) parts.push(t('失败 {n} 个（{reason}）', { n: failed, reason: firstError }))
   toast(failed ? parts.join(t('，')) : `✅ ${parts.join(t('，'))}`, failed ? 'err' : 'ok')
 }

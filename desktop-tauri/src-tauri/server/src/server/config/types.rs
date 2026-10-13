@@ -153,6 +153,18 @@ pub const KEY_STRIP_NEWLINE_KEEPALIVE: &str = "stripNewlineKeepalive";
 /// （优先级「配置里的值 > 环境变量」）。
 pub const KEY_CAPTCHA_ENABLED: &str = "captchaEnabled";
 
+/// models.dev 模型元数据开关的键（config.json 键，见 `core::model_meta`）。
+///
+/// **默认开启**：它是「上游没声明的那几个能力键由社区库补上」这条链路的总闸
+/// ——关掉只影响**联网刷新**（内嵌快照仍生效，模型清单照常工作），所以默认开
+/// 的代价只是定时任务里多一次几 MB 的公网请求；而默认关的代价是「这个功能对
+/// 绝大多数用户等于不存在」（没人会去设置里找一个不知道自己需要的开关）。
+///
+/// 关闭后：`core::model_meta::refresh` 直接返回 skipped（不打网络），已经装载
+/// 的索引继续用（内存里的那份 + 库里的那份都不会被清掉）——「关掉」的语义是
+/// 「别再联网拉了」，不是「把已有数据扔掉」。
+pub const KEY_MODELS_DEV_ENABLED: &str = "modelsDevEnabled";
+
 /// 系统提示词模式的键（config.json 键，对应 workbuddy2api 的 `prompt.mode`）。
 ///
 /// 取值 `passthrough` / `custom` / `append`（见 `core::prompt::PromptMode`）；

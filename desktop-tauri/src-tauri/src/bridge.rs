@@ -385,6 +385,31 @@ const BRIDGE_JS: &str = r#"
     testProxyPoolItem: id => call('POST', '/api/proxies/pool/test', { id: String(id || '') }),
     syncClashToProxyPool: () => call('POST', '/api/proxies/pool/sync-clash', {}),
 
+    // ── 订阅（「网络代理」页的订阅区块）──
+    // 与 web_shim.rs 的同名方法成对存在（教训同上）。契约（详见
+    // `api::subscriptions` 的模块头）：
+    //   · getSubscriptions        列表 `{items, kernel}`；item 带 nodeCount，
+    //                             kernel 是内核状态（下载进度 / 运行状态）
+    //   · add/save/remove         写操作都返回同一份列表 + kernel（就地替换）；
+    //                             后端投一条内核命令（异步），节点数与运行状态
+    //                             由轮询 kernel 看结果
+    //   · refreshSubscription     强制拉取一条订阅的内容（节点变了后端自动
+    //                             重启内核）
+    //   · getKernelStatus         单独读内核状态（下载进度的轮询走它）
+    //   · downloadKernel          开始下载内核（后台任务，state=downloading →
+    //                             done/error）；下载完有启用的订阅会自动拉起
+    //   · restartKernel           手动启动 / 重启内核（重建配置）
+    //   · decodeQrImage           从图片解二维码 `{imageBase64}` → `{url}`
+    getSubscriptions: () => call('GET', '/api/subscriptions'),
+    addSubscription: payload => call('POST', '/api/subscriptions/add', payload || {}),
+    saveSubscription: payload => call('POST', '/api/subscriptions/save', payload || {}),
+    refreshSubscription: id => call('POST', '/api/subscriptions/refresh', { id: String(id || '') }),
+    removeSubscription: id => call('POST', '/api/subscriptions/remove', { id: String(id || '') }),
+    decodeQrImage: payload => call('POST', '/api/subscriptions/decode-qr', payload || {}),
+    getKernelStatus: () => call('GET', '/api/subscriptions/kernel'),
+    downloadKernel: () => call('POST', '/api/subscriptions/kernel/download', {}),
+    restartKernel: () => call('POST', '/api/subscriptions/kernel/restart', {}),
+
     // ── 积分 / 签到 ──
     getUsage: () => call('GET', '/api/usage'),
     getCheckinStatus: () => call('GET', '/api/checkin/status'),
@@ -574,6 +599,15 @@ const BRIDGE_JS: &str = r#"
     // 于是设置页读不到值，卡在「未能读取网关跨域访问设置」。
     getCors: () => call('GET', '/api/cors'),
     saveCors: enabled => call('PUT', '/api/cors', { corsEnabled: enabled === true }),
+
+    // ── models.dev 模型元数据（能力位与逐模型思考档位）──
+    // 与 web_shim.rs 的同名方法逐字同形（桌面壳走 Tauri IPC，网页端走同源
+    // fetch，两边接口名与签名必须一致 —— 漏一侧的症状见上面 getCors 那段）。
+    // GET 读开关 + 索引状态；refresh 真打公网，返回结果行与刷新后的状态。
+    getModelsDev: () => call('GET', '/api/models/metadata'),
+    saveModelsDev: enabled =>
+      call('PUT', '/api/models/metadata', { modelsDevEnabled: enabled === true }),
+    refreshModelsDev: () => call('POST', '/api/models/metadata/refresh'),
 
     // ── 系统提示词与内容拦截降级 ──
     // 与 getRetry / saveRetry 同形：GET 读、PUT 写（允许部分字段），响应体是

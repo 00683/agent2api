@@ -109,7 +109,7 @@ import {
 } from '@ui'
 import { TableFooter, useClientPaging } from './table-shell'
 import {
-  BOOLEAN_KEYS, capabilitiesOf, capabilityState, capabilityTip,
+  BOOLEAN_KEYS, capabilitiesOf, capabilityState, capabilityTip, capSourceOf,
   exactTokens, formatTokens, normalizeOverrides,
   type CapabilityKey,
 } from './model-capability'
@@ -141,6 +141,19 @@ import { t } from '../i18n'
 
 /** 单元格的外壳类名（对齐由列设置给，三档互斥，与 table-col-settings 的 applyAlign 同一套） */
 const cellClass = (base: string, align?: Align): string => (align ? `${base} ta-${align}` : base)
+
+/**
+ * 按 `(提供商, 上游 id)` 找表格里那一行。
+ *
+ * 用途只有一个：思考等级下拉要读**这个目标模型自己认识哪些档位**（见
+ * `models-reasoning.levels` 的三级回落）。找不到（孤儿映射指向的模型不在当前
+ * 表格里、或 provider 为空表示「全局」）就返回 undefined，调用方回落通用候选表。
+ */
+function modelRow(provider: string, id: string): ManageModel | undefined {
+  const wanted = (id || '').trim()
+  if (!wanted) return undefined
+  return models().find(model => same(model.provider, provider) && same(model.id, wanted))
+}
 
 /**
  * 自定义家条目悬浮时把右侧计数让给删除 ×（两者占同一块位置，不藏就会叠字）。
@@ -622,9 +635,10 @@ function ModelsPage() {
           const value = caps[key] ?? null
           const state = capabilityState(value)
           const overridden = overrides.includes(key)
+          const source = capSourceOf(model, key)
           return (
-            <span key={key} className={cn('cap-dot', state, overridden && 'marked')}
-              title={capabilityTip(key, value, overridden)}>
+            <span key={key} className={cn('cap-dot', state, source === 'modelsdev' && 'filled', overridden && 'marked')}
+              title={capabilityTip(key, value, overridden, source)}>
               {CAP_ICON[key]}
               {overridden ? <i className='cap-mark' /> : null}
             </span>
@@ -1017,15 +1031,18 @@ function MappingDialog({ context, onClose }: { context: MappingContext; onClose:
    * 思考等级：`select` 是下拉的当前值（'' = 不覆盖 / 某个等级 / CUSTOM_LEVEL），`custom` 是
    * 自定义输入框里的字。keep 不在候选里（用户上次填的自定义值、或后端调整过候选表）时落到
    * 「自定义」那一项并把值填进输入框 —— 直接丢掉会让「改别的字段时顺手把等级抹掉」。
+   *
+   * 候选表按**当前选中的目标模型**取（三级回落见 `models-reasoning.levels`）：先把等级绑在
+   * A 模型上、再把上游改成 B，B 不认识这个档位时同样落到「自定义」，不静默改值。
    */
   const [reasoning, setReasoning] = React.useState(() => {
-    const candidates = reasoningLevels(getSnapshot().data)
+    const candidates = reasoningLevels(getSnapshot().data, modelRow(provider, upstream))
     const current = editing ? levelOf(context.alias, context.target, context.provider) : ''
     if (current && candidates.includes(current)) return { select: current, custom: '' }
     return { select: current ? CUSTOM_LEVEL : '', custom: current }
   })
 
-  const candidates = reasoningLevels(getSnapshot().data)
+  const candidates = reasoningLevels(getSnapshot().data, modelRow(provider, upstream))
   /** 提供商候选：表格里出现过的家，再补上上下文那一家（孤儿映射可能属于「整个没进表格」的家） */
   const providerChoices = (() => {
     const options = providerOptions()
@@ -1047,8 +1064,15 @@ function MappingDialog({ context, onClose }: { context: MappingContext; onClose:
   })()
 
   const providerLabel = providerChoices.find(item => item.id === provider)?.label || provider || t('(全局)')
-  const level = reasoning.select === CUSTOM_LEVEL ? reasoning.custom.trim() : reasoning.select
-  const showCustomLevel = reasoning.select === CUSTOM_LEVEL
+  /**
+   * 显示用的等级：已选的档位不在当前候选里（换了上游 / 后端换了候选表）时按「自定义」呈现
+   * —— 与初始化同一条规则，值留在输入框里而不是被静默抹掉（派生态，不改 state）。
+   */
+  const active = reasoning.select && reasoning.select !== CUSTOM_LEVEL && !candidates.includes(reasoning.select)
+    ? { select: CUSTOM_LEVEL, custom: reasoning.custom || reasoning.select }
+    : reasoning
+  const level = active.select === CUSTOM_LEVEL ? active.custom.trim() : active.select
+  const showCustomLevel = active.select === CUSTOM_LEVEL
 
   /** 换了一家，上游候选整体换掉（保留同名项，切回来时不用重选） */
   function changeProvider(next: string): void {
@@ -1161,15 +1185,15 @@ function MappingDialog({ context, onClose }: { context: MappingContext; onClose:
                 <TooltipContent>{REASONING_TIP}</TooltipContent>
               </Tooltip>
             </div>
-            <Select value={reasoning.select} onValueChange={next => {
+            <Select value={active.select} onValueChange={next => {
               const value = String(next)
               setReasoning(prev => ({ ...prev, select: value }))
             }}>
               {/* 改等级形态没别的可填，把焦点直接放在等级下拉上（旧实现是 setTimeout 里 focus） */}
               <SelectTrigger id='mapping-reasoning' className='w-full' autoFocus={editing}>
-                <SelectValue>{reasoning.select === CUSTOM_LEVEL
+                <SelectValue>{active.select === CUSTOM_LEVEL
                   ? t('自定义等级…')
-                  : (reasoning.select || t('不覆盖'))}</SelectValue>
+                  : (active.select || t('不覆盖'))}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value=''>{t('不覆盖')}</SelectItem>
@@ -1184,7 +1208,7 @@ function MappingDialog({ context, onClose }: { context: MappingContext; onClose:
             {showCustomLevel ? (
               <Input id='mapping-reasoning-custom' maxLength={32} autoFocus
                 placeholder={t('自定义等级（例如 custom-high）')} autoComplete='off'
-                disabled={saving} value={reasoning.custom}
+                disabled={saving} value={active.custom}
                 onChange={event => setReasoning(prev => ({ ...prev, custom: event.currentTarget.value }))}
                 onKeyDown={onEnter} />
             ) : null}

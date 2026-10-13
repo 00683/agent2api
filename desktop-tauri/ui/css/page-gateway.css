@@ -357,6 +357,11 @@
 .cap-dot.on { background: var(--primary-soft); color: var(--primary-fg); }
 .cap-dot.off { background: var(--surface-3); color: var(--text-3); }
 .cap-dot.unset { border: 1px dashed var(--border-strong); color: var(--text-3); opacity: .75; }
+/* 来源是 models.dev 的那几项：在原有三态之上补一圈内侧描边（不改底色）。
+   底色表达的是「支持 / 不支持 / 未声明」（值本身），描边表达的是「这个值不是
+   上游说的、是社区库补的」（可信度）—— 两个维度压进一个样式就再也分不出来。
+   逐项的文字说明在悬停提示里（capabilityTip 会写「（由 models.dev 补齐）」）。 */
+.cap-dot.filled { box-shadow: inset 0 0 0 1px var(--border-strong); }
 
 /* 覆盖标记：被用户改过的那一项挂一枚小点（title 说明「已覆盖上游值」）。
    基础 .cap-mark 是行内小点（「上下文 / 输出」格用）；圆点里的那枚绝对定位

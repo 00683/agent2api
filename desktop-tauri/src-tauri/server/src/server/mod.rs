@@ -366,6 +366,22 @@ impl ServerState {
         // 与任务状态同为「kv 固定键 + 整份读写」的形态，把同一个 `Db` 传进去。
         // 它不参与启动预热，位置只要求早于任何一次 `/api/proxies/pool*` 请求。
         core::proxy_pool::install(db.clone());
+        // 订阅存储（「订阅」区块维护的订阅链接）：同一个 `Db`（与 proxyPool
+        // 同一形态）。位置只要求早于任何一次 `/api/subscriptions*` 请求。
+        core::subscriptions::install(db.clone());
+        // 订阅内核（mihomo sidecar）的命令 worker：单条队列串行消费内核操作
+        // （下载 / 重建配置 / 重启 / 停止），见 `core::sub_kernel` 的模块头。
+        core::sub_kernel::spawn_worker();
+        // 内核已安装且有启用的订阅 → 自动拉起（清理上次运行遗留的进程后
+        // 重建配置）。**未安装时不自动下载**：二进制 ~20-40MB，下载必须有
+        // 用户的手势（界面上的「下载内核」按钮），启动时静默拉网不合适。
+        if core::subscriptions::should_autostart() {
+            let providers = core::subscriptions::enabled_provider_inputs();
+            crate::spawn_task(async move {
+                core::sub_kernel::request_restart(providers);
+            });
+            logging::console_line("[Subscription]", "检测到已安装的代理内核与启用的订阅，后台自动拉起");
+        }
         // 模型清单的持久化缓存：把**同一个 `Db`** 传进去（与配置 / 日志库 /
         // 账号库同一形态）。各家的远程清单在进程重启后由它读回，不再回落到
         // 内置清单（见 `core::providers::catalog_cache` 的模块头）。
@@ -377,6 +393,11 @@ impl ServerState {
         // 与 catalog_cache 同一形态（kv 固定键 + 整份读写），位置只需早于
         // 第一次 `advertise_models`（那是纯读，未 install 时给空结论 = 不藏）。
         core::providers::officeace::probe::install(db.clone());
+        // models.dev 模型元数据（能力位 / 思考档位）的刷新结果也落同一个库
+        // （kv 的 `modelsDevCatalog` 键）。与 catalog_cache 同一形态：未 install
+        // 时只读内嵌快照（功能仍在，只是拿不到上次的刷新结果），所以位置不敏感；
+        // 放在这里是为了和另外两个 kv 使用者排在一起，便于核对「谁在用这个库」。
+        core::model_meta::install(db.clone());
         // ── 旧文件一次性迁移：**本切片起不再自动跑** ────────────────
         // 它现在由用户在升级弹窗里点「升级」触发（`POST /api/upgrade/run`）。
         // 为什么改成手动：需求是「弹窗告诉用户换了 SQLite，点升级才开始导」——
