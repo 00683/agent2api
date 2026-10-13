@@ -107,6 +107,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* 允许折行：这一行现在住着状态筛选 + 倍率排序（issue #161）+ 搜索框（240px）
+     + 勾选后的批量条，在最小窗口宽度（820px）下四者同时在场会超出通栏宽度 ——
+     折行比横向溢出好，与 .panel-head 的 flex-wrap 同一取舍（见上面的说明）。 */
+  flex-wrap: wrap;
+  row-gap: 8px;
   width: 100%;
   padding: 6px 16px 12px;
 }

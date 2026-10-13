@@ -656,11 +656,25 @@ impl ServerState {
             // spawn 一次 `refresh_implemented`（对照 Node 的
             // `void refreshModelCatalog()`），那个行为在开关默认开启时保持不变。
         } else {
-            let reason = summary
-                .get("unavailableReason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(core::auth::UNCONFIGURED_REASON);
-            logging::log("[Init]", &format!("⚠️  暂无可用登录态: {reason}"));
+            // 「旧式单账号登录态没配」与「一个账号都没有」是两件事：前者在多账号
+            // （agent2api.db）部署里完全正常 —— 账号都在库里，跟 WorkBuddy 的
+            // auth.json 没关系。照旧无条件打警告，就会与上一行 `[Accounts] 账号列表: …`
+            // 自相矛盾，每次启动都报一条假警告（issue #178）。
+            let available = available_account_count(&state);
+            if available > 0 {
+                logging::log(
+                    "[Init]",
+                    &format!(
+                        "多账号模式：{available} 个账号可用（WorkBuddy 单账号登录态未配置）"
+                    ),
+                );
+            } else {
+                let reason = summary
+                    .get("unavailableReason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(core::auth::UNCONFIGURED_REASON);
+                logging::log("[Init]", &format!("⚠️  暂无可用登录态: {reason}"));
+            }
         }
 
         // 定时签到：开启时起调度，今天还没签且时间点已过则补签一次
@@ -830,6 +844,23 @@ fn env_flag(names: &[&str]) -> bool {
         }
     }
     false
+}
+
+/// 多账号库里**可用**的账号数（`available` = 启用且凭证完整）。
+///
+/// 判据与账号页、选路读的是同一份事实（`account_store::store_view` 的
+/// `public_account` 写这个键），所以这里不自己拼「启用 + 有凭证」两条件 ——
+/// 那是判据的第三份实现，迟早与前端徽章、选路口径分叉。
+///
+/// 用在启动横幅：多账号模式下一个可用账号都没有，与「旧式单账号登录态没配」
+/// 才该报同一条警告（issue #178）。
+fn available_account_count(state: &ServerState) -> usize {
+    core::routing::accounts_of(&state.store.list_accounts())
+        .iter()
+        .filter(|account| {
+            account.get("available").and_then(serde_json::Value::as_bool) == Some(true)
+        })
+        .count()
 }
 
 /// 启动进程内服务器：同步 bind（失败立刻返回可读错误）+ 异步 serve。

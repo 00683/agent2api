@@ -5,6 +5,7 @@
   "{n} 个已限流": "{n} rate-limited",
   "{n} 个请求正在转发中，点开「请求日志」查看": "{n} requests in flight — open \"Request logs\" to view",
   "{n} 个账号 · {usable} 可用": "",
+  "{n} 个账号可用": "{n} accounts available",
   "{n} 个账号启用": "{n} accounts enabled",
   "{n} 条失败请求未读，点开「请求日志」查看": "{n} unread failed requests — open \"Request logs\" to view",
   "{n} 条错误日志未读，点开「日志」查看": "{n} unread error logs — open \"Logs\" to view",

@@ -122,14 +122,14 @@ import type { ManageModel, ManageView } from './models-custom-source'
 // 内置家的图标映射（与添加账号弹窗、签到中心同一份，别处不要照抄这份映射）
 import { PROVIDER_ICONS } from './add-provider-pick'
 import {
-  GROUP_LIMIT, MODEL_STATE_OPTIONS, accept, bindingKeyOf, bindingsOf, builtinRailItems,
+  GROUP_LIMIT, MODEL_SORT_OPTIONS, MODEL_STATE_OPTIONS, accept, bindingKeyOf, bindingsOf, builtinRailItems,
   closeCapability, closeCustomModel, closeMapping, collapseGroup, currentProvider, customProviderOptions,
   directoryReady, esc, errorMessage, expandGroup, formatTime, getSnapshot, levelOf, load, models,
   openAddCustomProvider, openCapability, openCustomModel, openMapping, providerLabelOf, providerOptions,
   refreshAll,
   refreshModels, registerColumnSettings, removeCustomProvider, render, resolveProvider, restoreSavedFilters,
   pruneForeignTableNodes,
-  rowEnabled, rowKeyOf, runRowAction, same, selectProvider, setSearch, setStateFilter, setTableEl,
+  rowEnabled, rowKeyOf, runRowAction, same, selectProvider, setSearch, setSort, setStateFilter, setTableEl,
   shared, subscribe, syncHead, toast, upstreamOptions, viewData, visibleColumns, writeAddModel,
   writeBinding, writeRemoveMapping, writeRemoveModel,
   type Align, type Binding, type ColumnView, type CustomModelContext, type MappingContext,
@@ -154,6 +154,23 @@ const RAIL_HIDE_COUNT_ON_HOVER = '[.pv-row:hover_&_[data-slot=nav-item-count]]:i
 function formatCredits(credits: unknown): string {
   const match = /x\s*([\d.]+)/i.exec(String(credits || ''))
   return match ? `${match[1]}x` : String(credits || '')
+}
+
+/**
+ * 倍率的**数值**（排序用；解析不出返回 null）。
+ *
+ * 与 `formatCredits` 共用同一段正则：倍率是各家上游用同一套文本口径写进来的
+ * （`x0.7 credits`，见各家的 `attach_rates`），所以「取不出数值」与「显示成 —」
+ * 恰好是同一批行 —— 两处不会出现「显示的倍率和排序依据不是一个数」。
+ *
+ * `null` 不按 0 参与排序：0 是合法倍率（免费 / 限免档），而 null 是「上游没给」。
+ * 混在一起会把未知的排到最便宜那一端（排序说明见 models-panel-state 的 MODEL_SORTS）。
+ */
+function rateOf(credits: unknown): number | null {
+  const match = /x\s*([\d.]+)/i.exec(String(credits || ''))
+  if (!match) return null
+  const value = Number(match[1])
+  return Number.isFinite(value) ? value : null
 }
 
 /* ─── 提供商头像（左栏 + 面板头标题）───────────────────────
@@ -341,6 +358,8 @@ function ModelsPage() {
   const all = Array.isArray(view.models) ? view.models : []
   const keyword = state.search.trim().toLowerCase()
   const shown = all.filter(model => matches(model, keyword, provider, state.stateFilter))
+  /** 排序档位（'default' / 'rate-asc' / 'rate-desc'）；组内排序读它，见 rows() 里那一段 */
+  const sort = state.sort
   const columns = visibleColumns()
   const columnCount = columns.length
   /**
@@ -756,7 +775,21 @@ function ModelsPage() {
     for (const [key, group] of groups) {
       // 组内排序：禁用的行沉到该组末尾，启用的排前面；Array#sort 稳定，组内仍按后端原序
       //（判定与「已启用 / 已禁用」筛选同一份，见 rowEnabled）
-      group.items.sort((a, b) => Number(!rowEnabled(a)) - Number(!rowEnabled(b)))
+      //
+      // 「按倍率」档位只在这之后**同一个启用态内部**再排一道：禁用行仍然全部沉底，
+      // 倍率排序不会把一条禁用行顶到前面去（那会让「哪些能用」先于「哪个便宜」失效）。
+      // 解析不出倍率的行恒排在同档末尾，方向也换不动它 —— 见 rateOf 的说明。
+      group.items.sort((a, b) => {
+        const byEnabled = Number(!rowEnabled(a)) - Number(!rowEnabled(b))
+        if (byEnabled !== 0 || sort === 'default') return byEnabled
+        const left = rateOf(a.credits)
+        const right = rateOf(b.credits)
+        if (left === null || right === null) {
+          if (left === right) return 0
+          return left === null ? 1 : -1
+        }
+        return sort === 'rate-asc' ? left - right : right - left
+      })
       const open = state.expanded.has(key) || !collapsible
       const items = open ? group.items : group.items.slice(0, GROUP_LIMIT)
       const rest = group.items.length - items.length
@@ -837,6 +870,10 @@ function ModelsPage() {
                 {/* 状态筛选：语义、键盘、滑块都在组件库里，取值仍以快照为准（完全受控） */}
                 <SegmentedControl options={MODEL_STATE_OPTIONS} value={state.stateFilter}
                   onValueChange={setStateFilter} aria-label={t('按状态筛选')} className='shrink-0' />
+                {/* 排序档位（issue #161）：默认 / 倍率升序 / 倍率降序。挑便宜模型时
+                    按倍率排比按名称排有用得多 —— 与状态筛选同一套（受控 + 落盘） */}
+                <SegmentedControl options={MODEL_SORT_OPTIONS} value={state.sort}
+                  onValueChange={setSort} aria-label={t('按倍率排序')} className='shrink-0' />
                 {/* 搜索框：InputGroup + addon 图标（与 input-control.tsx 的用法一致）。
                     刻意**不带** data-island-input：那是输入框岛（就地升级）的钩子，
                     两个岛同时挂一个输入框会打架。宽度沿用旧 CSS 的 #models-search 240px */}

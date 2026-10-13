@@ -5,6 +5,7 @@
   "{n} 个已限流": "{n} com rate limit",
   "{n} 个请求正在转发中，点开「请求日志」查看": "{n} requisições em encaminhamento; abra “Logs de requisições” para ver",
   "{n} 个账号 · {usable} 可用": "",
+  "{n} 个账号可用": "{n} contas disponíveis",
   "{n} 个账号启用": "{n} contas habilitadas",
   "{n} 条失败请求未读，点开「请求日志」查看": "{n} requisições com falha não lidas; abra “Logs de requisições” para ver",
   "{n} 条错误日志未读，点开「日志」查看": "{n} logs de erro não lidos; abra “Logs” para ver",
