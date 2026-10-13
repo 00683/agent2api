@@ -80,11 +80,13 @@ import {
 import { poolItemAddress } from './accounts-shared'
 import {
   batchRemove, batchTest, clearSelection, durationText, errorMessage,
-  formatTime, getSnapshot, isPicked, isReadonlyPoolItem, isSubscriptionItem, items, loadPanel,
-  pickableIds, readonlyHint, removeItem, saveItem, setAllPicked, subscribe, syncClash, testItem,
-  toggleItem, togglePick, toast, wb, type ProxyPoolItem,
+  formatTime, getSnapshot, isOrphanSubscriptionItem, isPicked, isReadonlyPoolItem,
+  isSubscriptionItem, items, loadPanel, pickableIds, readonlyHint, removeItem, saveItem,
+  setAllPicked, subscribe, syncClash, testItem, toggleItem, togglePick, toast, wb,
+  type ProxyPoolItem,
 } from './proxies-state'
 import { SubscriptionSection } from './proxies-sub-view'
+import { loadSection } from './proxies-sub-state'
 import { t } from '../i18n'
 
 /* ─── 表格列 ─────────────────────────────────── */
@@ -181,6 +183,9 @@ function ProxiesPage() {
       case 'test':
         return testCell(item)
       case 'act': {
+        // 只读镜像不给编辑；孤儿订阅节点（所属订阅已删）**删除放行** ——
+        // 归属订阅已不存在，删除是清理它们的唯一出路（见 isWritablePoolItem）
+        const orphan = isOrphanSubscriptionItem(item)
         const readonly = isReadonlyPoolItem(item)
         const hint = readonlyHint(item)
         return (
@@ -194,7 +199,7 @@ function ProxiesPage() {
               onClick={() => setModal({ item })}>
               {t('编辑')}
             </Button>
-            <Button size='sm' variant='destructive' disabled={locked || readonly}
+            <Button size='sm' variant='destructive' disabled={locked || (readonly && !orphan)}
               title={readonly ? hint : undefined}
               onClick={() => void removeItem(item)}>
               {t('删除')}
@@ -216,9 +221,13 @@ function ProxiesPage() {
       <section className='panel'>
         <div className='panel-head'>
           <h2>{t('代理池')}</h2>
-        <span className='panel-sub'>
-          {ready ? t('{n} 个出口', { n: rows.length }) : t('加载中…')}
-        </span>
+          <span className='panel-sub'>
+            {ready ? t('{n} 个出口', { n: rows.length }) : t('加载中…')}
+          </span>
+          {/* 来源说明：本表的条目不止手动添加的 —— 订阅与 Clash 的出口自动
+              镜像进来（只读），放在面板头让「源 → 消费」的关系一眼可见，
+              不必等用户看到页脚的 Clash 说明才反应过来 */}
+          <span className='text-[11px] text-subtle'>{t('订阅与 Clash 的出口自动镜像进来')}</span>
         <div className='head-actions'>
           {/* 同步放在刷新左边：它做的事比「刷新」多一层（把 Clash 的出口集合
               镜像进池），而进页面时的那次自动同步是静默的 —— 用户想在
@@ -229,7 +238,7 @@ function ProxiesPage() {
             {snapshot.syncing ? t('同步中…') : t('同步 Clash Verge')}
           </Button>
           <Button variant='outline' disabled={snapshot.loading || snapshot.batchBusy}
-            onClick={() => void loadPanel()}>
+            onClick={() => { void loadPanel(); void loadSection() }}>
             {snapshot.loading ? t('刷新中…') : t('刷新')}
           </Button>
           <Button variant='default' disabled={snapshot.batchBusy}
@@ -555,7 +564,7 @@ declare global {
   }
 }
 
-window.wbProxiesPanel = { load: () => loadPanel() }
+window.wbProxiesPanel = { load: async () => { await loadPanel(); await loadSection() } }
 
 const PAGE_SELECTOR = '.page[data-page="proxies"]'
 
@@ -572,7 +581,7 @@ function mount(): void {
   createRoot(section).render(<ProxiesPage />)
   // 首屏若正停在本页就自拉一次（app.js 启动时的 showPage 早于本岛加载，
   // 那一次 load() 会丢；与 keys / models 各岛同一处兜底）
-  if (wb().wbApp?.currentPage === 'proxies') void loadPanel()
+  if (wb().wbApp?.currentPage === 'proxies') { void loadPanel(); void loadSection() }
 }
 
 // 脚本排在页面骨架之后（index.html 里 islands/ui.js 在各 section 之后），正常直接挂；

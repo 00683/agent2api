@@ -126,5 +126,14 @@
   "＋ 新增代理": "+ New proxy",
   "＋ 新增订阅": "+ New subscription",
   "，": ", ",
-  "， 出口 IP 与耗时是附带读数。": ", and the endpoint IP and latency are incidental readings."
+  "， 出口 IP 与耗时是附带读数。": ", and the endpoint IP and latency are incidental readings.",
+  "内核已停止，点「启动内核」拉起": "Kernel stopped — click \"Start kernel\" to launch it",
+  "未同步": "Not synced",
+  "复制订阅链接": "Copy subscription URL",
+  "还没有订阅：粘贴订阅链接，或从图片识别二维码导入。": "No subscriptions yet: paste a subscription URL, or scan a QR code from an image.",
+  "订阅里的节点会自动同步进下方代理池，账号即可引用。": "Nodes from subscriptions are synced into the proxy pool below, ready for accounts to use.",
+  "订阅里的节点会被内核起成本地监听器，镜像到下方代理池（账号按 id 引用，与本页其它出口同一用法）。内核只在用到订阅时按需下载（约 20-40MB），不随安装包分发。": "Nodes from subscriptions are started as local listeners by the kernel and mirrored into the proxy pool below (accounts reference them by id, same as every other endpoint on this page). The kernel is only downloaded on demand when subscriptions are in use (~20-40MB) and is not bundled with the installer.",
+  "按需下载（约 20-40MB）": "Downloaded on demand (~20-40MB)",
+  "订阅与 Clash 的出口自动镜像进来": "Subscription and Clash endpoints are mirrored in automatically",
+  "该节点所属订阅已删除，不会再被同步更新，可手动删除清理": "The subscription this node belonged to has been deleted; it will no longer be synced and can be deleted manually"
 }

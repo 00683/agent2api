@@ -159,11 +159,18 @@ fn refresh(body: &Bytes) -> Response {
     if id.trim().is_empty() {
         return management_error(400, "缺少订阅 id");
     }
-    let enabled = subscriptions::enabled_provider_inputs();
-    if !enabled.iter().any(|provider| provider.id == id) {
-        return management_error(400, "订阅不存在或已禁用（刷新只针对启用的订阅）");
+    // 「不存在」与「被禁用」分流报错（见 subscriptions::find_enabled_state 的说明）
+    match subscriptions::find_enabled_state(id) {
+        None => {
+            return management_error(
+                404,
+                format!("订阅「{id}」不存在（可能已被删除，刷新列表后重试）"),
+            )
+        }
+        Some(false) => return management_error(400, "该订阅已禁用（先启用再刷新）"),
+        Some(true) => {}
     }
-    sub_kernel::request_refresh(id.to_string(), enabled);
+    sub_kernel::request_refresh(id.to_string(), subscriptions::enabled_provider_inputs());
     saved_payload()
 }
 

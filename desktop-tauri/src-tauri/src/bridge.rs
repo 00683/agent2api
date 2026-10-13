@@ -349,6 +349,9 @@ const BRIDGE_JS: &str = r#"
         ...(payload && Object.prototype.hasOwnProperty.call(payload, 'proxy')
           ? { proxy: payload.proxy }
           : {}),
+        ...(payload && Object.prototype.hasOwnProperty.call(payload, 'maxConcurrent')
+          ? { maxConcurrent: payload.maxConcurrent }
+          : {}),
       }),
 
     // ── 出网代理 ──
@@ -439,6 +442,24 @@ const BRIDGE_JS: &str = r#"
         + (refresh ? '?refresh=1' : '')),
     claimOnboardingTasks: id =>
       call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/onboarding/claim', {}),
+    // ── WorkBuddy 成长任务（国内版：盘点 / 单任务执行 / 开学季 / 猫猫旅行）──
+    // 从参考项目 workbuddy2api 的 task_runner.py 与 school_open_day_2026.py 移植，
+    // 见 server 的 api::growth 模块头。与 `server/src/web_shim.rs` 的同名方法
+    // **必须成对维护**（headless 面板同一份界面，缺一边会在那一形态下静默失效）。
+    //
+    // `getGrowthStatus` 是只读盘点（任务 / 能量 / 旅行 / 开学季四块）；执行拆成
+    // **单任务**端点（runGrowthTask）—— 全量逐条留 1s+ 写间隔会超过管理 API 的
+    // 60 秒转发超时，界面的「一键完成」在本地循环逐条调用并逐条显示进度。
+    getGrowthStatus: id =>
+      call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth'),
+    runGrowthTask: (id, code, mode) =>
+      call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/task',
+        { code: code, mode: mode || 'full' }),
+    runGrowthSchool: (id, lottery) =>
+      call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/school',
+        { lottery: lottery === true }),
+    runGrowthTravel: id =>
+      call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/travel', {}),
 
     // ── 手机验证码登录（AutoClaw 两地区 / Loomy）──
     // 与网页登录那条链（开窗口、等回调）不同：上游没有授权页，就是「发码 →

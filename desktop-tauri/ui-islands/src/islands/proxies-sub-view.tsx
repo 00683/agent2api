@@ -44,9 +44,9 @@ import {
   Switch,
 } from '@ui'
 import {
-  addSubscription, decodeQrImage, downloadKernel, errorMessage, kernel, refreshSubscription,
-  removeSubscription, restartKernel, saveSubscription, subs, subscribe, getSnapshot, toast,
-  toggleSubscription, wb, type KernelStatus, type SubscriptionItem,
+  addSubscription, decodeQrImage, downloadKernel, errorMessage, kernel, loadSection,
+  refreshSubscription, removeSubscription, restartKernel, saveSubscription, subs, subscribe,
+  getSnapshot, toast, toggleSubscription, wb, type KernelStatus, type SubscriptionItem,
 } from './proxies-sub-state'
 import { formatTime } from './proxies-state'
 import { t } from '../i18n'
@@ -59,6 +59,10 @@ export function SubscriptionSection() {
   const kernelStatus = kernel()
   const ready = snapshot.data !== null
   const [modal, setModal] = React.useState<{ item: SubscriptionItem | null } | null>(null)
+
+  // 首次渲染自拉一次：本区块没有像代理池那样的「页面加载契约」（wbProxiesPanel.load
+  // 只刷池），不拉的话快照永远停在 null、界面停在「加载中…」
+  React.useEffect(() => { void loadSection() }, [])
 
   const downloading = kernelStatus?.download.state === 'downloading'
   const downloadPercent =
@@ -108,22 +112,36 @@ export function SubscriptionSection() {
               return (
                 <tr key={item.id} className={item.enabled ? '' : 'off'}>
                   <td><b>{item.name || t('未命名')}</b></td>
-                  <td><span className='font-mono text-[12px] text-text-2'
-                    title={item.url}>{shortUrl(item.url)}</span></td>
+                  {/* 链接列：hover 出复制按钮（clipboard.js 的全局委托契约 ——
+                      `data-copy` 给文本、`.copy-btn` 类换「⧉ → ✓」反馈，见 docs-page
+                      文件头的说明；岛内不自己写剪贴板逻辑） */}
+                  <td className='group'>
+                    <div className='flex items-center gap-1'>
+                      <span className='font-mono text-[12px] text-text-2'
+                        title={item.url}>{shortUrl(item.url)}</span>
+                      <Button variant='ghost' size='icon-xs'
+                        className='copy-btn size-[21px] rounded-[var(--r-xs)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100'
+                        data-copy={item.url} title={t('复制订阅链接')}>⧉</Button>
+                    </div>
+                  </td>
+                  {/* 节点列只放读数；同步时间归「上次同步」列（两列各就各位）。
+                      节点数优先取内核状态里的**实时**同步结果：条目上的 nodeCount
+                      是列表响应注入的快照，写操作后的轮询窗口里可能还是旧的 0
+                      （徽标曾冻在「—」上 —— 列表与内核一起轮询 + 这里的实时兜底，
+                      双保险） */}
                   <td className='ta-center'>
-                    {item.nodeCount > 0 ? (
-                      <Badge variant='secondary'>{t('{n} 个', { n: item.nodeCount })}</Badge>
+                    {liveNodeCount(sync, item) > 0 ? (
+                      <Badge variant='secondary'>{t('{n} 个', { n: liveNodeCount(sync, item) })}</Badge>
                     ) : (
                       <span className='text-subtle'>{t('—')}</span>
                     )}
-                    {sync?.at ? (
-                      <div className='text-[11px] text-subtle'>{formatTime(sync.at)}</div>
-                    ) : null}
                   </td>
                   <td>
-                    <span className='text-[12px] text-text-2'>
-                      {item.enabled ? t('正常') : t('已禁用')}
-                    </span>
+                    {sync?.at ? (
+                      <span className='text-[12px] text-text-2'>{formatTime(sync.at)}</span>
+                    ) : (
+                      <span className='text-subtle'>{t('未同步')}</span>
+                    )}
                   </td>
                   <td className='ta-center'>
                     <Switch checked={item.enabled} disabled={snapshot.pending}
@@ -147,9 +165,18 @@ export function SubscriptionSection() {
             }) : (
               <tr>
                 <td colSpan={6} className='empty'>
-                  {ready
-                    ? t('还没有订阅。点右上角「＋ 新增订阅」粘贴订阅链接，或从图片识别二维码导入。')
-                    : t('加载中…')}
+                  {ready ? (
+                    /* 空态内嵌主操作按钮（视线不用跳到右上角）：一句话 + 按钮 +
+                       一句「接下来会发生什么」的副提示 */
+                    <div className='flex flex-col items-center gap-2 py-3'>
+                      <span>{t('还没有订阅：粘贴订阅链接，或从图片识别二维码导入。')}</span>
+                      <Button size='sm' variant='outline' disabled={snapshot.pending}
+                        onClick={() => setModal({ item: null })}>{t('＋ 新增订阅')}</Button>
+                      <span className='text-[11px] text-subtle'>
+                        {t('订阅里的节点会自动同步进下方代理池，账号即可引用。')}
+                      </span>
+                    </div>
+                  ) : t('加载中…')}
                 </td>
               </tr>
             )}
@@ -159,7 +186,7 @@ export function SubscriptionSection() {
 
       <div className='panel-foot'>
         <span>
-          {t('订阅里的节点会被内核起成本地监听器，镜像到下方代理池（账号按 id 引用，与本页其它出口同一用法）。')}
+          {t('订阅里的节点会被内核起成本地监听器，镜像到下方代理池（账号按 id 引用，与本页其它出口同一用法）。内核只在用到订阅时按需下载（约 20-40MB），不随安装包分发。')}
         </span>
         {snapshot.error ? (
           <span className='text-destructive'>{t('读取失败：{reason}', { reason: snapshot.error })}</span>
@@ -184,7 +211,9 @@ function KernelRow({
   pending: boolean
 }) {
   return (
-    <div className='mx-3 mb-3 flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-3'>
+    /* 紧凑状态条：一行放下徽标 / 读数 / 操作，进度条只在下载中展开；
+       未安装是个高频空态，说明文字收在面板页脚，这里只留一行短文案 */
+    <div className='mx-3 mb-3 flex flex-col gap-2 rounded-md border border-border bg-surface-2 px-3 py-2'>
       <div className='flex flex-wrap items-center gap-2'>
         <Badge variant={kernel?.running ? 'default' : 'secondary'}>
           {kernel?.running
@@ -194,11 +223,16 @@ function KernelRow({
               : t('内核未安装')}
         </Badge>
         <span className='text-[12.5px] text-text-2'>
-          {t('内核 {version}')}　·　{kernel?.running
+          {/* 版本号是 t 的形参（占位符不传参会原样显示 "{version}"）；
+              未安装时不显示版本段，只留按需下载的说明 */}
+          {kernel?.installed
+            ? t('内核 {version}', { version: kernel.version }) + '　·　'
+            : ''}
+          {kernel?.running
             ? t('控制端口 {port} · {n} 个节点监听器', { port: kernel?.controllerPort ?? '—', n: kernel?.listenerCount ?? 0 })
             : kernel?.installed
-              ? t('下载完成后可启动')
-              : t('按需下载（约 20-40MB），只在启用订阅功能时需要')}
+              ? t('内核已停止，点「启动内核」拉起')
+              : t('按需下载（约 20-40MB）')}
         </span>
         <div className='ml-auto'>
           {!kernel?.installed ? (
@@ -249,6 +283,20 @@ function shortUrl(url: string): string {
   } catch {
     return url.slice(0, 60)
   }
+}
+
+/**
+ * 节点数：优先内核状态里的**实时**同步结果，回落条目上的注入快照。
+ *
+ * 两者同源（条目上的 nodeCount 由后端在列表响应里从 providerSync 注入），
+ * 但时序不同：写操作后的轮询窗口里，条目快照可能还是操作前的 0，而内核
+ * 状态已经拿到新结果 —— 徽标曾因此冻在「—」上，这里以实时值兜底。
+ */
+function liveNodeCount(
+  sync: { count?: number } | undefined,
+  item: SubscriptionItem,
+): number {
+  return sync?.count ?? item.nodeCount
 }
 
 /* ─── 新增 / 编辑弹窗 ───────────────────────── */

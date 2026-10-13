@@ -257,6 +257,27 @@ pub fn has_enabled() -> bool {
         .any(|item| !matches!(item.get("enabled"), Some(Value::Bool(false))))
 }
 
+/// 条目是否存在 / 是否启用三态（`None` = 不存在）—— refresh 的报错分流用。
+///
+/// 「不存在」与「被禁用」是两种事：前者多半是条目被删（或数据被外部工具
+/// 清掉），后者用户自己就能启用 —— 笼统报「不存在或已禁用」会把排查方向
+/// 带偏（实测踩过：旧版进程误删存储键时，用户从这句文案里看不出真正原因）。
+pub fn find_enabled_state(id: &str) -> Option<bool> {
+    read_items()
+        .iter()
+        .find(|item| text_of(item, "id") == id)
+        .map(|item| !matches!(item.get("enabled"), Some(Value::Bool(false))))
+}
+
+/// 现存订阅的 id 集合（代理池标注「孤儿订阅节点」用：条目的 providerId
+/// 不在这个集合里 = 所属订阅已不存在，可手动清理）。
+pub fn ids() -> std::collections::HashSet<String> {
+    read_items()
+        .iter()
+        .map(|item| text_of(item, "id"))
+        .collect()
+}
+
 /// 启用订阅的输入清单（api 层 / bootstrap 构造 `ProviderInput` 用：
 /// 内核的 proxy-providers 只收启用的条目）。
 pub fn enabled_provider_inputs() -> Vec<ProviderInput> {

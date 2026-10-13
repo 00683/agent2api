@@ -269,6 +269,13 @@ async fn execute(command: Command) {
         }
         Command::Stop => {
             runtime::stop_kernel().await;
+            // 一条启用订阅都不剩 → 订阅节点镜像一并清空（空目标集合 = 摘掉
+            // 全部 subscription 条目，见 `proxy_pool::sync_subscription_nodes`）。
+            //
+            // **必须在停内核这条路径上清**：只有「还有其它启用订阅」时才会走
+            // 重启路径顺带同步，删掉最后一条订阅时若不清，节点镜像就留在池里
+            // 成了孤儿 —— 归属订阅已不存在，界面上挂着且删不掉（实测踩过）。
+            sync_nodes_to_pool(&[]);
             patch_status(|snapshot| {
                 snapshot.running = false;
             });

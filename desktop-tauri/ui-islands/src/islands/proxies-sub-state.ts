@@ -167,24 +167,22 @@ export async function loadSection(silent = false): Promise<void> {
 }
 
 /**
- * 写操作后轮询内核状态几轮：内核命令是异步的（重启 + provider 拉取要几秒），
- * 节点数 / 运行状态随之刷新。最多 6 轮 × 1.5s；中途内核状态稳定（不在
- * downloading 且无变化）就提前收手不硬等。
+ * 写操作后轮询整个区块几轮：内核命令是异步的（重启 + 拉订阅要几秒），
+ * **列表与内核必须一起刷** —— 节点数由内核的同步结果注入列表，只刷 kernel
+ * 会让「N 个节点」徽标冻在操作瞬间的 0 上不更新（实测踩过这坑）。
+ * 最多 6 轮 × 1.5s；内核状态稳定（不在下载中，且已运行或已报错）就提前收手。
  */
-async function pollKernelAfterChange(): Promise<void> {
+async function pollSectionAfterChange(): Promise<void> {
   const bridge = wb().workbuddyDesktop
-  if (typeof bridge?.getKernelStatus !== 'function') return
+  if (typeof bridge?.getSubscriptions !== 'function') return
   for (let round = 0; round < 6; round += 1) {
     await new Promise(resolve => setTimeout(resolve, 1500))
     try {
-      const kernel = await bridge.getKernelStatus()
-      if (kernel && state.data) {
-        patch({ data: { ...state.data, kernel } })
-      }
-      // 下载中或出错都继续轮（下载进度 / 错误信息都在变）；稳定就提前收手
+      const payload = await bridge.getSubscriptions()
+      if (payload && Array.isArray(payload.items)) accept(payload)
+      const kernel = payload?.kernel
       if (kernel && kernel.download.state !== 'downloading' && round >= 1) {
-        const running = kernel.running
-        if (running || kernel.lastError) return
+        if (kernel.running || kernel.lastError) return
       }
     } catch {
       return
@@ -199,7 +197,7 @@ export async function addSubscription(name: string, url: string): Promise<Subscr
   const data = await bridge?.addSubscription?.({ name: name.trim(), url: url.trim(), enabled: true })
   accept(data)
   toast(t('已新增订阅「{name}」，内核正在同步节点…', { name: name.trim() }))
-  void pollKernelAfterChange()
+  void pollSectionAfterChange()
   return data ?? null
 }
 
@@ -211,7 +209,7 @@ export async function saveSubscription(
   const data = await bridge?.saveSubscription?.({ id: item.id, ...payload })
   accept(data)
   toast(t('已保存「{name}」', { name: payload.name.trim() }))
-  void pollKernelAfterChange()
+  void pollSectionAfterChange()
 }
 
 /** 行内启停（整份覆盖语义：名称与链接原样回传） */
@@ -223,7 +221,7 @@ export async function toggleSubscription(item: SubscriptionItem, enabled: boolea
     const data = await bridge?.saveSubscription?.({ id: item.id, name: item.name, url: item.url, enabled })
     accept(data)
     toast(enabled ? t('已启用「{name}」', { name: item.name }) : t('已禁用「{name}」', { name: item.name }))
-    void pollKernelAfterChange()
+    void pollSectionAfterChange()
   } catch (error) {
     toast(t('保存失败：{reason}', { reason: errorMessage(error) }), 'err')
   } finally {
@@ -240,7 +238,7 @@ export async function refreshSubscription(item: SubscriptionItem): Promise<void>
     const data = await bridge?.refreshSubscription?.(item.id)
     accept(data)
     toast(t('已刷新「{name}」，正在同步节点…', { name: item.name }))
-    void pollKernelAfterChange()
+    void pollSectionAfterChange()
   } catch (error) {
     toast(t('刷新失败：{reason}', { reason: errorMessage(error) }), 'err')
   } finally {
@@ -265,7 +263,7 @@ export async function removeSubscription(item: SubscriptionItem): Promise<void> 
     const data = await bridge?.removeSubscription?.(item.id)
     accept(data)
     toast(t('已删除「{name}」', { name: item.name || item.id }))
-    void pollKernelAfterChange()
+    void pollSectionAfterChange()
   } catch (error) {
     toast(t('删除失败：{reason}', { reason: errorMessage(error) }), 'err')
   } finally {
@@ -303,7 +301,7 @@ export async function downloadKernel(): Promise<void> {
     } else if (finalKernel?.download.state === 'done') {
       // 下载完成：后端已自动拉起内核（有启用的订阅时），再轮几轮看运行状态
       toast(t('✅ 内核下载完成，正在启动…'))
-      void pollKernelAfterChange()
+      void pollSectionAfterChange()
     }
   } catch (error) {
     toast(t('内核下载失败：{reason}', { reason: errorMessage(error) }), 'err')
@@ -321,7 +319,7 @@ export async function restartKernel(): Promise<void> {
     const kernel = await bridge?.restartKernel?.()
     if (kernel && state.data) patch({ data: { ...state.data, kernel } })
     toast(t('内核正在启动…'))
-    void pollKernelAfterChange()
+    void pollSectionAfterChange()
   } catch (error) {
     toast(t('内核启动失败：{reason}', { reason: errorMessage(error) }), 'err')
   } finally {

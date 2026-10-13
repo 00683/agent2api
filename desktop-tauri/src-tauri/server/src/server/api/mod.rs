@@ -57,6 +57,9 @@ pub mod checkin_schedules;
 pub mod cline_headers;
 pub mod codearts_welfare;
 pub mod config_api;
+// WorkBuddy 成长任务（查询 / 执行 / 开学季 / 猫猫旅行）：从参考项目
+// workbuddy2api 的 task_runner.py 移植，见该文件模块头
+pub mod growth;
 // 网关面（`/v1/*`）跨域访问开关：`GET/PUT /api/cors`（与 `/api/sanitize`
 // 同形的单开关端点，见该文件模块头）
 pub mod cors;

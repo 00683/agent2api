@@ -51,6 +51,8 @@ export type ProxyPoolItem = {
   resolveError: string | null
   /** 引用这条的账号（后端在本机账号表里查出来的） */
   usedBy?: Array<{ id?: string; name?: string; enabled?: boolean }>
+  /** 孤儿订阅节点：所属订阅已不存在（后端标注），只读镜像的**唯一例外** —— 可手动删除 */
+  orphan?: boolean
 }
 
 /**
@@ -178,6 +180,22 @@ export function isReadonlyPoolItem(item: ProxyPoolItem): boolean {
   return isClashItem(item) || isSubscriptionItem(item)
 }
 
+/**
+ * 孤儿订阅节点：所属订阅已不存在（后端标注 `orphan`）。
+ *
+ * 只读镜像的唯一例外 —— 归属订阅已删，任何同步都不会再碰它，允许手动删除
+ * 清理（正常路径下订阅删除 / 禁用后条目会随同步自动摘掉，孤儿只出现在
+ * 数据被外部工具清掉的场景）。仍不给编辑 / 启停（删除是唯一出路）。
+ */
+export function isOrphanSubscriptionItem(item: ProxyPoolItem): boolean {
+  return isSubscriptionItem(item) && item.orphan === true
+}
+
+/** 写操作（删除）是否放行：只读镜像不放，孤儿订阅节点放 */
+export function isWritablePoolItem(item: ProxyPoolItem): boolean {
+  return !isReadonlyPoolItem(item) || isOrphanSubscriptionItem(item)
+}
+
 /** 只读条目的统一说明（与后端同口径；岛在词典注入之后才求值） */
 export const CLASH_READONLY_HINT = t(
   '来自 Clash Verge 同步（名称 / 端口 / 启用都跟随 Clash），请到 Clash Verge 中修改',
@@ -188,7 +206,13 @@ export const SUBSCRIPTION_READONLY_HINT = t(
   '该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅」区块修改',
 )
 
+/** 孤儿订阅节点的提示（可删除；与其它只读条目的说明区分开） */
+export const ORPHAN_SUBSCRIPTION_HINT = t(
+  '该节点所属订阅已删除，不会再被同步更新，可手动删除清理',
+)
+
 export function readonlyHint(item: ProxyPoolItem): string {
+  if (isOrphanSubscriptionItem(item)) return ORPHAN_SUBSCRIPTION_HINT
   return isSubscriptionItem(item) ? SUBSCRIPTION_READONLY_HINT : CLASH_READONLY_HINT
 }
 
@@ -395,7 +419,8 @@ export async function toggleItem(item: ProxyPoolItem, enabled: boolean): Promise
 export async function removeItem(item: ProxyPoolItem): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.removeProxyPoolItem !== 'function') return
-  if (isReadonlyPoolItem(item)) {
+  // 只读镜像不放行，孤儿订阅节点例外（后端同样按这个口径路由，见 pool_remove）
+  if (!isWritablePoolItem(item)) {
     toast(readonlyHint(item), 'err')
     return
   }
@@ -492,9 +517,9 @@ export async function batchRemove(): Promise<void> {
   // 行内启停 / 单条测试同理 —— 视图侧按钮也按同一组条件禁用
   if (state.batchBusy || state.testing) return
   const picked = items().filter(item => state.selected.has(item.id))
-  // 只读镜像（Clash 同步 / 订阅节点）跳过 —— 后端同样会拒绝，这里先挡掉
-  // 让提示聚合在一处而不是逐条 400
-  const deletable = picked.filter(item => !isReadonlyPoolItem(item))
+  // 只读镜像（Clash 同步 / 订阅节点）跳过 —— 但**孤儿订阅节点可删**
+  // （所属订阅已不存在，删除是唯一出路，见 isWritablePoolItem）
+  const deletable = picked.filter(item => isWritablePoolItem(item))
   const skipped = picked.length - deletable.length
   if (!deletable.length) {
     toast(skipped

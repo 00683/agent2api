@@ -757,6 +757,9 @@ pub fn shim_js() -> &'static str {
         ids: Array.isArray(payload.ids) ? payload.ids : [],
       };
       if (Object.prototype.hasOwnProperty.call(payload, 'proxy')) body.proxy = payload.proxy;
+      if (Object.prototype.hasOwnProperty.call(payload, 'maxConcurrent')) {
+        body.maxConcurrent = payload.maxConcurrent;
+      }
       return call('POST', '/api/accounts/batch', body);
     },
 
@@ -820,6 +823,24 @@ pub fn shim_js() -> &'static str {
     },
     claimOnboardingTasks: function (id) {
       return call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/onboarding/claim', {});
+    },
+    // ── WorkBuddy 成长任务（国内版：盘点 / 单任务执行 / 开学季 / 猫猫旅行）──
+    // 与桌面 `bridge.rs` 的同名方法**必须成对存在**（理由上面 Loomy 那段已述：
+    // 只改一边时另一形态会静默失效）。端点在 server 的 `api::growth`。
+    // 执行拆成单任务端点（60 秒转发超时，见 api::growth 模块头）。
+    getGrowthStatus: function (id) {
+      return call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth');
+    },
+    runGrowthTask: function (id, code, mode) {
+      return call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/task',
+        { code: code, mode: mode || 'full' });
+    },
+    runGrowthSchool: function (id, lottery) {
+      return call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/school',
+        { lottery: lottery === true });
+    },
+    runGrowthTravel: function (id) {
+      return call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/growth/travel', {});
     },
 
     // ── 手机验证码登录（AutoClaw 国内版 / Loomy）──

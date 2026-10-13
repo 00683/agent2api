@@ -668,6 +668,39 @@ pub fn record_test(id: &str, result: &TestOutcome) -> Result<Vec<Value>, String>
     Ok(list())
 }
 
+/// 删除一条订阅节点的**孤儿**条目（所属订阅已不存在）。
+///
+/// 只服务「手动清理」这一条出路：正常路径下订阅删除 / 禁用后条目会随
+/// 同步自动摘掉（见 `sync_subscription_nodes`），孤儿只出现在数据被外部
+/// 工具清掉的场景（例如旧版进程误删 `subscriptions` 存储键 —— 实测踩过）：
+/// 那时条目归属的订阅已经不存在，任何同步都不会再碰它，界面上需要一条
+/// 手动删掉它的路。仍然拒绝 clash 条目与手动条目 —— 它们不属于订阅，
+/// 不能借这个入口绕过各自的只读 / 正常写路径。
+///
+/// **是否孤儿由调用方（api 层）判定**：本模块不认识订阅存储（依赖方向
+/// 是 subscriptions/sub_kernel → proxy_pool），只认「source == subscription」
+/// 这一个形状约束。
+pub fn remove_subscription_orphan(id: &str) -> Result<(Vec<Value>, String), String> {
+    let mut items = read_items();
+    let Some(index) = items
+        .iter()
+        .position(|item| item.get("id").and_then(Value::as_str) == Some(id))
+    else {
+        return Err(format!("代理「{id}」不存在"));
+    };
+    if !is_subscription_item(&items[index]) {
+        return Err(readonly_hint(&items[index]));
+    }
+    let removed = items.remove(index);
+    write_items(&items)?;
+    let name = text_of(&removed, "name");
+    logging::log(
+        "[Proxies]",
+        &format!("🗑️ 删除订阅节点「{name}」（所属订阅已不存在，手动清理）"),
+    );
+    Ok((list(), name))
+}
+
 // ─── 订阅节点同步（全量镜像，内核拉到订阅后调用）─────────────
 
 /// 一个待镜像的订阅节点（`core::sub_kernel` 在 provider 同步后构造）。
