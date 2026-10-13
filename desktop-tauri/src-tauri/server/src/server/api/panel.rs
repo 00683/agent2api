@@ -412,7 +412,7 @@ pub async fn panel_logout(headers: HeaderMap) -> Response {
     access::revoke_session(&headers);
     let mut response = ok_json(serde_json::json!({ "loggedIn": false }));
     for name in [access::ACCESS_COOKIE, access::REFRESH_COOKIE] {
-        let clear = format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+        let clear = access::clear_cookie(name);
         if let Ok(value) = axum::http::HeaderValue::from_str(&clear) {
             response.headers_mut().append(SET_COOKIE, value);
         }

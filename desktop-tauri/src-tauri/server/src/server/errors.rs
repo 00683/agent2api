@@ -215,7 +215,7 @@ pub fn unauthorized_response() -> Response {
 /// `type` 用 `panel_login_required` 与普通 Key 鉴权失败（`invalid_api_key`）
 /// 区分 —— 两者都是 401，但浏览器面板对它们的反应不同。
 pub fn panel_login_required_response() -> Response {
-    (
+    let mut response = (
         StatusCode::UNAUTHORIZED,
         Json(json!({
             "error": {
@@ -224,7 +224,22 @@ pub fn panel_login_required_response() -> Response {
             }
         })),
     )
-        .into_response()
+        .into_response();
+    // 401 顺手清掉这一枚无效的 access cookie。**不清才是"反复"的成因**：浏览器
+    // 罐子里那枚同名 cookie 每次开页都原样带回来，服务端每次都要重新判一次无效
+    // （生产读数：同一把对不上任何登录的指纹出现了 51 次，横跨两天四个时段）。
+    // 只清 access 这一枚、且只发一条 `Set-Cookie`：合并型中转会把多条拼成一条
+    // （见 `access::session_valid` 的事故记录），两条清除头等于一条都到不了。
+    // refresh 那枚归登出路径清 —— 它在自己的 Path 下，跟着这次 401 一起发只会
+    // 撞上拼接（且 rotate 对"陈旧 refresh"另有判定，不靠删 cookie 兜）。
+    if let Ok(value) = axum::http::HeaderValue::from_str(&crate::server::access::clear_cookie(
+        crate::server::access::ACCESS_COOKIE,
+    )) {
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    response
 }
 
 /// 503：headless 公网形态未配置任何 API Key 时，`/v1/*` 的 fail-closed 响应。
@@ -388,5 +403,38 @@ fn format_reset_at_text(reset_at: i64) -> String {
             .format("%Y/%m/%d %H:%M:%S")
             .to_string(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod panel_401_cookie_tests {
+    //! 面板 401 要**顺手清掉**那枚无效的 access cookie —— 不清就是「反复」的成因：
+    //! 罐里那枚同名 cookie 每次开页都原样带回来，服务端每次重新判一次无效
+    //! （生产读数：同一把对不上任何登录的指纹两天里出现 51 次）。
+    //!
+    //! 只发一条 `Set-Cookie`：合并型中转会把多条拼成一条（见
+    //! `access::session_valid` 的事故记录），两条清除头等于一条都到不了。
+
+    use super::*;
+    use crate::server::access;
+
+    #[test]
+    fn the_panel_401_clears_the_stale_access_cookie() {
+        let response = panel_login_required_response();
+        let cookies: Vec<String> = response
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(cookies.len(), 1, "401 只该发一条清除头（多条会被中转拼坏）");
+        assert!(cookies[0].starts_with(&format!("{}=;", access::ACCESS_COOKIE)));
+        assert!(cookies[0].contains("Path=/"), "清除要落在 access 的签发 Path 上");
+        assert!(cookies[0].contains("Max-Age=0"));
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "错误语义不能因为加了一条头就变"
+        );
     }
 }

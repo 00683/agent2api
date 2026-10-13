@@ -100,9 +100,13 @@ pub const RESERVED_KV_KEYS: &[&str] = &[
     // 状态」一类：不是配置项，配置写入绝不能动它。
     "panelAdmin",
     // 面板刷新令牌（server::access）：整份记录数组一个键（条目是个位数：
-    // 每设备一条活链），轮换/撤销都是整键重写。刷新令牌在库里只存 sha256，
-    // 重启后 access 短效令牌虽在内存丢失，浏览器用它静默换新。
+    // 每设备一条活链），轮换/撤销都是整键重写。刷新令牌在库里只存 sha256。
     "panelTokens",
+    // 面板 access 会话表（server::access）：与 `panelTokens` 同一形状、同样只存
+    // sha256。落库的理由是「重启不该把所有已登录的浏览器打成无效」—— 重启前它们
+    // 只在内存，重启后浏览器带着还在的 cookie 撞 401，而 401 又不清 cookie，
+    // 现场表现为「同一把对不上任何登录的指纹反复出现几十次」。
+    "panelAccessSessions",
     // ALTCHA 机器人校验的 HMAC 密钥（server::altcha）：首次签发 challenge
     // 时生成并落库，只经 HMAC 使用、从不外发。属于「其它零散状态」，
     // 配置写入绝不能动它。

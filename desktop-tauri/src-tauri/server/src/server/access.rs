@@ -63,6 +63,9 @@ const LOCKOUT_DURATION: Duration = Duration::from_secs(300);
 
 const KV_ADMIN_KEY: &str = "panelAdmin";
 const KV_TOKENS_KEY: &str = "panelTokens";
+/// access 会话表（只存 sha256，见 `AccessRecord`）。⚠️ 新增键必须同时登记进
+/// `db::schema::RESERVED_KV_KEYS`，否则用户改一次配置就把它静默删掉。
+const KV_ACCESS_KEY: &str = "panelAccessSessions";
 
 // ── 数据库句柄（启动时注入；kv 读写都走它）────────────────────
 
@@ -254,11 +257,28 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-// ── access token（短效，只存内存）─────────────────────────────
+// ── access token（短效，库里只存 sha256）──────────────────────
 
-/// access token → (所属会话链, 过期时刻)。关联会话链是为了
-/// 「重放检测 / 登出」能把同一登录签发的所有 access 一并作废。
-type AccessTable = HashMap<String, (String, Instant)>;
+/// access token 的一条记录。**库里和内存里都以 sha256(token) 为键** ——
+/// 原先键是裸令牌、表只在内存里，于是「重启」等价于「把所有活会话打成无效」：
+/// 浏览器罐子里那枚 cookie 还在、还在每次开页时被带回来，服务端却不认了
+/// （生产一手读数：`面板会话无效` 里 51 次是同一把早已对不上任何登录的指纹，
+/// 时间点与 12:26 那次容器重启之后逐台吻合）。
+///
+/// 现在照 `panelTokens` 那条已经跑通的做法落库：只存哈希，启动时载回。
+/// 安全性不降级 —— 库里那条哈希本来就够冒充（refresh 同形），而拿不到库的
+/// 攻击者既拿不到旧版的内存表、也拿不到新版这条。
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct AccessRecord {
+    /// sha256(token)
+    hash: String,
+    /// 会话链 id：同一登录签发的 access 共享，撤销按链整条作废
+    session: String,
+    /// 过期时刻（毫秒，墙钟 —— 内存里的 `Instant` 跨不了进程）
+    expires_at: i64,
+}
+
+type AccessTable = HashMap<String, (String, i64)>;
 
 static ACCESS_TOKENS: OnceLock<Mutex<AccessTable>> = OnceLock::new();
 
@@ -326,10 +346,53 @@ fn refresh_tokens() -> &'static Mutex<Vec<RefreshRecord>> {
 /// 新表；内存里的旧 access 会话若保留，用户会顶着「看似已登录」的状态用到
 /// 过期才撞 401。清空让所有人立刻走重新登录 —— 行为与新库一致。
 pub fn clear_access_tokens() {
+    let mut table = match access_tokens().lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    table.clear();
+    // 表现在落库，只清内存会留一份"下一次启动又活过来"的库内容 —— 一起清空
+    persist_access_tokens(&mut table);
+}
+
+/// 启动时把库里的 access 会话载入内存（与 `load_refresh_tokens` 同时调用）。
+pub fn load_access_tokens() {
+    let Some(loaded) = kv_get(KV_ACCESS_KEY) else { return };
+    let Ok(records) = serde_json::from_str::<Vec<AccessRecord>>(&loaded) else { return };
+    let table = access_table_from(records, now_ms());
     match access_tokens().lock() {
-        Ok(mut table) => table.clear(),
-        Err(poisoned) => poisoned.into_inner().clear(),
+        Ok(mut current) => *current = table,
+        Err(poisoned) => *poisoned.into_inner() = table,
     }
+}
+
+/// 记录 → 内存表：过期条目一律丢掉（库可能是两天前那份）。
+fn access_table_from(records: Vec<AccessRecord>, now: i64) -> AccessTable {
+    records
+        .into_iter()
+        .filter(|record| record.expires_at > now)
+        .map(|record| (record.hash, (record.session, record.expires_at)))
+        .collect()
+}
+
+/// 内存表 → 落库记录（过期条目顺手清掉）。库里**只存哈希**：整库导出与备份
+/// 走的是同一个 kv，裸令牌进去就等于把可用凭据写进明文文件。
+fn access_records(table: &AccessTable, now: i64) -> Vec<AccessRecord> {
+    table
+        .iter()
+        .filter(|(_, (_, expiry))| *expiry > now)
+        .map(|(hash, (session, expires_at))| AccessRecord {
+            hash: hash.clone(),
+            session: session.clone(),
+            expires_at: *expires_at,
+        })
+        .collect()
+}
+
+fn persist_access_tokens(table: &mut AccessTable) {
+    let records = access_records(table, now_ms());
+    let payload = serde_json::to_string(&records).unwrap_or_else(|_| "[]".to_string());
+    kv_put(KV_ACCESS_KEY, &payload);
 }
 
 /// 启动时把库里的刷新令牌载入内存（`bootstrap` 完成后调用一次；
@@ -384,18 +447,49 @@ pub struct IssuedSession {
     pub refresh_token: String,
 }
 
+/// 两枚 cookie 各自的 Path（签发与清除都必须走它 —— 见 `clear_cookie`）。
+fn cookie_path(name: &str) -> &'static str {
+    if name == REFRESH_COOKIE { "/api/panel" } else { "/" }
+}
+
+/// 一条签发用的 `Set-Cookie` 值。
+fn issue_cookie(name: &str, value: &str, max_age: i64) -> String {
+    format!(
+        "{name}={value}; Path={}; HttpOnly; SameSite=Lax; Max-Age={max_age}",
+        cookie_path(name)
+    )
+}
+
+/// 一条清除用的 `Set-Cookie`（同名同 Path + `Max-Age=0`）。
+///
+/// Path 必须与签发时**逐字相同** —— 浏览器删 cookie 要名字与 Path 同时命中。
+/// 从前这里两处都写死 `Path=/`，而 refresh cookie 签在 `Path=/api/panel` 下，
+/// 于是它从来没被删掉过：每台设备的罐子里都攒着一枚陈旧 refresh，每次
+/// `/api/panel/*` 都把它带回来。而活的那把一旦不在候选里（重启清了 access、
+/// 或中转下 localStorage 空桶 ⇒ 头令牌也没了），`rotate_session` 就只能按
+/// 「已轮换的记录」命中这枚陈旧的 ⇒ 判重放、整条会话链作废 ⇒ 用户被弹回登录页。
+/// 这是「过期 cookie 为什么反复出现」的直接成因之一。
+pub fn clear_cookie(name: &str) -> String {
+    format!(
+        "{name}=; Path={}; HttpOnly; SameSite=Lax; Max-Age=0",
+        cookie_path(name)
+    )
+}
+
 impl IssuedSession {
     fn issue(session: String) -> Self {
         let access_token = random_hex(32);
         let refresh_token = random_hex(48);
+        let expiry = now_ms() + ACCESS_TTL.as_millis() as i64;
         match access_tokens().lock() {
             Ok(mut table) => {
-                table.insert(access_token.clone(), (session.clone(), Instant::now() + ACCESS_TTL));
+                table.insert(sha256_hex(&access_token), (session.clone(), expiry));
+                persist_access_tokens(&mut table);
             }
             Err(poisoned) => {
-                poisoned
-                    .into_inner()
-                    .insert(access_token.clone(), (session.clone(), Instant::now() + ACCESS_TTL));
+                let mut table = poisoned.into_inner();
+                table.insert(sha256_hex(&access_token), (session.clone(), expiry));
+                persist_access_tokens(&mut table);
             }
         }
         match refresh_tokens().lock() {
@@ -420,13 +514,11 @@ impl IssuedSession {
             }
         }
         Self {
-            access_cookie: format!(
-                "{ACCESS_COOKIE}={access_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
-                ACCESS_TTL.as_secs()
-            ),
-            refresh_cookie: format!(
-                "{REFRESH_COOKIE}={refresh_token}; Path=/api/panel; HttpOnly; SameSite=Lax; Max-Age={}",
-                REFRESH_TTL.as_secs()
+            access_cookie: issue_cookie(ACCESS_COOKIE, &access_token, ACCESS_TTL.as_secs() as i64),
+            refresh_cookie: issue_cookie(
+                REFRESH_COOKIE,
+                &refresh_token,
+                REFRESH_TTL.as_secs() as i64,
             ),
             access_token,
             refresh_token,
@@ -551,13 +643,15 @@ pub fn session_valid(headers: &HeaderMap) -> bool {
     if tokens.is_empty() {
         return false;
     }
-    let now = Instant::now();
+    let now = now_ms();
     let mut table = match access_tokens().lock() {
         Ok(table) => table,
         Err(poisoned) => poisoned.into_inner(),
     };
     table.retain(|_, (_, expiry)| *expiry > now);
-    tokens.iter().any(|token| table.contains_key(token))
+    tokens
+        .iter()
+        .any(|token| table.contains_key(&sha256_hex(token)))
 }
 
 /// 本次请求里能看到的 access 指纹（诊断日志用，最多两把 —— 排查「同名 cookie
@@ -653,11 +747,12 @@ pub fn revoke_session(headers: &HeaderMap) {
         Err(poisoned) => poisoned.into_inner(),
     };
     for token in presented_access {
-        table.remove(&token);
+        table.remove(&sha256_hex(&token));
     }
     if let Some(session) = &target_session {
         table.retain(|_, (session_of, _)| session_of != session);
     }
+    persist_access_tokens(&mut table);
 }
 
 /// 把某条会话链签发过的所有 access token 作废（重放检测用）。
@@ -667,6 +762,7 @@ fn revoke_access_of_session(session: &str) {
         Err(poisoned) => poisoned.into_inner(),
     };
     table.retain(|_, (session_of, _)| session_of != session);
+    persist_access_tokens(&mut table);
 }
 
 /// `Cookie` 头里某个名字的**全部**取值（按上行顺序）。
@@ -820,7 +916,7 @@ pub fn set_v1_fail_closed(on: bool) {
     V1_FAIL_CLOSED.store(on, Ordering::Relaxed);
 }
 
-// 注意：`panelAdmin` / `panelTokens` 两个 kv 键已登记进
+// 注意：`panelAdmin` / `panelTokens` / `panelAccessSessions` 三个 kv 键已登记进
 // `db::schema::RESERVED_KV_KEYS`（配置写侧据它排除）—— 新增键时必须两处
 // 同步，否则用户改一次配置就会把管理员与令牌静默删掉。
 
@@ -1069,5 +1165,110 @@ mod credential_candidate_tests {
             &format!("{ACCESS_COOKIE}={foreign_access}"),
             &[]
         )));
+    }
+}
+
+#[cfg(test)]
+mod session_lifecycle_tests {
+    //! 面板会话的两条生命线：**落得回**（重启不把人踢下线）与**清得掉**
+    //! （失效的 cookie 不会每次开页都被带回来撞 401）。
+    //!
+    //! 两条都是生产读数的直接对应物：access 表原先只在内存，一次容器重启就把
+    //! 所有已登录浏览器打成无效，而 401 又不清 cookie ⇒ 同一把对不上任何登录的
+    //! 指纹两天里出现 51 次。判据都写成「旧实现必红」的形状。
+
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn cookie_header(access_token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_str(&format!("{ACCESS_COOKIE}={access_token}")).unwrap(),
+        );
+        headers
+    }
+
+    /// 一条 Set-Cookie 里的 Path 属性（没有就 None）—— 签发与清除的比对点。
+    fn path_of(cookie: &str) -> Option<&str> {
+        cookie
+            .split(';')
+            .map(str::trim)
+            .find_map(|part| part.strip_prefix("Path=").map(str::trim))
+    }
+
+    /// 签发的会话载回后仍然有效（= 重启不再把人踢下线）。
+    ///
+    /// 这条钉的是**键的一致性**：表从「裸令牌为键」改成「sha256 为键」时，只要
+    /// 签发侧与查找侧有一边忘了换，这里就红（而 `session_valid` 自己看不出 ——
+    /// 它只是查不到，症状与「令牌真的过期」一模一样）。
+    #[test]
+    fn an_issued_session_survives_a_reload() {
+        let issued = IssuedSession::new_session();
+        let table = access_tokens().lock().unwrap().clone();
+        let dumped = serde_json::to_string(&access_records(&table, now_ms())).unwrap();
+        let reloaded =
+            access_table_from(serde_json::from_str::<Vec<AccessRecord>>(&dumped).unwrap(), now_ms());
+        assert!(
+            reloaded.contains_key(&sha256_hex(&issued.access_token)),
+            "载回的表必须按 sha256 认得这把令牌"
+        );
+        // 内存表换载回的那份后，判定照旧为真（这里不写全局表，避免与并发用例互踩）
+        let hash = sha256_hex(&issued.access_token);
+        assert!(reloaded.get(&hash).is_some_and(|(_, expiry)| *expiry > now_ms()));
+        assert!(session_valid(&cookie_header(&issued.access_token)));
+    }
+
+    /// 库里那份是两天前的话，过期条目不能复活（墙钟判据，不是 `Instant`）。
+    #[test]
+    fn expired_records_do_not_come_back() {
+        let expired = vec![AccessRecord {
+            hash: sha256_hex("a-dead-token"),
+            session: "s".to_string(),
+            expires_at: now_ms() - 1,
+        }];
+        assert!(access_table_from(expired, now_ms()).is_empty(), "过期条目不该被载入");
+    }
+
+    /// 落库的只有哈希：整库导出/备份走同一张 kv 表，裸令牌进去等于把可用凭据
+    /// 写成明文文件。
+    #[test]
+    fn stored_records_never_carry_a_raw_token() {
+        let issued = IssuedSession::new_session();
+        let table = access_tokens().lock().unwrap().clone();
+        let dumped = serde_json::to_string(&access_records(&table, now_ms())).unwrap();
+        assert!(dumped.contains(&sha256_hex(&issued.access_token)));
+        assert!(
+            !dumped.contains(&issued.access_token),
+            "落库内容里不能出现裸令牌（那样备份文件就等于凭据文件）"
+        );
+    }
+
+    /// 清除头必须落在**签发时那枚 cookie 的 Path** 上 —— 浏览器删 cookie 要
+    /// 名字与 Path 同时命中。
+    ///
+    /// 旧实现统一写 `Path=/`：access 恰好也是 `/`（清得掉），refresh 签在
+    /// `/api/panel`（永远清不掉）。后果不是"多一枚废 cookie"那么轻 —— 罐里那枚
+    /// 陈旧 refresh 每次 `/api/panel/*` 都被带回来，而活的那把一旦缺席（重启清了
+    /// access、或中转下 localStorage 空桶没带头令牌），`rotate_session` 只能按
+    /// 「已轮换记录」命中它 ⇒ 判重放、整条会话链作废 ⇒ 用户被弹回登录页。
+    /// 这条用例在旧实现下必红（refresh 那对 Path 不相等）。
+    #[test]
+    fn clearing_targets_the_path_each_cookie_was_issued_under() {
+        let issued = IssuedSession::new_session();
+        assert_eq!(
+            path_of(&clear_cookie(ACCESS_COOKIE)),
+            path_of(&issued.access_cookie),
+            "access 的清除 Path 要与签发一致"
+        );
+        assert_eq!(
+            path_of(&clear_cookie(REFRESH_COOKIE)),
+            path_of(&issued.refresh_cookie),
+            "refresh 的清除 Path 要与签发一致（旧实现这里是 / 而签发是 /api/panel）"
+        );
+        // 钉住签发形态本身，免得有人把两条 Path 一起改掉来"让上面相等"
+        assert_eq!(path_of(&issued.refresh_cookie), Some("/api/panel"));
+        assert_eq!(path_of(&issued.access_cookie), Some("/"));
+        assert!(clear_cookie(ACCESS_COOKIE).contains("Max-Age=0"));
     }
 }
