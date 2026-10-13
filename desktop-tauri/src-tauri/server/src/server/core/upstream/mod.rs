@@ -48,6 +48,7 @@
 pub mod aggregate;
 pub mod cancellation;
 pub mod connections;
+pub mod continuation;
 pub mod refusal;
 pub mod request;
 mod payload;

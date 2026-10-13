@@ -37,6 +37,7 @@ use serde_json::{json, Value};
 use crate::server::core::key_scope::KeyScope;
 use crate::server::core::protocol::{anthropic, responses};
 use crate::server::core::upstream::cancellation;
+use crate::server::core::upstream::continuation::{self, Continuation};
 use crate::server::core::upstream::usage::RequestTelemetry;
 use crate::server::core::upstream::{ForwardOutcome, ForwardRequest};
 use crate::server::errors::GatewayError;
@@ -85,6 +86,20 @@ async fn forward_chat(
     scope: Option<KeyScope>,
     telemetry: Arc<RequestTelemetry>,
 ) -> Result<ForwardOutcome, GatewayError> {
+    // 自动续写的上下文（开关 `autoContinue` **默认关**，关着时不做任何 clone）。
+    // 放在这条公共前半段里是有意的：两个协议入口都走这里，而此刻 `payload`
+    // 已经是 **Chat 形态**（`chat_from_responses` / `chat_from_anthropic` 之后），
+    // 续写要追加的 assistant / user 两个回合只在 Chat 形态上有定义 ——
+    // 到下游协议那层再拼就把同一条判据写成了两份。
+    let continuation = continuation::plan().map(|max_rounds| Continuation {
+        service: state.upstream().clone(),
+        base_body: payload.clone(),
+        stream,
+        client_headers: client_headers.clone(),
+        telemetry: telemetry.clone(),
+        allowed_providers: scope.clone(),
+        max_rounds,
+    });
     let outcome = state
         .upstream()
         .forward(ForwardRequest {
@@ -101,7 +116,18 @@ async fn forward_chat(
             ignore_model_gate: false,
         })
         .await;
-    outcome
+    // 续写包装：流式在下游状态机接手之前把整条流换掉（终止帧必须在
+    // `ResponsesStream` / `AnthropicStream` 看到它之前就压住，否则机器会提前
+    // 收尾、后续轮的内容整段被丢）；非流式则在这里把聚合体问完整。
+    match (continuation, outcome) {
+        (Some(context), Ok(ForwardOutcome::Stream { status, stream })) => {
+            Ok(ForwardOutcome::Stream { status, stream: context.stream(stream) })
+        }
+        (Some(context), Ok(ForwardOutcome::Completion { body })) => {
+            Ok(ForwardOutcome::Completion { body: context.complete(body).await })
+        }
+        (_, result) => result,
+    }
 }
 
 // ─── POST /v1/responses ─────────────────────────────────────
