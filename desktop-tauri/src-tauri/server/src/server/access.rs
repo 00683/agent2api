@@ -34,23 +34,38 @@ use axum::http::HeaderMap;
 
 use crate::server::db::Db;
 
-/// 会话 cookie 名（access，面板登录后由浏览器自动携带；登出清 cookie 用同一名字）
+/// 会话 cookie 名：**一枚装两段**（`agent2api-panel=<access>.<refresh>`）。
+///
+/// ── 为什么合成一枚 ─────────────────────────────────────────
+/// 登录/刷新原先发**两条** `Set-Cookie`（access 在 `Path=/`、refresh 在
+/// `Path=/api/panel`）。宿主中转（fnOS docker 管理页那一类）会把多条同名响应头
+/// 按逗号拼成一条，于是属性被降级成 cookie 名 —— 现场读数里罐子上行的是
+/// `path|domain|max-age|mode|session|version|expires` 这一堆，而新会话的值根本没
+/// 按 `/` 落进罐里。后果是每次经中转开面板都要重登：生产一手读数是同一把
+/// 对不上任何登录的僵尸指纹两天里出现 63 次。
+/// **一条 Set-Cookie 没有可拼的对象**，属性不会被吞，cookie 通道自己就站得住；
+/// 也就不必再依赖 localStorage（那台设备的 `凭证头=无` 是常态）。
+///
+/// ── 代价（有意接受）───────────────────────────────────────
+/// refresh 的 Path 从 `/api/panel` 扩到 `/`：这一枚里同时装着轮换凭据。
+/// 这个源只服务网关自己的面板与 `/v1/*`，且 access 本来就在 `/`，扩出去的增量
+/// 面是「同源下别的可读路径」；而换到的是「经中转打开面板不再每次重登」。
+/// 寿命取 refresh（30 天）：access 的生死由服务端会话表判（`AccessRecord` 的墙钟
+/// 过期），cookie 只是载体 —— 过期后浏览器照样带着、服务端判无效、走 refresh，
+/// 与头令牌模式同一套语义。
 pub const ACCESS_COOKIE: &str = "agent2api-panel";
-/// 刷新 cookie 名（path 限定在 /api/panel，缩小暴露面 —— 照 OmniProxy 的做法）
-pub const REFRESH_COOKIE: &str = "agent2api-panel-rt";
+/// 一枚 cookie 里两段的分隔符。两段都是 `random_hex`，十六进制里不含点，
+/// 所以 `split_once('.')` 是精确切分，不需要转义。
+const TOKEN_SEP: char = '.';
 /// 会话传输探测 cookie（90 天寿命）：登录页连打两发 `/api/panel/cookie-probe`
-/// 测「这个环境里 cookie 能不能往返」。中转入口（fnOS docker 管理页这类）下发/
-/// 回带都活不成，探测失败时前端才显式要求令牌进响应体（见 api::panel::cookie_probe
-/// 与 panel::issue_response）。它不关联任何会话，服务端只比对值、不认会话。
+/// 测「这个环境里 cookie 能不能往返」。中转入口下发/回带都活不成，探测失败时
+/// 前端才显式要求令牌进响应体（见 api::panel::cookie_probe 与 panel::issue_response）。
+/// 它不关联任何会话，服务端只比对值、不认会话。
+///
+/// **只留一枚**：探针要预测的是登录响应那趟 `Set-Cookie` 的命运，而登录响应现在
+/// 也只发一条 —— 判据的形状必须和被预测的对象一致（原来种两枚正是因为登录发两条；
+/// 合成一枚之后两枚探针反而会误报「通道好」）。
 pub const PROBE_COOKIE: &str = "agent2api-panel-probe";
-/// 探针的**第二枚** cookie —— 它存在的唯一理由：探针要测的是「面板登录那趟响应
-/// 的 cookie 能不能存下」，而登录响应发的是**两条** `Set-Cookie`（access + refresh）。
-/// 只种一条的探针预测不了两条的命运：实测 2026-09-29 那台中转把单条 Set-Cookie
-/// 原样透传（探针值比对通过 → 服务端判「cookie 通道完好」→ 令牌不进响应体），
-/// 却把登录响应的两条按逗号拼成一条，`Path=/` 从属性降级成一个叫 `path` 的 cookie，
-/// 新会话没按 `/` 落进罐里，浏览器下一趟带的还是上一轮那把陈值 —— 于是"登录成功
-/// 却被弹回"。**判据的形状必须和被预测的对象一致**：两条都往返才算通道好。
-pub const PROBE_COOKIE_SECOND: &str = "agent2api-panel-probe-b";
 
 /// access token 有效期（短效）
 const ACCESS_TTL: Duration = Duration::from_secs(2 * 3600);
@@ -438,25 +453,24 @@ fn persist_refresh_tokens(table: &mut Vec<RefreshRecord>) {
 
 // ── 会话签发 / 校验 / 轮换 / 撤销 ─────────────────────────────
 
-/// 一次登录的产出：两段 Set-Cookie 值交给 handler 下发；裸令牌同时进响应体
-/// （Cookie 在「反代/嵌入面板」环境会丢，见 `session_valid` 的头回退说明）。
+/// 一次登录的产出：**一条** Set-Cookie 值交给 handler 下发（一枚装两段，
+/// 见 `ACCESS_COOKIE` 的说明）；裸令牌同时进响应体，供 cookie 走不通的环境
+/// 存 localStorage 后走请求头（见 `session_valid` 的头回退说明）。
 pub struct IssuedSession {
-    pub access_cookie: String,
-    pub refresh_cookie: String,
+    pub session_cookie: String,
     pub access_token: String,
     pub refresh_token: String,
 }
 
-/// 两枚 cookie 各自的 Path（签发与清除都必须走它 —— 见 `clear_cookie`）。
-fn cookie_path(name: &str) -> &'static str {
-    if name == REFRESH_COOKIE { "/api/panel" } else { "/" }
-}
-
-/// 一条签发用的 `Set-Cookie` 值。
-fn issue_cookie(name: &str, value: &str, max_age: i64) -> String {
+/// 一条签发用的 `Set-Cookie` 值：`agent2api-panel=<access>.<refresh>`。
+///
+/// Path 恒为 `/`、`HttpOnly`、`SameSite=Lax`；`Max-Age` 取 refresh 的寿命
+/// （access 的过期由服务端表判，cookie 只是载体 —— 让它跟着 access 两小时消失
+/// 会把长效轮换凭据一起带走）。
+fn issue_cookie(access_token: &str, refresh_token: &str) -> String {
     format!(
-        "{name}={value}; Path={}; HttpOnly; SameSite=Lax; Max-Age={max_age}",
-        cookie_path(name)
+        "{ACCESS_COOKIE}={access_token}{TOKEN_SEP}{refresh_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        REFRESH_TTL.as_secs()
     )
 }
 
@@ -465,15 +479,32 @@ fn issue_cookie(name: &str, value: &str, max_age: i64) -> String {
 /// Path 必须与签发时**逐字相同** —— 浏览器删 cookie 要名字与 Path 同时命中。
 /// 从前这里两处都写死 `Path=/`，而 refresh cookie 签在 `Path=/api/panel` 下，
 /// 于是它从来没被删掉过：每台设备的罐子里都攒着一枚陈旧 refresh，每次
-/// `/api/panel/*` 都把它带回来。而活的那把一旦不在候选里（重启清了 access、
-/// 或中转下 localStorage 空桶 ⇒ 头令牌也没了），`rotate_session` 就只能按
-/// 「已轮换的记录」命中这枚陈旧的 ⇒ 判重放、整条会话链作废 ⇒ 用户被弹回登录页。
-/// 这是「过期 cookie 为什么反复出现」的直接成因之一。
-pub fn clear_cookie(name: &str) -> String {
-    format!(
-        "{name}=; Path={}; HttpOnly; SameSite=Lax; Max-Age=0",
-        cookie_path(name)
-    )
+/// `/api/panel/*` 都把它带回来；而活的那把一旦不在候选里，`rotate_session`
+/// 就只能按「已轮换的记录」命中这枚陈旧的 ⇒ 判重放、整条会话链作废 ⇒ 用户被
+/// 弹回登录页。这是「过期 cookie 为什么反复出现」的直接成因之一。
+/// 现在只有一枚会话 cookie、只有一个 Path，这类"另一格清不掉"的形状不存在了。
+pub fn clear_cookie() -> String {
+    format!("{ACCESS_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+}
+
+/// 从一枚会话 cookie 的值里拆出 (access, refresh)。
+///
+/// 带分隔符的必须**两段都非空**，否则两侧都不算：`a.` / `.b` / `.` 这类形状是
+/// 中转把响应拼歪之后留下的碎片，喂进候选只会让判定去比一把根本不存在的凭据
+/// （判据要宁缺毋滥 —— 空串在 `cookie_values` 那一步已经被滤掉了，碎片没有）。
+///
+/// 没有分隔符的值（升级前那版留下的裸 access）只当 access 候选：它要么在服务端
+/// 表里还活着（那就正常续用，代价是这一趟没有 cookie 侧的 refresh，头令牌仍在候选里），
+/// 要么已经不活（下一次 401 会被 `clear_cookie` 清掉）。不值得为此留一套双格式框架。
+fn split_session_cookie(value: &str) -> (Option<&str>, Option<&str>) {
+    if let Some((access, refresh)) = value.split_once(TOKEN_SEP) {
+        return if access.is_empty() || refresh.is_empty() {
+            (None, None)
+        } else {
+            (Some(access), Some(refresh))
+        };
+    }
+    if value.is_empty() { (None, None) } else { (Some(value), None) }
 }
 
 impl IssuedSession {
@@ -514,12 +545,7 @@ impl IssuedSession {
             }
         }
         Self {
-            access_cookie: issue_cookie(ACCESS_COOKIE, &access_token, ACCESS_TTL.as_secs() as i64),
-            refresh_cookie: issue_cookie(
-                REFRESH_COOKIE,
-                &refresh_token,
-                REFRESH_TTL.as_secs() as i64,
-            ),
+            session_cookie: issue_cookie(&access_token, &refresh_token),
             access_token,
             refresh_token,
         }
@@ -591,38 +617,59 @@ fn bearer_tokens_of(headers: &HeaderMap) -> Vec<String> {
 /// 直连那次登录留下的旧值。
 ///
 /// 此时**唯一**还能救回这条会话的是请求头令牌，而头令牌只在「令牌进响应体」模式
-/// 下存在（见 `api::panel::issue_response`）。所以这里的改动必须与探针改造
-/// （`cookie_probe` 种**两枚** cookie，一次测出合并型中转）配套：探针把环境判成
-/// 中转 → 客户端拿到 body 里的令牌并带头 → 服务端**不许**再被罐里那把陈旧 cookie
-/// 短路。只改一侧的结果是「探针判通了但 cookie 存歪」的老死循环，或「带了头却
-/// 永远轮不到试」。
+/// 下存在（见 `api::panel::issue_response`）。所以这里的改动必须与探针配套：探针把
+/// 环境判成中转 → 客户端拿到 body 里的令牌并带头 → 服务端**不许**再被罐里那把陈旧
+/// cookie 短路。只改一侧的结果是「探针判通了但 cookie 存歪」的老死循环，或「带了头
+/// 却永远轮不到试」。
+///
+/// 上面那条**拼接**成因后来被从源头消掉了：登录/刷新改为只发**一枚**会话 cookie
+/// （access 与 refresh 装进同一枚，见 `ACCESS_COOKIE`），一条 Set-Cookie 没有可拼
+/// 的对象；探针也随之回到一枚 —— 判据的形状要和被预测的对象一致，现在要预测的就是
+/// 一条。「同名 cookie 可能有几格」这条判定照旧留着：罐里那些升级前存下的陈值不会
+/// 自己消失，穷尽候选仍是正确形态。
 ///
 /// cookie 仍然排在头前面：中转哪天修好了，用户回到直连 cookie 登录，localStorage
 /// 里那条早已作废的旧链令牌不该抢跑（它验证不过，自然也不再影响判定 —— 判定看的是
 /// 「有没有一把有效」，不是「第一把是谁」）。
 fn access_candidates(headers: &HeaderMap) -> Vec<String> {
     dedup(
-        cookie_values(headers, ACCESS_COOKIE)
+        session_cookie_halves(headers)
             .into_iter()
+            .filter_map(|half| half.0)
             .chain(access_header_tokens(headers))
             .collect(),
     )
 }
 
 /// refresh 凭据的**全部候选**，顺序与 `access_candidates` 同形
-/// （同名 cookie 每个值 → `x-panel-refresh` → Bearer）。
+/// （会话 cookie 的每一条的第二段 → `x-panel-refresh` → Bearer）。
 ///
 /// 与 access 共用一份「为什么不再短路」的理由：轮换请求同样会被罐里那把旧
 /// refresh 短路，结果是把活链旁边的僵尸链拿去轮换 —— 撞上重放检测，整链作废，
 /// 用户被迫重登（这条路径此前只在日志里见过"登录已过期"，没人看得出是被短路）。
 pub fn refresh_candidates(headers: &HeaderMap) -> Vec<String> {
     dedup(
-        cookie_values(headers, REFRESH_COOKIE)
+        session_cookie_halves(headers)
             .into_iter()
+            .filter_map(|half| half.1)
             .chain(named_header_tokens(headers, "x-panel-refresh"))
             .chain(bearer_tokens_of(headers))
             .collect(),
     )
+}
+
+/// 罐里**每一枚**会话 cookie 各自拆成 (access, refresh)。
+///
+/// 逐条拆（不是只取第一条）是必须的：合并型中转会在同名下留下多格，其中一格
+/// 是新会话、另一格是陈值；只取第一条等于看运气。
+fn session_cookie_halves(headers: &HeaderMap) -> Vec<(Option<String>, Option<String>)> {
+    cookie_values(headers, ACCESS_COOKIE)
+        .iter()
+        .map(|value| {
+            let (access, refresh) = split_session_cookie(value);
+            (access.map(str::to_string), refresh.map(str::to_string))
+        })
+        .collect()
 }
 
 fn dedup(values: Vec<String>) -> Vec<String> {
@@ -946,39 +993,63 @@ mod credential_candidate_tests {
         headers
     }
 
+    /// 会话 cookie 的上行文本（一枚装两段，与 `issue_cookie` 的形状同源）。
+    fn session_cookie(session: &IssuedSession) -> String {
+        format!(
+            "{ACCESS_COOKIE}={}.{}",
+            session.access_token, session.refresh_token
+        )
+    }
+
+    /// 只带 refresh 段的会话 cookie（access 那一段故意是废值）——
+    /// 让轮换类用例能只喂 refresh 而不顺带把 access 也判过。
+    fn refresh_only_cookie(token: &str) -> String {
+        format!("{ACCESS_COOKIE}=not-a-live-access.{token}")
+    }
+
     /// 候选顺序：同名 cookie 的每个值 → `x-panel-refresh` → Bearer，去重。
     ///
     /// cookie 仍在最前（直连环境的判定与从前同序）；改动只发生在「第一把无效时
-    /// 不许就此收摊」。
+    /// 不许就此收摊」。cookie 侧取的是**一枚会话 cookie 的第二段**（refresh）。
     #[test]
     fn candidates_are_cookie_values_first_then_headers_and_deduplicated() {
         let headers = request(
-            "agent2api-panel-rt=from-cookie-a; x=1; agent2api-panel-rt=from-cookie-b",
+            "agent2api-panel=acc-a.rt-a; x=1; agent2api-panel=acc-b.rt-b",
             &[("x-panel-refresh", "from-header"), ("authorization", "Bearer from-bearer")],
         );
         assert_eq!(
             vec![
-                "from-cookie-a".to_string(),
-                "from-cookie-b".to_string(),
+                "rt-a".to_string(),
+                "rt-b".to_string(),
                 "from-header".to_string(),
                 "from-bearer".to_string(),
             ],
             refresh_candidates(&headers)
         );
+        // 同一条 cookie 的第一段进 access 候选、第二段进 refresh 候选，不串门
+        let halves = request("agent2api-panel=acc-a.rt-a", &[]);
+        assert_eq!(vec!["acc-a".to_string()], access_candidates(&halves));
 
         // 同一把既在 cookie 又在头里：只试一次
-        let once = request(
-            "agent2api-panel-rt=same",
-            &[("x-panel-refresh", "same")],
-        );
+        let once = request("agent2api-panel=acc.same", &[("x-panel-refresh", "same")]);
         assert_eq!(vec!["same".to_string()], refresh_candidates(&once));
 
         // 空值不进候选（`name=` 是拼歪的 Set-Cookie 留下的碎片，不是凭据）
-        let blanks = request("agent2api-panel-rt=;", &[("x-panel-refresh", "   ")]);
+        let blanks = request("agent2api-panel=;", &[("x-panel-refresh", "   ")]);
         assert!(refresh_candidates(&blanks).is_empty());
+        // 半个配对也是碎片（中转把响应拼歪之后就是这种形状）：两侧都不进候选
+        for broken in ["agent2api-panel=.", "agent2api-panel=acc.", "agent2api-panel=.rt"] {
+            let headers = request(broken, &[]);
+            assert!(access_candidates(&headers).is_empty(), "{broken} 不该贡献 access 候选");
+            assert!(refresh_candidates(&headers).is_empty(), "{broken} 不该贡献 refresh 候选");
+        }
     }
 
     /// access 侧同一条序（cookie → x-panel-token → Bearer）。
+    ///
+    /// 前两把写成"只有一段"的形状是**有意的**：升级前那版罐子里留下的裸 access
+    /// 值也要能被读出来（`split_session_cookie` 的那条回退），否则升级会把还活着
+    /// 的会话无谓地踢掉一次。合成一枚之后的正常形状见下一条用例。
     #[test]
     fn access_candidates_follow_the_same_order() {
         let headers = request(
@@ -994,6 +1065,18 @@ mod credential_candidate_tests {
             ],
             access_candidates(&headers)
         );
+    }
+
+    /// 一枚装两段的正常形状：第一段是 access 候选，且这条 cookie 同时也贡献 refresh。
+    #[test]
+    fn one_cookie_feeds_both_sides() {
+        let session = IssuedSession::new_session();
+        let text = session_cookie(&session);
+        // 与签发侧同源：会话 cookie 的文本必须就是 `issue_cookie` 造出来的那条
+        assert_eq!(text, session.session_cookie.split(';').next().unwrap().to_string());
+        assert_eq!(vec![session.access_token.clone()], access_candidates(&request(&text, &[])));
+        assert_eq!(vec![session.refresh_token.clone()], refresh_candidates(&request(&text, &[])));
+        assert!(session_valid(&request(&text, &[])), "一枚 cookie 就该把会话撑起来");
     }
 
     /// 本次事故的正对照（2026-09-29，fnOS :5666 中转）：罐里盖着一把**陈年**同名
@@ -1066,37 +1149,25 @@ mod credential_candidate_tests {
     #[test]
     fn rotation_skips_a_rotated_stale_refresh_to_the_live_one() {
         let first = IssuedSession::new_session();
-        let second = rotate_session(
-            &request(&format!("{REFRESH_COOKIE}={}", first.refresh_token), &[]),
-        )
-        .expect("首次轮换应成功");
+        let second = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]))
+            .expect("首次轮换应成功");
         assert!(
-            session_valid(&request(
-                &format!("{ACCESS_COOKIE}={}", second.access_token),
-                &[]
-            )),
+            session_valid(&request(&session_cookie(&second), &[])),
             "轮换签发的 access 应进会话表（否则后面的断言都在真空里跑）"
         );
 
         // 现在 first.refresh 是「已轮换」记录，second.refresh 是活链。
-        // 罐里若还留着 first 那把（Path=/ 的残本）并排在其前，旧实现会命中它、
+        // 罐里若还留着 first 那把（同名残本）并排在其前，旧实现会命中它、
         // 判重放、整链作废 → 返回 None → 用户被迫重登。
         let mixed = request(
-            &format!("{REFRESH_COOKIE}={}", first.refresh_token),
+            &refresh_only_cookie(&first.refresh_token),
             &[("x-panel-refresh", &second.refresh_token)],
         );
         let third = rotate_session(&mixed).expect("陈旧那把不该挡住活链的轮换");
 
         // 链仍然连着：新签发的 access 有效、新 refresh 还能再轮换一次
-        assert!(session_valid(&request(
-            &format!("{ACCESS_COOKIE}={}", third.access_token),
-            &[]
-        )));
-        assert!(rotate_session(&request(
-            &format!("{REFRESH_COOKIE}={}", third.refresh_token),
-            &[]
-        ))
-        .is_some());
+        assert!(session_valid(&request(&session_cookie(&third), &[])));
+        assert!(rotate_session(&request(&session_cookie(&third), &[])).is_some());
     }
 
     /// 重放检测没被削弱：只拿**已轮换**的旧令牌来换（没有一把活的在场），
@@ -1104,31 +1175,20 @@ mod credential_candidate_tests {
     #[test]
     fn a_replayed_refresh_alone_still_kills_its_chain() {
         let first = IssuedSession::new_session();
-        let second = rotate_session(
-            &request(&format!("{REFRESH_COOKIE}={}", first.refresh_token), &[]),
-        )
-        .expect("首次轮换应成功");
+        let second = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]))
+            .expect("首次轮换应成功");
 
         // 旧令牌单独上行 → 判重放，None
-        let replayed = rotate_session(
-            &request(&format!("{REFRESH_COOKIE}={}", first.refresh_token), &[]),
-        );
+        let replayed = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]));
         assert!(replayed.is_none(), "已轮换令牌单独来换必须判重放");
 
         // 同链的**活**令牌也应随之作废（整链撤销）—— 这一条才是「整链」二字的意思
         assert!(
-            rotate_session(&request(
-                &format!("{REFRESH_COOKIE}={}", second.refresh_token),
-                &[]
-            ))
-            .is_none(),
+            rotate_session(&request(&session_cookie(&second), &[])).is_none(),
             "重放检测应作废整条会话链"
         );
         assert!(
-            !session_valid(&request(
-                &format!("{ACCESS_COOKIE}={}", second.access_token),
-                &[]
-            )),
+            !session_valid(&request(&session_cookie(&second), &[])),
             "该链签发过的 access 要一并作废"
         );
     }
@@ -1139,18 +1199,14 @@ mod credential_candidate_tests {
         let session = IssuedSession::new_session();
         let foreign_access = random_hex(32);
         let headers = request(
-            &format!("{REFRESH_COOKIE}={}", session.refresh_token),
+            &session_cookie(&session),
             &[("x-panel-token", &session.access_token)],
         );
         assert!(session_valid(&headers));
         revoke_session(&headers);
 
         // 链没了：refresh 换不出新令牌，access 也不再有效
-        assert!(rotate_session(&request(
-            &format!("{REFRESH_COOKIE}={}", session.refresh_token),
-            &[]
-        ))
-        .is_none());
+        assert!(rotate_session(&request(&session_cookie(&session), &[])).is_none());
         assert!(!session_valid(&request(
             &format!("{ACCESS_COOKIE}={}", session.access_token),
             &[]
@@ -1180,13 +1236,19 @@ mod session_lifecycle_tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderValue};
 
-    fn cookie_header(access_token: &str) -> HeaderMap {
+    /// 上行 Cookie 头（值是整枚会话 cookie 的内容）。
+    fn cookie_header(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::COOKIE,
-            HeaderValue::from_str(&format!("{ACCESS_COOKIE}={access_token}")).unwrap(),
+            HeaderValue::from_str(&format!("{ACCESS_COOKIE}={value}")).unwrap(),
         );
         headers
+    }
+
+    /// 一枚会话 cookie 的值（与 `issue_cookie` 同形）—— 用例按它拼上行文本。
+    fn cookie_value(session: &IssuedSession) -> String {
+        format!("{}.{}", session.access_token, session.refresh_token)
     }
 
     /// 一条 Set-Cookie 里的 Path 属性（没有就 None）—— 签发与清除的比对点。
@@ -1216,7 +1278,7 @@ mod session_lifecycle_tests {
         // 内存表换载回的那份后，判定照旧为真（这里不写全局表，避免与并发用例互踩）
         let hash = sha256_hex(&issued.access_token);
         assert!(reloaded.get(&hash).is_some_and(|(_, expiry)| *expiry > now_ms()));
-        assert!(session_valid(&cookie_header(&issued.access_token)));
+        assert!(session_valid(&cookie_header(&cookie_value(&issued))));
     }
 
     /// 库里那份是两天前的话，过期条目不能复活（墙钟判据，不是 `Instant`）。
@@ -1244,31 +1306,50 @@ mod session_lifecycle_tests {
         );
     }
 
-    /// 清除头必须落在**签发时那枚 cookie 的 Path** 上 —— 浏览器删 cookie 要
-    /// 名字与 Path 同时命中。
+    /// **一条** `Set-Cookie` 装下整条会话，清除也落在同一条上。
     ///
-    /// 旧实现统一写 `Path=/`：access 恰好也是 `/`（清得掉），refresh 签在
-    /// `/api/panel`（永远清不掉）。后果不是"多一枚废 cookie"那么轻 —— 罐里那枚
-    /// 陈旧 refresh 每次 `/api/panel/*` 都被带回来，而活的那把一旦缺席（重启清了
-    /// access、或中转下 localStorage 空桶没带头令牌），`rotate_session` 只能按
-    /// 「已轮换记录」命中它 ⇒ 判重放、整条会话链作废 ⇒ 用户被弹回登录页。
-    /// 这条用例在旧实现下必红（refresh 那对 Path 不相等）。
+    /// 三个判据都是症状面的（合并型中转的现场教训）：
+    ///   · 签发只有**一枚** cookie —— 两条 `Set-Cookie` 会被中转按逗号拼成一条，
+    ///     属性降级成名为 `path|domain|max-age|expires` 的 cookie，新会话存不进罐子
+    ///     （经中转开面板每次都要重登，生产一手读数：同一把僵尸指纹两天出现 63 次）；
+    ///   · Path 与清除头逐字一致 —— 浏览器删 cookie 要名字与 Path 同时命中，
+    ///     从前 refresh 签在 `/api/panel` 而清除写 `/`，那枚从来没被删掉过；
+    ///   · 一枚里两段都在（access 与 refresh），否则轮换链跟不到人。
+    /// 旧实现这三条里至少红两条（两条 Set-Cookie、refresh 的 Path 不相等）。
     #[test]
-    fn clearing_targets_the_path_each_cookie_was_issued_under() {
+    fn one_cookie_carries_the_whole_session_and_clearing_targets_it() {
         let issued = IssuedSession::new_session();
-        assert_eq!(
-            path_of(&clear_cookie(ACCESS_COOKIE)),
-            path_of(&issued.access_cookie),
-            "access 的清除 Path 要与签发一致"
+        // 一条：名字只有一个，属性段不再夹第二个 cookie
+        let (pair, attributes) = issued.session_cookie.split_once("; ").expect("至少带 Path 属性");
+        assert!(
+            pair.contains('.'),
+            "会话 cookie 必须是 access.refresh 两段的形状，实得 {pair}"
+        );
+        assert!(
+            pair.starts_with(&format!("{ACCESS_COOKIE}=")),
+            "cookie 名要还是那一个，实得 {pair}"
+        );
+        assert!(
+            !issued.session_cookie.contains(','),
+            "一条 Set-Cookie 里不该有逗号 —— 逗号正是合并型中转拼出来的形状"
+        );
+        assert!(attributes.contains("Path=/"));
+        assert!(attributes.contains("HttpOnly"));
+        assert!(attributes.contains("SameSite=Lax"));
+        assert!(
+            attributes.contains(&format!("Max-Age={}", REFRESH_TTL.as_secs())),
+            "寿命取 refresh：access 的过期由服务端会话表判，cookie 只是载体"
         );
         assert_eq!(
-            path_of(&clear_cookie(REFRESH_COOKIE)),
-            path_of(&issued.refresh_cookie),
-            "refresh 的清除 Path 要与签发一致（旧实现这里是 / 而签发是 /api/panel）"
+            path_of(&clear_cookie()),
+            path_of(&issued.session_cookie),
+            "清除 Path 必须与签发一致"
         );
-        // 钉住签发形态本身，免得有人把两条 Path 一起改掉来"让上面相等"
-        assert_eq!(path_of(&issued.refresh_cookie), Some("/api/panel"));
-        assert_eq!(path_of(&issued.access_cookie), Some("/"));
-        assert!(clear_cookie(ACCESS_COOKIE).contains("Max-Age=0"));
+        assert_eq!(path_of(&issued.session_cookie), Some("/"));
+        assert!(clear_cookie().contains(&format!("{ACCESS_COOKIE}=;")));
+        assert!(clear_cookie().contains("Max-Age=0"));
+        // 两段各归各位：第一段撑 access，第二段撑轮换
+        assert!(session_valid(&cookie_header(&cookie_value(&issued))));
+        assert!(rotate_session(&cookie_header(&cookie_value(&issued))).is_some());
     }
 }

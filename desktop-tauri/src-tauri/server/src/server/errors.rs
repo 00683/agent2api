@@ -225,16 +225,14 @@ pub fn panel_login_required_response() -> Response {
         })),
     )
         .into_response();
-    // 401 顺手清掉这一枚无效的 access cookie。**不清才是"反复"的成因**：浏览器
+    // 401 顺手清掉这一枚无效的会话 cookie。**不清才是"反复"的成因**：浏览器
     // 罐子里那枚同名 cookie 每次开页都原样带回来，服务端每次都要重新判一次无效
-    // （生产读数：同一把对不上任何登录的指纹出现了 51 次，横跨两天四个时段）。
-    // 只清 access 这一枚、且只发一条 `Set-Cookie`：合并型中转会把多条拼成一条
-    // （见 `access::session_valid` 的事故记录），两条清除头等于一条都到不了。
-    // refresh 那枚归登出路径清 —— 它在自己的 Path 下，跟着这次 401 一起发只会
-    // 撞上拼接（且 rotate 对"陈旧 refresh"另有判定，不靠删 cookie 兜）。
-    if let Ok(value) = axum::http::HeaderValue::from_str(&crate::server::access::clear_cookie(
-        crate::server::access::ACCESS_COOKIE,
-    )) {
+    // （生产读数：同一把对不上任何登录的指纹出现了 51 次，横跨两天四个时段；
+    // 后来 dev 上的一条清除头把它从共享罐子里删掉了，两个实例此后都是 0 次）。
+    // 只发一条 `Set-Cookie`：合并型中转会把多条拼成一条（见 `access::session_valid`
+    // 的事故记录），两条清除头等于一条都到不了。会话 cookie 本来就只有一枚
+    // （一枚装两段，见 `access::ACCESS_COOKIE`），一次 401 正好清掉它。
+    if let Ok(value) = axum::http::HeaderValue::from_str(&crate::server::access::clear_cookie()) {
         response
             .headers_mut()
             .append(axum::http::header::SET_COOKIE, value);
