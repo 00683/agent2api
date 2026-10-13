@@ -160,6 +160,25 @@ pub struct RuntimeConfig {
     /// 「适配器声明 × 本开关」两者相与（见
     /// [`crate::server::core::upstream::sse::FramePolicy::assembled`]）。
     strip_newline_keepalive: bool,
+    /// 「长度截断自动续写」开关（`/api/auto-continue`，默认关）。
+    ///
+    /// 与 `strip_newline_keepalive` 同一理由：转发层**每个请求**都要问一次
+    /// 「这一轮要不要包装成续写链」（改完下一个请求就生效，不重启进程），
+    /// 解析一次存下来最省事。判据与代价口径在
+    /// [`crate::server::core::upstream::continuation`]，本模块只存取开关。
+    auto_continue: bool,
+    /// 续写的轮数上限（`autoContinueMaxRounds`，默认 3、合法 1~8）。
+    ///
+    /// 与 `auto_continue` 同一理由（逐请求取一次），且**必须与开关一起解析**：
+    /// 续写链两道停机里这是那道硬保险（相似度闸是软判据），读侧越界回落默认
+    /// （不夹紧），写侧由 `api::auto_continue` 拦成 400 —— 两侧共用
+    /// `AUTO_CONTINUE_MIN/MAX_ROUNDS`。
+    ///
+    /// 出厂值只由 `build()` 给：本结构的 `Default` 是派生的，那个 0 与
+    /// `locale` / `default_model` 那两条派生的空串一样，**都不是出厂值**，
+    /// 只服务 `Debug` 与占位构造（真正读默认值请走 `auto_continue_max_rounds()`
+    /// 那条轻量读取，未初始化时它自己会走 `parse` 的兜底）。
+    auto_continue_max_rounds: i64,
     /// 面板机器人校验开关（设置页「通用 → 机器人校验」，ALTCHA proof-of-work）。
     ///
     /// 与 `debug_mode` 同一理由：登录 / 注册端点逐请求判一次（改完开关下一个
@@ -240,6 +259,18 @@ impl RuntimeConfig {
     /// 「丢弃保活换行分片」开关（与能力位相与后才生效，见字段说明）
     pub fn strip_newline_keepalive(&self) -> bool {
         self.strip_newline_keepalive
+    }
+
+    /// 「长度截断自动续写」开关（判据见
+    /// [`crate::server::core::upstream::continuation`]，见字段说明）
+    pub fn auto_continue(&self) -> bool {
+        self.auto_continue
+    }
+
+    /// 自动续写的轮数上限（解析时已按 `AUTO_CONTINUE_MIN_ROUNDS..=AUTO_CONTINUE_MAX_ROUNDS`
+    /// 收口，见字段说明）
+    pub fn auto_continue_max_rounds(&self) -> i64 {
+        self.auto_continue_max_rounds
     }
 
     /// 面板机器人校验开关（登录 / 注册端点逐请求判一次）。
@@ -483,6 +514,17 @@ fn build(raw: Map<String, Value>) -> RuntimeConfig {
             .get(KEY_STRIP_NEWLINE_KEEPALIVE)
             .and_then(Value::as_bool)
             .unwrap_or_else(env_strip_newline_keepalive),
+        // 只有字面 `true` / `false` 算写了这一项：**默认关**。与上面那条同一取向
+        // （改的是客户端可观测的行为），而代价的方向不同：这里多打的是**上游往返**、
+        // 花的是账号额度，所以更要宁可没开。取值链（文件 > 环境变量
+        // `AGENT2API_AUTO_CONTINUE` > 关）在 `parse::auto_continue_from`，
+        // 与下面那条同一形态 —— 本模块的分工是「读写入口」，口径在 parse.rs。
+        auto_continue: auto_continue_from(&raw),
+        // 轮数上限：文件的合法值 > 环境变量 `AGENT2API_AUTO_CONTINUE_MAX` > 默认 3。
+        // **越界回落而不是夹紧**（与 `bounded_int_field` 全线一致）：写了 99 的人
+        // 该看到自己填的 99 没生效，而不是被悄悄按到 8 —— 后者会让人以为
+        // 「8 轮上限」是系统给的值。
+        auto_continue_max_rounds: auto_continue_rounds_from(&raw),
         // 只有字面 `false` 算关闭：**默认开**。登录 / 注册的暴破与抢注防护
         // 宁可多一道不可少一道（见 KEY_CAPTCHA_ENABLED 的说明）。配置项缺失
         // 时环境变量兜底：登录页人机验证组件环境变量，默认为1开启，0为关闭
@@ -928,6 +970,38 @@ pub fn strip_newline_keepalive() -> bool {
         }
     }
     env_strip_newline_keepalive()
+}
+
+/// 只取「长度截断自动续写」开关的轻量读取（**不克隆整份 raw**）。
+///
+/// 与 [`strip_newline_keepalive`] 同一取舍：转发层**每个请求**都要问一次
+/// 「这一轮要不要装成续写链」，而 `current()` 每调一次就克隆整个 `raw` Map
+/// （含提示词全文那几百行）—— 热路径上没必要。
+/// 未初始化（启动极早期 / 单元测试里没装配过配置）时退回环境变量，与 `current()`
+/// 在同样情形下 `build(空)` 的口径一致；两边都是**默认关**：没被明确开启就不替
+/// 用户多打一次上游。
+pub fn auto_continue() -> bool {
+    if let Ok(guard) = CONFIG.read() {
+        if let Some(config) = guard.as_ref() {
+            return config.auto_continue;
+        }
+    }
+    env_auto_continue()
+}
+
+/// 只取续写轮数上限的轻量读取（**不克隆整份 raw**）。
+///
+/// 与 [`auto_continue`] 同一取舍（逐请求取一次，读锁取一个 `i64` 即可）。
+/// 未初始化时按「文件里没这项 + 环境变量」构造（与 `current()` 的 `build(空)`
+/// 同一条路径，都走 [`auto_continue_rounds_from`]），因此这里的兜底值与快照
+/// 装配出来的值必然一致 —— 不会出现「启动极早期按 3 轮跑、装配完按别的跑」。
+pub fn auto_continue_max_rounds() -> i64 {
+    if let Ok(guard) = CONFIG.read() {
+        if let Some(config) = guard.as_ref() {
+            return config.auto_continue_max_rounds;
+        }
+    }
+    auto_continue_rounds_from(&Map::new())
 }
 
 /// 只取 models.dev 元数据开关的轻量读取（**不克隆整份 raw**）。
@@ -1543,6 +1617,64 @@ pub fn set_strip_newline_keepalive(enabled: bool) -> bool {
     })
 }
 
+// ─── 长度截断的自动续写（autoContinue / autoContinueMaxRounds）────
+
+/// 自动续写两项的**唯一**落盘路径：`None` = 该项不动。
+///
+/// 与 `set_retention` / `set_routing` 同一模式：内存快照与 raw 底稿一起改 ——
+/// 前者让下一个请求立刻用新值（转发层逐请求读快照），后者保证写盘时不吃掉
+/// 配置里的其它字段。
+///
+/// ── 为什么两个公开 setter 都要经过这里 ──────────────────────
+/// 一次 PUT 若拆成两次 `update()`，就是两次「读底稿 → 整份落盘」，中间那次
+/// 失败会留下「开关已开、上限还是旧值」的半套状态，而这两项要一起读才有意义；
+/// 单项写也只让「一次请求写几项」这件事散落在调用方。本函数一次写完，
+/// `set_auto_continue` / `set_auto_continue_max_rounds` 是它的两个单项投影。
+///
+/// 调用方（`api::auto_continue` 与两个公开 setter 的使用者）**必须先校验范围**：
+/// 本函数按「已合法」处理，越界值会被 `auto_continue_rounds_from` 的回读逻辑
+/// 丢弃（那会让用户以为设置生效了）。
+pub fn set_auto_continue_patch(patch: AutoContinuePatch) -> bool {
+    update(|config| {
+        if let Some(enabled) = patch.enabled {
+            config
+                .raw
+                .insert(KEY_AUTO_CONTINUE.to_string(), Value::Bool(enabled));
+            config.auto_continue = enabled;
+        }
+        if let Some(rounds) = patch.max_rounds {
+            config
+                .raw
+                .insert(KEY_AUTO_CONTINUE_MAX_ROUNDS.to_string(), Value::from(rounds));
+            config.auto_continue_max_rounds = rounds;
+        }
+    })
+}
+
+/// 写入「长度截断自动续写」开关。
+///
+/// 与 `set_strip_newline_keepalive` 同一模式（内存立即生效 + raw 底稿一起改），
+/// 开与关都记一条事件日志（见调用点）：开的那一刻起，一次客户端请求可能对应
+/// 多次上游往返、多花一份额度，这件事必须在日志里查得到。
+pub fn set_auto_continue(enabled: bool) -> bool {
+    set_auto_continue_patch(AutoContinuePatch {
+        enabled: Some(enabled),
+        max_rounds: None,
+    })
+}
+
+/// 写入续写的轮数上限（`1..=8`，调用方须已校验）。
+///
+/// 与 [`set_auto_continue_patch`] 同一模式；单独留这个入口是给转发侧与脚本
+/// 场景（只想调预算、不想碰开关），语义与 PUT 里带上
+/// `autoContinueMaxRounds` 一项完全相同 —— 走的是同一条落盘路径。
+pub fn set_auto_continue_max_rounds(rounds: i64) -> bool {
+    set_auto_continue_patch(AutoContinuePatch {
+        enabled: None,
+        max_rounds: Some(rounds),
+    })
+}
+
 /// 写入机器人校验开关（设置页「通用 → 机器人校验」）。
 ///
 /// 与 `set_sanitize_fingerprints` 同一模式：内存立即生效（登录 / 注册端点
@@ -1976,4 +2108,176 @@ fn resolve_dir(raw: Option<&str>, base: &Path) -> PathBuf {
     raw.map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| base.to_path_buf())
+}
+
+#[cfg(test)]
+mod auto_continue_tests {
+    //! 自动续写两项在**本模块**这一层的形状：装配快照的默认值、raw 底稿的
+    //! 不受污染、以及 `set_*` 必须同时写到底稿与解析字段。
+    //!
+    //! ── 为什么钉这三件事 ────────────────────────────────────
+    //!   - **默认值**：网关第一次启动、库里什么都没有时，转发层拿到的必须是
+    //!     「关 + 3 轮」。默认值写反不是「少一个功能」，而是替用户开始多打上游、
+    //!     多花额度；
+    //!   - **不许把默认种进 raw**：`raw` 是写盘底稿，默认值一旦写进去，
+    //!     「用户从未配过」与「用户选了默认」再也分不开 —— 环境变量那一级
+    //!     （语义是「配置里没有这一项时才看它」）随之永久失效；
+    //!   - **两处一起写**：只改 `raw` 会让转发层继续读旧的解析字段（界面上改完、
+    //!     行为不变，要等下次重启才对得上），只改解析字段则这一项根本落不了盘。
+    //!     两种都是「看起来成功」的失败，只能靠读回来才看得见。
+    //!
+    //! ── 为什么用例不操纵进程环境 ────────────────────────────
+    //! `std::env::set_var` 在同一进程里全局可见、并行用例互踩（同类取舍见
+    //! `core::providers::trae::forward::forward_at` 的注释）。所以这里每条断言
+    //! 都写成**与环境变量取值无关**的形式：要么给底稿显式的值（那一级本来就盖过
+    //! 环境变量），要么用「与同一条兜底表达式同值」这种差分形式。
+    //! 「文件值盖过环境变量」那一半在 `parse.rs` 的 `resolve_auto_continue` /
+    //! `resolve_rounds` 用例里钉死。
+
+    use super::*;
+    use serde_json::json;
+
+    /// 全局快照是进程级状态，而 `update()` 是「读整份 → 改 → 写整份」的**非原子**
+    /// 读改写：两条用例并行时，一条的写可能被另一条「读走的旧底稿」整体盖掉。
+    /// 本模块动全局的用例因此串行跑（与 `api::panel` 那把探针槽位锁同一手法）。
+    static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn hold_config() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 一份只含给定几项的原始底稿。
+    fn raw_of(pairs: &[(&str, Value)]) -> Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect()
+    }
+
+    /// 空底稿（全新安装）＝「文件里没这两项」，落点必须是环境变量那一级；
+    /// 环境变量也没设时就是出厂的「关 + 3」，且**一个默认值都不许种进底稿**。
+    ///
+    /// 钉住的写歪：`unwrap_or(true)`（默认开）、上限回落成 0（开着开关却一轮都不续，
+    /// 而面板上看着是「已开启」），以及装配时顺手把默认值写进 `raw`。
+    #[test]
+    fn an_empty_backup_means_off_and_three_rounds_without_seeding_defaults() {
+        let fresh = build(Map::new());
+        // 差分形式：空底稿 ≡ 「文件没给」，那一级只能由环境变量说话
+        assert_eq!(fresh.auto_continue(), env_auto_continue(), "空底稿的开关落点必须只由环境变量决定");
+        assert_eq!(
+            fresh.auto_continue_max_rounds(),
+            auto_continue_rounds_from(&Map::new()),
+            "空底稿的上限落点必须只由环境变量与默认值决定"
+        );
+        if std::env::var_os("AGENT2API_AUTO_CONTINUE").is_none() {
+            assert!(!fresh.auto_continue(), "文件与环境变量都没配 → 必须是关");
+        }
+        if std::env::var_os("AGENT2API_AUTO_CONTINUE_MAX").is_none() {
+            assert_eq!(
+                fresh.auto_continue_max_rounds(),
+                DEFAULT_AUTO_CONTINUE_MAX_ROUNDS,
+                "文件与环境变量都没配 → 必须是默认 3 轮"
+            );
+        }
+        assert!(fresh.raw().is_empty(), "默认值只进解析字段，不许写进写盘底稿");
+    }
+
+    /// 底稿给了值就以它为准 —— 包括「写 `false` 关掉」与「写 1 / 8 这两个边界」。
+    ///
+    /// 钉住的写歪有三条，都是这条链上真会写出来的形状：
+    ///   - `raw.get(key).is_some()` 当开启（或 `!= false` 当开启）：面板上的
+    ///     「关掉」按钮就此失效，库里已经是 false 而行为照旧；
+    ///   - 越界夹紧：写 99 的人看到设置页显示 8，只会以为 8 是系统硬值，
+    ///     而「99 从未生效」这件事再也问不出来；
+    ///   - 类型写坏当成 0 / false：那让「手改了个字符串」与「显式选了下限」分不开。
+    #[test]
+    fn a_value_in_the_backup_is_the_value_that_gets_used() {
+        let on = build(raw_of(&[(KEY_AUTO_CONTINUE, json!(true))]));
+        assert!(on.auto_continue(), "文件写了 true 就必须是开");
+        assert_eq!(
+            on.auto_continue_max_rounds(),
+            auto_continue_rounds_from(&Map::new()),
+            "只写开关没写上限 → 上限走自己那一级，不受开关影响"
+        );
+
+        let off = build(raw_of(&[(KEY_AUTO_CONTINUE, json!(false))]));
+        assert!(!off.auto_continue(), "文件写了 false 就必须是关（关掉要能被表达）");
+
+        for bound in [AUTO_CONTINUE_MIN_ROUNDS, AUTO_CONTINUE_MAX_ROUNDS] {
+            let at_edge = build(raw_of(&[(KEY_AUTO_CONTINUE_MAX_ROUNDS, json!(bound))]));
+            assert_eq!(at_edge.auto_continue_max_rounds(), bound, "边界值 {bound} 必须是可用值");
+        }
+
+        let too_many = build(raw_of(&[(KEY_AUTO_CONTINUE_MAX_ROUNDS, json!(99))]));
+        assert_ne!(too_many.auto_continue_max_rounds(), 99, "越界的值不许原样生效");
+        assert_ne!(
+            too_many.auto_continue_max_rounds(),
+            AUTO_CONTINUE_MAX_ROUNDS,
+            "越界不许夹紧成上限，只能让位给下一级"
+        );
+        assert_eq!(
+            too_many.auto_continue_max_rounds(),
+            build(Map::new()).auto_continue_max_rounds(),
+            "越界的落点必须与「文件没这项」逐字相同"
+        );
+
+        // 类型写坏 = 没配（与读侧全线同一口径），不是「按下限」
+        let junk = build(raw_of(&[
+            (KEY_AUTO_CONTINUE, json!("true")),
+            (KEY_AUTO_CONTINUE_MAX_ROUNDS, json!("8")),
+        ]));
+        assert_eq!(junk.auto_continue(), build(Map::new()).auto_continue());
+        assert_eq!(junk.auto_continue_max_rounds(), build(Map::new()).auto_continue_max_rounds());
+    }
+
+    /// `set_auto_continue` / `set_auto_continue_max_rounds` 必须同时落到底稿与
+    /// 解析字段，且**不牵连兄弟项**。
+    ///
+    /// 钉住的写歪：
+    ///   - 只写 `raw`：下一个请求仍读旧的解析字段（`set_scheduled_task` 里那句
+    ///     「**不能**只改 raw —— 循环读的是 `scheduled_settings()` 里的解析结果」
+    ///     讲的就是同一个坑，只是那条落在定时循环上、这条落在转发热路径上）；
+    ///   - 写一项时把另一项按默认值补齐：用户「只想把预算收到 1 轮」，顺手把刚
+    ///     打开的开关关掉了；
+    ///   - 底稿里写成字符串（`Value::String("5")`）：本次运行看着对，
+    ///     重启后读侧按「类型不符」回落默认 —— 用户会以为设置没保存住。
+    #[test]
+    fn the_setters_write_the_backup_and_the_snapshot_together() {
+        let _guard = hold_config();
+        // 起点固定：先回到出厂态，免得别的用例留下的状态改变这里的判据
+        let _ = set_auto_continue_patch(AutoContinuePatch {
+            enabled: Some(false),
+            max_rounds: Some(DEFAULT_AUTO_CONTINUE_MAX_ROUNDS),
+        });
+
+        let saved = set_auto_continue(true);
+        assert_eq!(saved, db().is_some(), "返回值只该由「落库成不成功」决定（测试进程里没有库）");
+        assert!(auto_continue(), "开关必须能被在线打开（轻量读取走的是解析字段）");
+        assert_eq!(current().raw()[KEY_AUTO_CONTINUE], json!(true), "底稿里必须带上这一项，否则写盘写不出它");
+        assert!(current().auto_continue(), "快照 getter 与轻量读取必须是同一个值");
+        assert_eq!(
+            auto_continue_rounds_from(current().raw()),
+            DEFAULT_AUTO_CONTINUE_MAX_ROUNDS,
+            "只动开关不许把上限一并固化成默认之外的值"
+        );
+
+        set_auto_continue_max_rounds(AUTO_CONTINUE_MAX_ROUNDS);
+        assert_eq!(auto_continue_max_rounds(), AUTO_CONTINUE_MAX_ROUNDS, "上限必须能被在线收到边界值");
+        assert_eq!(current().raw()[KEY_AUTO_CONTINUE_MAX_ROUNDS], json!(8), "底稿里要落成一个 JSON 数字");
+        assert!(auto_continue(), "改上限时开关必须保持原样（部分更新不是整份替换）");
+
+        // 两项一起写（PUT 的形状）：一次 update 就该把两项都对齐
+        set_auto_continue_patch(AutoContinuePatch {
+            enabled: Some(false),
+            max_rounds: Some(AUTO_CONTINUE_MIN_ROUNDS),
+        });
+        assert!(!auto_continue());
+        assert_eq!(auto_continue_max_rounds(), AUTO_CONTINUE_MIN_ROUNDS);
+
+        // 复位出厂态：别把「开着 + 1 轮」留给后面的用例（尤其留给续写那条链）
+        let _ = set_auto_continue_patch(AutoContinuePatch {
+            enabled: Some(false),
+            max_rounds: Some(DEFAULT_AUTO_CONTINUE_MAX_ROUNDS),
+        });
+    }
 }

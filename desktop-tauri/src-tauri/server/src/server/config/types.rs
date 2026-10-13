@@ -1064,3 +1064,79 @@ pub struct RoutingPatch {
     pub breaker_timeout_seconds: Option<i64>,
     pub breaker_success_threshold: Option<i64>,
 }
+
+// ─── 长度截断的自动续写（autoContinue / autoContinueMaxRounds）─────────
+//
+// 判据、执行链与代价口径都在 `core::upstream::continuation`（六条判据、两道停机
+// 条件都写在那个模块头），这里只存「开不开」与「最多续几轮」两个数。
+//
+// ── 为什么是两个键，而不是一个 off/1/3/8 的档位 ──────────────
+// 「要不要续」与「最多问几轮」是两个独立的选择：只想多问一次（省额度）与
+// 愿意问满，都发生在「要开」这个前提之下。合成一个枚举会把「关掉」这个**默认态**
+// 塞进某个数字里 —— 于是配置里出现两种表达同一件事的写法（0 与 off），
+// 而它们将来各走各的路只是时间问题。
+
+/// 「上游说到一半就停、网关自己把它问完」开关的键（config.json 键，判据见
+/// `core::upstream::continuation`）。
+///
+/// **默认关闭**，与 `stripNewlineKeepalive` 同一取向，但代价的方向不同：那条
+/// 丢帧改的是「客户端看到哪些字节」，本条多花的是**真金白银的上游往返** ——
+/// 续写的每一轮都带着前几轮的全部历史，一轮的成本不覆盖前一轮（合并口径见
+/// `core::upstream::continuation` 的模块头）。改可观测行为 + 花额度，两条各自
+/// 都够格让默认值取关。
+///
+/// 开着时是否真的续，还要过六条判据（**工具轮永不续**排在最前，那是客户端的
+/// 执行权）；关掉时调用侧根本不包装，下发字节与接入前逐字一致。留一个在线开关
+/// 的理由与 `/api/keepalive-strip` 相同 —— 「在真流量上验一次、不对立刻撤回」
+/// 不该需要重新构建镜像（见 `api::auto_continue`）。
+///
+/// 部署级兜底：配置里没有这个键时读环境变量 `AGENT2API_AUTO_CONTINUE`
+/// （`1` / `true` / `on` 才算开启，其余含空值都算关，判据与
+/// `AGENT2API_STRIP_NEWLINE_KEEPALIVE` 共用同一份实现，见
+/// `parse::env_auto_continue`）—— Docker 部署想从第一次启动就打开的，
+/// 不必先进面板点一次开关。
+pub const KEY_AUTO_CONTINUE: &str = "autoContinue";
+
+/// 自动续写的**轮数上限**（config.json 键）：一次请求最多「再问一次」几回。
+///
+/// 两道停机条件里它是**硬保险**：另一道（相似度闸）判的是「续出来的这段是不是
+/// 上一段的复读」，阈值 0.5 是软判据，卡在边缘上的文本照样过得去。上限本身就是
+/// 那条续写链的次数，所以设多大都不构成死循环 —— 这个数管的只是一件成本问题
+/// （见 [`AUTO_CONTINUE_MAX_ROUNDS`]），分工见 `core::upstream::continuation` 的模块头。
+///
+/// 环境变量兜底 `AGENT2API_AUTO_CONTINUE_MAX`：非整数或越界都算「没配」，
+/// 与文件侧同一口径（**回落默认而不是夹紧**，理由见 `parse` 模块头）。
+pub const KEY_AUTO_CONTINUE_MAX_ROUNDS: &str = "autoContinueMaxRounds";
+
+/// 轮数上限默认值：3 轮 —— 参考实现（社区件 Trae2api-cn 的 `continuation.py`）
+/// 的默认值，也符合「一次腰斩通常一问就补完」的实测形状；与
+/// `DEFAULT_RETRY_COUNT` 那个「先试三次」是同一个量级的取向。
+pub const DEFAULT_AUTO_CONTINUE_MAX_ROUNDS: i64 = 3;
+
+/// 轮数下限：1，**不收 0**。
+///
+/// 开着开关却一轮都不续，与「关掉开关」是同一件事；把这个状态留在配置里只会
+/// 让人以为功能生效了。想关就去关 [`KEY_AUTO_CONTINUE`]，不要用数字表达关闭
+/// （与 `retryCount` 那档相反：那里的 0 是「不重发、直接换号」的真实行为）。
+pub const AUTO_CONTINUE_MIN_ROUNDS: i64 = 1;
+
+/// 轮数上限：8。
+///
+/// 每多一轮都是一次完整的上游往返（含前几轮全部历史的 prompt），第 9 轮起
+/// 边际收益远低于代价；而「续到第八轮还没说完」实际意味着这条链在复读，
+/// 该停的是它而不是继续加预算。
+pub const AUTO_CONTINUE_MAX_ROUNDS: i64 = 8;
+
+/// 自动续写的**部分**更新入参（`None` = 该项不动）。
+///
+/// 形状与 `RoutingPatch` 相同（开关 + 若干个有界整数一起写），存在的理由是
+/// **一次 PUT 只落一次盘**：两项各写一次会留出「开关已开、上限还是旧值」的
+/// 半套状态，而这两项要一起读才有意义。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AutoContinuePatch {
+    /// 开关（`None` = 该项不动）
+    pub enabled: Option<bool>,
+    /// 轮数上限（`None` = 该项不动）。调用方须先按
+    /// `AUTO_CONTINUE_MIN_ROUNDS..=AUTO_CONTINUE_MAX_ROUNDS` 校验过。
+    pub max_rounds: Option<i64>,
+}
