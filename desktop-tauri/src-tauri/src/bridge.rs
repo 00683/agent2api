@@ -488,6 +488,13 @@ const BRIDGE_JS: &str = r#"
     getAutoCheckin: () => call('GET', '/api/auto-checkin'),
     saveAutoCheckin: patch => call('POST', '/api/auto-checkin', patch),
     runAutoCheckinNow: () => call('POST', '/api/auto-checkin/run', {}),
+    // 定时签到的**条目**（签到中心「定时签到」页）：列表 / 保存一条 / 删除 / 立即执行
+    getCheckinSchedules: () => call('GET', '/api/checkin-schedules'),
+    saveCheckinSchedule: patch => call('POST', '/api/checkin-schedules', patch),
+    deleteCheckinSchedule: id =>
+      call('POST', '/api/checkin-schedules/' + encodeURIComponent(String(id || '')) + '/delete', {}),
+    runCheckinSchedule: id =>
+      call('POST', '/api/checkin-schedules/' + encodeURIComponent(String(id || '')) + '/run', {}),
     // WorkBuddy 国际版日活保活的模型链（读 / 存；与 web_shim.rs 的同名方法成对）
     getCheckinKeepalive: () => call('GET', '/api/checkin-keepalive'),
     saveCheckinKeepalive: models => call('POST', '/api/checkin-keepalive', { models }),
@@ -496,6 +503,24 @@ const BRIDGE_JS: &str = r#"
     // 签到中心的聚合快照（每日签到分组 / 自动签到设置 / 签到历史 / 一次性项入口），
     // 见 api::checkin_center 的模块头 —— 页面打开只打这一条
     getCheckinCenter: () => call('GET', '/api/checkin-center'),
+    // 签到记录明细台账（签到记录页）：查询（limit/offset/outcome/provider/keyword/start/end）
+    // 与清空（全清必须显式 all=1，护栏见 api::checkin_records 的模块头）
+    getCheckinRecords: params => {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params || {})) {
+        if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+      }
+      const text = query.toString();
+      return call('GET', '/api/checkin-records' + (text ? '?' + text : ''));
+    },
+    clearCheckinRecords: params => {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params || {})) {
+        if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+      }
+      const text = query.toString();
+      return call('DELETE', '/api/checkin-records' + (text ? '?' + text : ''));
+    },
 
     // ── 间隔型定时任务（凭证自动维护 / 定时查询积分 / 模型刷新 / 两个前端自动刷新）──
     // 改一条任务用 PATCH（后端同时受理 POST 作别名：CORS 允许方法里没有 PATCH，

@@ -48,6 +48,12 @@ pub mod chat;
 // 签到中心的聚合快照（GET /api/checkin-center）：分组口径在后端唯一化，
 // 资格类状态由前端按需惰性查询，见该文件模块头
 pub mod checkin_center;
+// 签到记录明细台账（GET/DELETE /api/checkin-records）：每账号一行的成败与
+// 收益明细，记账点在 `core::billing::checkin::run_checkin`，见该文件模块头
+pub mod checkin_records;
+// 定时签到的**条目**（GET/POST /api/checkin-schedules + {id}/delete|run）：
+// 总开关仍在 /api/auto-checkin，条目 CRUD 在这里，见该文件模块头
+pub mod checkin_schedules;
 pub mod cline_headers;
 pub mod codearts_welfare;
 pub mod config_api;

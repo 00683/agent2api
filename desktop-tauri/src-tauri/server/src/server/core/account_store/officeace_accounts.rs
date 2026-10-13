@@ -504,10 +504,12 @@ impl AccountStore {
             &format!("✅ OfficeAce 账号已保存: {record_name}（优先级 {priority}）"),
         );
         // 回**公开形态**而不是整条记录：记录里躺着 modelAppSecret / secretAccessKey /
-        // securityToken / refreshToken / DPoP 私钥，而账号列表那一侧走的是
-        // `store_view::public_account` 的 officeace 分支（同一个函数）——
+        // securityToken / refreshToken / DPoP 私钥，而公开形态不含其中任何一项。
+        // 走 `public_account`（而不是本家的形状函数）是为了让这条出口与账号列表
+        // 那一侧**逐字段一致**：跨家统一注入的那一批（hasCredentials / checkinAt /
+        // usageQuery / maxConcurrent …）在分派点才加上，直接调形状函数会全部丢掉。
         // 添加响应原先直接把原始记录回出去，是全家族唯一的明文出口。
-        Ok(self.to_officeace_public_account(&saved))
+        Ok(self.public_account(&saved))
     }
 
     /// 账号的公开形态（前端账号列表 / 添加响应 / 会话摘要用；**不含任何凭据**）。
@@ -544,17 +546,6 @@ impl AccountStore {
                     .get("refreshToken")
                     .and_then(Value::as_str)
                     .is_some_and(|value| !value.trim().is_empty()),
-            ),
-        );
-        // 这一位决定界面「备注名赢过上游显示名」的口径；账号列表那一侧由
-        // `public_account` 末尾统一注入，添加响应不经过那里，所以在这里补齐 ——
-        // 两条出口给前端的形状必须一致，否则加完账号要刷新列表才显示对。
-        public.insert(
-            "nameCustom".to_string(),
-            Value::Bool(
-                record
-                    .get("nameCustom")
-                    .is_some_and(|value| matches!(value, Value::Bool(true))),
             ),
         );
         Value::Object(public)

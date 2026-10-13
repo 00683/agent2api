@@ -116,19 +116,6 @@
 
 .batch-bar .link-btn:hover { background: var(--nav-hover); color: var(--text); }
 
-/* 批量栏里那条「另 N 个分组全是禁用账号」：是一条**提示**（warn 色、无边框），
-   但顺手可点（点了就切到「禁用」把它们调出来），所以用按钮而不是 span */
-.batch-hidden-btn {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  font: inherit;
-  cursor: pointer;
-}
-
-.batch-hidden-btn:hover { text-decoration: underline; }
-
 /* 搜索框（工具条第一段）：宽度跟着工具条走，最窄 150px、最宽 220px ——
    账号名 / 邮箱长度不可控，再宽就把两个分段挤到下一行了 */
 .acct-search { width: clamp(150px, 22vw, 220px); }

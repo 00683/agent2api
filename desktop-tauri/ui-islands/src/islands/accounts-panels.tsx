@@ -100,9 +100,10 @@ export function OrderCell({ account, rank }: { account: AccountRecord; rank: num
  *
  * 「整组启用 / 禁用」直接落批量端点（一次改一组，与单行开关同一口径）；
  * 「批量操作本组…」打开既有的批量弹窗并**预选本组**（改代理这类要挑参数的动作用它，
- * 不必再新造一套界面）；「折叠本组」与组头那颗箭头同一个状态。
+ * 不必再新造一套界面）；折叠那一项与组头那颗箭头同一个状态 —— **它是个开关**，
+ * 所以文案必须跟着当前状态变：已经收起的那一组，这一项写「展开这一组」才是它真做的事。
  */
-function GroupMenu({ group, ids }: { group: AccountGroup; ids: string[] }) {
+function GroupMenu({ group, ids, collapsed }: { group: AccountGroup; ids: string[]; collapsed: boolean }) {
   const [open, setOpen] = React.useState(false)
   const itemClass = 'w-full justify-start px-2 font-normal'
   return (
@@ -128,7 +129,7 @@ function GroupMenu({ group, ids }: { group: AccountGroup; ids: string[] }) {
           <div className='my-1 h-px bg-hairline' />
           <Button variant='ghost' size='sm' className={itemClass}
             onClick={() => { setOpen(false); toggleGroupCollapsed(group.provider) }}>
-            {t('折叠本组')}
+            {collapsed ? t('展开这一组') : t('折叠这一组')}
           </Button>
         </div>
       </PopoverContent>
@@ -179,7 +180,7 @@ export function GroupBandRow({ group, collapsed, colSpan }: {
             title={collapsed ? t('展开这一组') : t('折叠这一组')}
             onClick={() => toggleGroupCollapsed(group.provider)}
             dangerouslySetInnerHTML={{ __html: iconHtml('chevronDown', 14) }} />
-          <GroupMenu group={group} ids={group.accounts.map(account => account.id)} />
+          <GroupMenu group={group} ids={group.accounts.map(account => account.id)} collapsed={collapsed} />
         </div>
       </td>
     </tr>

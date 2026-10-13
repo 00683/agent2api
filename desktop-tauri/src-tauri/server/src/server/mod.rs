@@ -343,6 +343,21 @@ impl ServerState {
         // 每账号的余额查询记录（余额不足跳过 / 自动禁用的底座）：装库句柄时
         // 顺带做旧 kv 快照的一次性迁移与内存事实表的装载（见 usage_records 模块头）。
         core::usage_records::install(db.clone());
+        // 签到记录的明细台账（签到中心「签到记录」页）：装句柄即可，记账点在
+        // `core::billing::checkin::run_checkin`（唯一），保留期裁剪随每次记账
+        // 与「立即清理」进行（见 checkin_records 模块头）。
+        core::checkin_records::install(db.clone());
+        // 定时签到的「签到范围」一次性补齐：把加入版本晚于配置里那一版的家补进
+        // 每条条目的范围（用户的期望是 OfficeAce 果办 / CodeArts 默认开启）。
+        // 放在这里是因为它要读写配置快照（`config::init` 已在上方就位），且必须早于
+        // 第一次 `/api/checkin-schedules` —— 界面读到的就该是补过的清单。
+        // 只补一次：版本写上去之后，用户取消勾选就真的生效了。
+        if core::checkin_schedules::extend_providers_once() {
+            logging::console_line(
+                "[Checkin]",
+                "已把新加入的签到提供商补进定时条目的签到范围（OfficeAce 果办 / CodeArts）",
+            );
+        }
         // 每账号的「限制器」（余额 / Token 规则列表）：Token 周期消耗的窗口
         // 聚合读同一个库（schema v9 的聚合索引），装句柄即可 —— 事实表的刷新
         // 由 usage_query 的心跳循环驱动（见 limiter 模块头）。

@@ -532,6 +532,27 @@ pub fn panel_router(state: ServerState) -> Router {
             get(api::auto_checkin::get_state).post(api::auto_checkin::configure),
         )
         .route("/api/auto-checkin/run", post(api::auto_checkin::run_now))
+        // ── 定时签到的条目 ──
+        // 总开关走上面的老接口；条目 CRUD / 立即执行在这里（分组理由见
+        // api::checkin_schedules 的模块头）。挂 protected：写配置 + 触发真签到，
+        // 敏感度与 /api/auto-checkin 同级。三条入口 any(...) 手工分发，
+        // 与 /api/scheduled-tasks 同一取舍（统一 404，不落到 405 兜底）。
+        .route("/api/checkin-schedules", any(api::checkin_schedules::entry))
+        .route("/api/checkin-schedules/", any(api::checkin_schedules::entry))
+        .route(
+            "/api/checkin-schedules/{*rest}",
+            any(api::checkin_schedules::entry),
+        )
+        // ── 签到记录明细台账 ──
+        // GET 查询 / DELETE 清空（全清护栏 all=1，照 logs 的规则；筛选删除与
+        // 查询共用同一份过滤链）。挂 protected：明细里有账号名与收益文案，
+        // 敏感度与 /api/logs 一致。
+        .route(
+            "/api/checkin-records",
+            get(api::checkin_records::query_records).delete(api::checkin_records::clear_records),
+        )
+        .route("/api/checkin-records/", any(api::logs_api::not_found))
+        .route("/api/checkin-records/{*rest}", any(api::logs_api::not_found))
         // ── 签到中心的聚合快照 ──
         // 只读一条：分组与「今日已签」的判定复用批量签到同一对判据
         // （CHECKIN_PROVIDERS ∩ supports_checkin），见 api::checkin_center 的模块头。

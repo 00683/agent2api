@@ -144,8 +144,9 @@ function AccountsPage() {
 
   const loaded = Boolean(snapshot())
   const all = allAccounts()
-  // groups = 要渲染的（全禁用的组已按规则去掉）；allGroups = 全部组，拼队列用
-  const { groups, allGroups, hiddenDisabled } = groupView(usageEntryOf, tokenUsageOf)
+  // groups = 要渲染的（当前筛选下一条都看不见的组不留空壳）；allGroups = 全部组，
+  // 拼队列与「折叠 / 展开全部」都用它
+  const { groups, allGroups } = groupView(usageEntryOf, tokenUsageOf)
   // 限流维度的分段把「余额不足已跳过 / Token 限额已跳过」都算进已限流
   // （isLimitedNow 的口径），所以筛选与计数要带上余额与 Token 两份读数的查找口
   // —— 缓存每次 bump 后这里重算
@@ -228,7 +229,9 @@ function AccountsPage() {
   /** 被筛选隐藏但仍在勾选中的账号：操作会作用于它们，所以必须显式提示，不能静默生效 */
   const hiddenByFilter = [...store.selected].filter(id => !visibleIds.includes(id)).length
   const active = store.selected.size > 0
-  const allCollapsed = groups.length > 0 && groups.every(group => store.collapsed.has(group.provider))
+  // 「折叠全部 / 展开全部」看的是**全部**组（与按钮实际作用的对象同一份口径）：
+  // 只看可见组的话，被筛掉的那几家会与标签对不上（见 setAllGroupsCollapsed 的说明）
+  const allCollapsed = allGroups.length > 0 && allGroups.every(group => store.collapsed.has(group.provider))
 
   /**
    * 拖拽的落点处理：把「谁挪到了第几位」翻成一条**完整队列**再交给后端。
@@ -237,7 +240,7 @@ function AccountsPage() {
    * 在 DOM 里没有行，而后端要求「全部账号的一个排列」（少一个都会 400）。
    * 落点下标由拖拽模块给（按同级兄弟项的中点比出来），这里只做数组搬迁。
    */
-  /** 拖拽要看两份分组：`all` 用来拼**完整**队列（全禁用的组不渲染，但它家的账号
+  /** 拖拽要看两份分组：`all` 用来拼**完整**队列（被筛选挡住的组不渲染，但它家的账号
    *  仍在队列里，少一条就会被后端按「队列不完整」400 拒掉）；`displayed` 用来把落点
    *  下标（按渲染出来的组数出来的）换算成「插在哪个可见组之前」的锚点。 */
   const dragRef = React.useRef({ displayed: groups, all: allGroups })
@@ -364,11 +367,13 @@ function AccountsPage() {
           </div>
 
           <div className='actions'>
-            {/* 折叠是「只看某几家」的入口：一家几十条时，收起不关心的那些比筛选更顺手 */}
+            {/* 折叠是「只看某几家」的入口：一家几十条时，收起不关心的那些比筛选更顺手。
+                「全部」就是全部 —— 作用对象是全部组，不按当前筛选收窄（见 store 里
+                setAllGroupsCollapsed 的说明） */}
             <Button id='btn-fold-groups' variant='outline'
-              disabled={!groups.length}
+              disabled={!allGroups.length}
               title={allCollapsed ? t('展开全部分组') : t('折叠全部分组（只留组头）')}
-              onClick={() => setAllGroupsCollapsed(groups.map(group => group.provider), !allCollapsed)}>
+              onClick={() => setAllGroupsCollapsed(allGroups.map(group => group.provider), !allCollapsed)}>
               {allCollapsed ? t('展开全部') : t('折叠全部')}
             </Button>
             {/* 「添加账号」的打开逻辑归 add-account.js（它按同一个 id 绑了监听），这里再挂
@@ -409,13 +414,6 @@ function AccountsPage() {
               {t('顺序已锁定')}
             </span>
           ) : null}
-          {hiddenDisabled ? (
-            <button type='button' className='batch-hidden batch-hidden-btn'
-              title={t('这些分组里一个启用的账号都没有（禁用不参与转发），默认不显示；点一下切到「禁用」查看，也就能重新启用它们')}
-              onClick={() => setSegmentFilter('enabled', 'disabled')}>
-              {t('另 {n} 个分组全是禁用账号', { n: hiddenDisabled })}
-            </button>
-          ) : null}
           {filterActive() ? (
             <Button id='btn-clear-filter' variant='ghost' size='xs'
               title={t('清空搜索与两个筛选档位，回到全部账号')}
@@ -441,16 +439,6 @@ function AccountsPage() {
             <div className='empty'><span className='spinner' />{t('正在加载…')}</div>
           ) : !all.length ? (
             <div className='empty'>{t('暂无账号，请点击右上角「添加账号」')}</div>
-          ) : !groups.length && hiddenDisabled ? (
-            // 每个分组都被「一个启用都没有」这条规则拿掉了（没有任何筛选在生效）：
-            // 必须在这里给出口 —— 否则用户看到的是「没有账号」，而账号其实都在，
-            // 只是全被禁用了。这一支要排在下面那一支之前：此时 shown 也是空的，
-            // 让「当前筛选条件下没有账号」先接住的话，原因就说错了。
-            <div className='empty'>
-              {t('所有分组里都没有启用的账号（禁用不参与转发）')}
-              <button type='button' className='link-btn'
-                onClick={() => setSegmentFilter('enabled', 'disabled')}>{t('查看已禁用账号')}</button>
-            </div>
           ) : !shown.length ? (
             <div className='empty'>
               {t('当前筛选条件下没有账号')}

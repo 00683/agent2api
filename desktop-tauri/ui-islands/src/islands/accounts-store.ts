@@ -169,25 +169,22 @@ export type GroupView = {
   /** **全部**组（不套展示规则）：整队重排要按它拼完整队列（后端要求「全部账号的
    *  一个排列」，少一条就 400），落点换算也按它 —— 见 accounts-page 的 onDrop */
   allGroups: AccountGroup[]
-  /** 被「一个启用的都没有」这条规则隐藏掉的组数（批量栏据此提示） */
-  hiddenDisabled: number
 }
 
 /**
  * 分组视图（账号页的显示口径）：组序 = 各家队首的先后，组内只留可见的行。
  * 与 `visibleList` 同源 —— 组内可见行按组序拼起来就是可见列表的顺序。
  *
- * ── 两条「整组不显示」的规则（效果一样：不留空壳）──────────────
- *   ① **没有可见的行**：筛选（状态 / 限额）或搜索把这一家的行全裁掉了 ——
- *      留一段只有组头的空壳只是占地方，用户从分段徽标上已经知道别处有多少条；
- *   ② **一个启用的都没有**：那一家占着一整段却一个账号都接不了请求（禁用即不参与
- *      转发）。判据取组内**全量**成员里有没有启用的，与当前筛选无关（否则搜一下
- *      就会把整组搜没）；它们仍占着队列位置，用「状态 = 禁用」就能看到 ——
- *      所以**明确筛禁用时这条规则让位**（那时用户要看的正是它们）。
+ * ── 唯一一条「整组不显示」的规则：没有可见的行 ──────────────────
+ * 筛选（状态 / 限额）或搜索把这一家的行全裁掉了就不渲染它 —— 留一段只有组头的空壳
+ * 只是占地方。它由**筛选自己**决定：状态筛「启用」时全禁用的家自然一条不剩而被收走，
+ * 而状态筛「全部」时它们都在（那正是「全部」该有的样子）。
  *
- * `hiddenDisabled` 只数第二条规则拿掉的组（有行可显示、只是全禁用）—— 批量栏那条
- * 「另 N 个分组全是禁用账号」的提示按它出；第一条规则拿掉的组是用户自己筛掉的，
- * 不该再提示一遍。
+ * ⚠️ 曾经还有第二条规则：「一个启用的都没有」的组一律不显示。它与「状态 = 全部」
+ * 直接冲突 —— 用户把两个筛选都拨回「全部」，那些**整家全禁用**的分组（往往正是账号
+ * 最多的几家）仍连着账号一起消失，而分段徽标上写的还是全部账号数。分组带上本来就写着
+ * 「N 个账号 · 启用 0 · 禁用 N」，一家是不是全禁用由它自己说清楚，不该由「整组消失」
+ * 来表达。这条规则已删除。
  */
 export function groupView(
   usageOf?: UsageLookup,
@@ -199,11 +196,8 @@ export function groupView(
     usageOf,
     tokenUsageOf,
   )
-  const diedWithDisabled = (group: AccountGroup): boolean =>
-    store.filter.enabled !== 'disabled' && group.enabled === 0
-  const groups = allGroups.filter(group => group.accounts.length > 0 && !diedWithDisabled(group))
-  const hiddenDisabled = allGroups.filter(group => group.accounts.length > 0 && diedWithDisabled(group)).length
-  return { groups, allGroups, hiddenDisabled }
+  const groups = allGroups.filter(group => group.accounts.length > 0)
+  return { groups, allGroups }
 }
 
 export function providerSummaryList(): Array<{ id: string; label: string; count: number }> {
@@ -257,9 +251,18 @@ export function clearFilter(): void {
 
 /* ─── 分组折叠（只看某几家时用；与筛选同一档的展示偏好）─────── */
 
-function persistCollapsed(): void {
+/**
+ * 折叠状态落盘。
+ *
+ * **必须写传进来的那一份**（即将生效的新集合），不能写 `store.collapsed`：
+ * 本函数在 `patch()` 之前调用，那一刻 `store.collapsed` 还是**改动前**的旧集合 ——
+ * 写成旧值，存档就永远落后一次操作（界面上收起了、重启后却是上一次的状态；
+ * 用户那边看到的现象正是「展开之后下次打开还是折叠的，这个状态好像不记忆」）。
+ * 写成参数而不是让它自己读 store，就是为了让这个坑不可能再踩。
+ */
+function persistCollapsed(collapsed: ReadonlySet<string>): void {
   try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...store.collapsed]))
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]))
   } catch { /* 隐私模式等存不了就算了：本次会话内仍然生效 */ }
 }
 
@@ -271,13 +274,17 @@ export function toggleGroupCollapsed(provider: string): void {
   const next = new Set(store.collapsed)
   if (next.has(provider)) next.delete(provider)
   else next.add(provider)
-  persistCollapsed()
+  persistCollapsed(next)
   patch({ collapsed: next })
 }
 
 /**
- * 折叠 / 展开全部。`providers` 传**当前可见的**那些组：只把看得见的收起，
- * 被筛选挡住的组维持原样（否则「展开全部」会把用户先前手动收起的组一起打开）。
+ * 折叠 / 展开全部。
+ *
+ * `providers` 由页面传**全部分组**（不套筛选）：按钮上的字是「全部」，效果就得是全部。
+ * 曾经只传当前可见的组，于是留下「被筛选挡住的那几家仍是折叠的」这种看不见的残留 ——
+ * 用户筛回来时看到它们还是收着的，只会判断成「展开全部没生效 / 状态没记住」。
+ * 逐组折叠（分组带的箭头、⋯ 菜单）才是表达「只看某几家」的手动入口。
  */
 export function setAllGroupsCollapsed(providers: string[], collapsed: boolean): void {
   const next = new Set(store.collapsed)
@@ -285,7 +292,7 @@ export function setAllGroupsCollapsed(providers: string[], collapsed: boolean): 
     if (collapsed) next.add(provider)
     else next.delete(provider)
   }
-  persistCollapsed()
+  persistCollapsed(next)
   patch({ collapsed: next })
 }
 
