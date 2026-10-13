@@ -118,6 +118,19 @@ body.has-titlebar .shell {
 .titlebar-btn.is-maximized:hover .fg { fill: var(--nav-hover); }
 .titlebar-btn svg { display: block; width: 14px; height: 14px; pointer-events: none; }
 
+/* ─── 移动端：从「app-shell 固定视口」切成「正常文档流」───
+   tokens.css 只改了 body 的 min-width 与 overflow，这里把整条 app-shell 链
+   （.shell → .main → .content → .content-inner → .page.active）的高度与
+   overflow 一并放开。放开后 body 自己滚，页面内容按内容高度自然生长，
+   用户不再被困在「页面层内部滚」里。 */
+@media (max-width: 767px) {
+  .shell { height: auto; overflow: visible; }
+  .main { overflow: visible; }
+  .content { overflow: visible; }
+  .content-inner { flex: none; min-height: 0; }
+  .page.active { overflow-y: visible; }
+}
+
 /* ─────────────────────────────
    macOS（platform === 'macos' 时由 titlebar.js 挂 .is-macos）
    这条标题条上**没有我们画的三键**：那边用的是系统原生红绿灯 —— 建窗处

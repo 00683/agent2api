@@ -909,8 +909,9 @@ function ModelsPage() {
                   onValueChange={setSort} aria-label={t('按倍率排序')} className='shrink-0' />
                 {/* 搜索框：InputGroup + addon 图标（与 input-control.tsx 的用法一致）。
                     刻意**不带** data-island-input：那是输入框岛（就地升级）的钩子，
-                    两个岛同时挂一个输入框会打架。宽度沿用旧 CSS 的 #models-search 240px */}
-                <InputGroup className='w-[240px] flex-none' id='models-search'>
+                    两个岛同时挂一个输入框会打架。宽度：桌面 240px；手机上整行
+                    （工具条已改纵向排列，固定 240px 会与上下两条线段右边缘不齐）。 */}
+                <InputGroup className='w-full min-[768px]:w-[240px] flex-none min-[768px]:flex-none' id='models-search'>
                   <InputGroupInput type='search' placeholder={t('搜索模型 ID / 名称 / 映射名…')}
                     aria-label={t('搜索模型')} autoComplete='off' value={state.search}
                     onChange={event => setSearch(event.currentTarget.value)} />

@@ -3,6 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- ─── PWA：让 iOS「添加到主屏幕」后以独立窗口打开（不是每次都跳回 Safari）───
+       iOS 只认 manifest 里 display: standalone + apple-touch-icon；没有这套声明，
+       主屏幕图标点击会退回 Safari。注意：加了之后用户必须删掉旧书签重新添加。 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Agent2API">
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/app-icon-180.png">
+  <link rel="icon" type="image/png" href="assets/app-icon-192.png">
   <title data-i18n="Agent2API · 多提供商本地网关">Agent2API · 多提供商本地网关</title>
   <script>
     // 与主题持久化配合：在 CSS 解析前先贴上 data-theme，避免深色模式首屏闪烁
@@ -85,6 +96,9 @@
        （select.css 已随 select.js 一并删除：全站最后一个原生 <select> 换成组件库的
        Select 之后，.select-shell 那一族样式再无任何引用。） -->
   <link rel="stylesheet" href="css/table-col-settings.css">
+  <!-- 移动端适配层：最后加载，断点 768px。不动既有 900px 折叠规则，
+       只处理 768px 以下真机小屏：侧边栏抽屉化 + 表格卡片化 + 卡片堆叠 -->
+  <link rel="stylesheet" href="css/mobile.css">
   <!-- 组件库产物（desktop-tauri/ui-kit/，由 ui-islands 构建时一并编译成 ui/islands/ui.css）：
        Tailwind 的 theme + utilities 两层，刻意不含 preflight —— 基础重置仍由 tokens.css
        承担，否则 h1-h6 字号、列表缩进、img 显示方式会被整体重置。
@@ -100,6 +114,10 @@
 </head>
 <body>
   <div class="shell">
+    <!-- 移动端侧边栏抽屉开关（仅 <768px 生效，见 css/mobile.css）。
+         checkbox 本身隐藏，label.for 指向的汉堡按钮与遮罩都靠 :checked ~ 兄弟选择器驱动，
+         不依赖任何 JS；桌面端整条不影响布局。 -->
+    <input type="checkbox" id="nav-toggle" class="nav-toggle-input" aria-hidden="true">
     <!-- ─── 左侧导航 ─── -->
     <aside class="sidebar">
       <div class="brand">
@@ -170,6 +188,14 @@
     <!-- ─── 主区域 ─── -->
     <main class="main">
       <header class="topbar">
+        <!-- 移动端汉堡按钮：仅 <768px 显示，点击切换 #nav-toggle 让侧边栏滑出（纯 CSS）。
+             内联 SVG 与 icons.js 同一套约定（24×24 画布 + currentColor 填充），
+             不依赖 paintIcons 的注入时序 —— 那是页面级图标，这里要首帧就在。 -->
+        <label for="nav-toggle" class="mobile-menu-btn" title="菜单" aria-label="切换菜单">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" aria-hidden="true">
+            <path d="M3 6h18v2.5H3V6Zm0 5.25h18v2.5H3v-2.5Zm0 5.25h18v2.5H3v-2.5Z"/>
+          </svg>
+        </label>
         <div class="crumb">
           <span>Agent2API</span>
           <span class="sep">/</span>
@@ -331,6 +357,11 @@
         </div>
       </div>
     </main>
+
+    <!-- 移动端侧边栏遮罩：<768px 下侧边栏滑出时盖住内容区，点遮罩即收起。
+         纯 CSS 兄弟选择器驱动（#nav-toggle:checked ~ .nav-scrim），无需 JS。
+         必须与 #nav-toggle 同处 .shell 下、且在它之后，兄弟选择器才成立。 -->
+    <label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
   </div>
 
   <!-- 添加账号弹窗已迁到组件库：实现见
@@ -525,6 +556,9 @@
        它启动时就把表头把手插好并绑好委托，所以排在靠后（DOM 里的表格与列表都已存在）；
        请求日志的表头是整块重绘的，它自己用 MutationObserver 补把手，不依赖面板脚本。 -->
   <script src="table-columns.js"></script>
+  <!-- 移动端账号表卡片化：窄屏下把表头列名写进每行 td 的 data-col，
+       配合 css/mobile.css 的 td::before 渲染成卡片 label。桌面端不执行。 -->
+  <script src="mobile-columns.js"></script>
   <!-- 并发上限小对话框已迁到组件库：实现见 desktop-tauri/ui-islands/src/conc-dialog.tsx，
        随 islands/ui.js 一起加载（排在 accounts-view 之前），对外仍是
        window.wbAccountConcDialog.open(account) / .close()，调用方不用改。 -->

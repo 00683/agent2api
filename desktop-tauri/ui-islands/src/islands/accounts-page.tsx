@@ -353,7 +353,11 @@ function AccountsPage() {
           <div className='group' data-provider-group='1'>
             <span className='label'>{t('提供商')}</span>
             <Select value={store.filter.provider} onValueChange={value => setProviderFilter(String(value))}>
-              <SelectTrigger className='max-w-[200px] min-w-[130px]' aria-label={t('按提供商筛选账号')}>
+              {/* 宽度：桌面锁 200px（同排搜索框对齐）；手机上工具条改纵向排列，
+                  触发器要撑满整行，否则右边缘比同排的搜索框短 14px（见
+                  ui/css/mobile.css 的 .toolbar 段）。用 min-[768px]: 变体分隔，
+                  比在 mobile.css 里用 !important 跟 Tailwind 的任意值类斗优先级可靠。 */}
+              <SelectTrigger className='max-w-none min-w-0 w-full min-[768px]:max-w-[200px] min-[768px]:min-w-[130px] min-[768px]:w-auto' aria-label={t('按提供商筛选账号')}>
                 <SelectValue>
                   {providerOptions.find(item => item.value === store.filter.provider)?.label || t('全部')}
                 </SelectValue>
