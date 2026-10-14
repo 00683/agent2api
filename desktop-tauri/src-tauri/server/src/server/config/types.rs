@@ -33,13 +33,12 @@ pub const DEFAULT_LOCALE: &str = "zh-CN";
 // 命名风格与既有字段（apiKey / locale / lastRequestModel / autoCheckin）一致：
 // camelCase。这里把键名提成常量，是因为**读侧与写侧必须用同一个字符串** ——
 // 任一处手写拼错都不会报错，只会静默地读到默认值。
+//
+// 只剩事件日志一项：`requestRetentionDays` / `dailyRetentionDays` 两个键随
+// 「请求统计全量保留」一起退役（老配置里残留的值不再被读取，也无害）。
 
 /// 事件日志（统一库的 `logs` 表）保留天数
 pub const KEY_LOG_RETENTION_DAYS: &str = "logRetentionDays";
-/// 请求日志（统一库的 `requests` 表）保留天数
-pub const KEY_REQUEST_RETENTION_DAYS: &str = "requestRetentionDays";
-/// 按天聚合（统一库的 `request_daily` 表）保留天数
-pub const KEY_DAILY_RETENTION_DAYS: &str = "dailyRetentionDays";
 
 /// 事件日志的保存目录（config.json 键）。
 ///
@@ -337,10 +336,8 @@ pub struct ProviderPrompt {
     pub file_error: Option<String>,
 }
 
-/// 三档保留天数的默认值（缺失时用它们）
+/// 事件日志保留天数的默认值（缺失时用它）
 pub const DEFAULT_LOG_RETENTION_DAYS: i64 = 30;
-pub const DEFAULT_REQUEST_RETENTION_DAYS: i64 = 30;
-pub const DEFAULT_DAILY_RETENTION_DAYS: i64 = 365;
 
 /// **历史**路由优先级键：`{"workbuddy": 10, "raccoon": 20}`。
 ///
@@ -350,7 +347,7 @@ pub const DEFAULT_DAILY_RETENTION_DAYS: i64 = 365;
 /// 文件里残留的值也不会被抹掉（未知字段全量保留）。
 pub const KEY_PROVIDER_ROUTE: &str = "providerRoute";
 
-/// 天数的合法范围：下限 1 天（保留 0 天等于什么都不存，不是有效配置），
+/// 保留天数的合法范围：下限 1 天（保留 0 天等于什么都不存，不是有效配置），
 /// 上限 10 年（防手改 config.json 写个天文数字让裁剪逻辑空转）。
 ///
 /// **写侧（`stats_api::parse_days`）与读侧（`days_field`）共用这两个常量**：
@@ -360,26 +357,22 @@ pub const KEY_PROVIDER_ROUTE: &str = "providerRoute";
 pub const RETENTION_MIN_DAYS: i64 = 1;
 pub const RETENTION_MAX_DAYS: i64 = 3650;
 
-/// 三档保留天数（设置页「数据保留」区域）。
+/// 保留期设置（设置页「数据保留」区域）。
 ///
-/// 用独立结构而不是三个散落的取值函数：三个值总是一起用（GET 一起返回、
-/// 裁剪时各自取用），打包成一个 `Copy` 值让调用方一次拿到、不必多次读锁。
+/// 现在只剩**事件日志**一项：请求日志 / 按天聚合 / 签到记录都已全量保留
+/// （没有保留天数、没有条数上限），对应的两个设置项与接口字段一并移除。
+/// 保留结构而不直接摊成一个函数：GET / PUT 与日志存储的回调都按「一份
+/// `Copy` 值」的形状传，将来若再加保留项，调用方不必跟着改签名。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetentionSettings {
     /// 事件日志保留天数
     pub log_days: i64,
-    /// 请求日志保留天数
-    pub request_days: i64,
-    /// 按天聚合保留天数
-    pub daily_days: i64,
 }
 
 impl Default for RetentionSettings {
     fn default() -> Self {
         Self {
             log_days: DEFAULT_LOG_RETENTION_DAYS,
-            request_days: DEFAULT_REQUEST_RETENTION_DAYS,
-            daily_days: DEFAULT_DAILY_RETENTION_DAYS,
         }
     }
 }
@@ -389,8 +382,6 @@ impl Default for RetentionSettings {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RetentionPatch {
     pub log_days: Option<i64>,
-    pub request_days: Option<i64>,
-    pub daily_days: Option<i64>,
 }
 
 // ─── 定时任务设置的键名与边界（config.json 里的字段名**就是契约**）─────

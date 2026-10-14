@@ -79,11 +79,14 @@ pub async fn chat_completions(
     let scope = key_scope.map(|Extension(scope)| scope);
     // 请求开始时刻（请求统计用）。放在最前面：它要覆盖 body 解析与选路的耗时
     let started_at = logging::now_ms();
+    // 请求来源客户端（UA 识别，见 `core::client`）：在 headers 被 move 进转发层
+    // 之前先判好，早失败路径与收尾记账共用同一个值
+    let client = crate::server::core::client::classify(&pipeline::user_agent_of(&headers));
     // ① body 必须是 JSON 对象（数组/标量/null 都算非法）
     let parsed = serde_json::from_slice::<Value>(&body).ok();
     let Some(mut payload) = parsed.filter(Value::is_object) else {
         let error = GatewayError::bad_request("请求体必须是 JSON 对象");
-        record_early_failure(&state, started_at, "", "", &error);
+        record_early_failure(&state, started_at, "", "", &client, &error);
         return error.payload_response();
     };
     // ② messages 必须是数组
@@ -95,7 +98,7 @@ pub async fn chat_completions(
         let error = GatewayError::bad_request("缺少 messages 数组");
         let model = model_field_text(&payload);
         let reasoning = pipeline::client_reasoning_of(&payload);
-        record_early_failure(&state, started_at, &model, &reasoning, &error);
+        record_early_failure(&state, started_at, &model, &reasoning, &client, &error);
         return error.payload_response();
     }
 
@@ -128,6 +131,7 @@ pub async fn chat_completions(
                 started_at,
                 &model_field_text(&payload),
                 &client_reasoning,
+                &client,
                 &error,
             );
             return error.payload_response();
@@ -161,6 +165,7 @@ pub async fn chat_completions(
             &requested_model,
             &client_model,
             &client_reasoning,
+            &client,
             // 真实流量：不是模型测试（见 `RecordContext::is_test`）
             false,
         );
@@ -185,9 +190,10 @@ pub async fn chat_completions(
         telemetry_id,
         started_at,
     ));
-    // 下游原始请求体在此刻抄一份（request_raw 表的请求侧，见 `raw_body_text`）：
-    // body 还是客户端发来的原值；送进转发层后 payload 会被就地改写（默认模型注入）
-    let raw_request = pipeline::raw_body_text(&body);
+    // 下游原始请求体在此刻抄一份（request_raw 表的请求侧，见 `capture_raw_body`）：
+    // body 还是客户端发来的原值；送进转发层后 payload 会被就地改写（默认模型注入）。
+    // **仅调试模式开启时采集** —— 关着时这里是零开销的 None（预览对话没有正文）
+    let raw_request = pipeline::capture_raw_body(&body);
     let outcome = state
         .upstream()
         .forward(ForwardRequest {
@@ -204,6 +210,7 @@ pub async fn chat_completions(
             // 关闭的模型对生产请求保持「模型已在网关中关闭」（`ignore_model_gate`
             // 是模型测试的直达跳，见 `ForwardRequest` 的说明）
             ignore_model_gate: false,
+            proxy_override: None,
         })
         .await;
     let stats = state.request_stats();
@@ -226,6 +233,8 @@ pub async fn chat_completions(
                 raw_response: None,
                 // 转发主链路：不是模型测试（见 `RecordContext::is_test`）
                 is_test: false,
+                // 来源客户端：入口判好带进来（见 `RecordContext::client`）
+                client: client.clone(),
             };
             // 收尾帧特征取 Chat 的：客户端读到 `data: [DONE]` 就停是常态写法，
             // 那时连接会被立刻关掉、`Drop` 不会被拉到 EOF（见 `RecordingStream`）
@@ -243,9 +252,9 @@ pub async fn chat_completions(
             .into_response()
         }
         Ok(ForwardOutcome::Completion { body }) => {
-            // 响应正文在记账前抄一份（完整 JSON 文本；序列化失败给 None，
-            // 那一侧少存一份正文不影响明细）
-            let raw_response = serde_json::to_string(&body).ok();
+            // 响应正文在记账前抄一份（完整 JSON 文本；序列化失败或调试模式
+            // 关着给 None，那一侧少存一份正文不影响明细）
+            let raw_response = pipeline::capture_raw_json(&body);
             record_entry(
                 &RecordContext {
                     stats,
@@ -259,6 +268,8 @@ pub async fn chat_completions(
                     raw_response,
                     // 转发主链路：不是模型测试
                     is_test: false,
+                    // 来源客户端：入口判好带进来
+                    client: client.clone(),
                 },
                 None,
             );
@@ -284,12 +295,15 @@ pub async fn chat_completions(
                     client_model: client_model.clone(),
                     client_reasoning: client_reasoning.clone(),
                     status,
-                    // 请求侧正文照存（失败请求的请求体同样是排障材料）；
-                    // 响应体由网关自己生成（error 摘要已在明细里），不另存
+                    // 请求侧正文沿用入口采好的那份（失败请求的请求体同样是
+                    // 排障材料；调试模式关着时它本就是 None）；响应体由网关
+                    // 自己生成（error 摘要已在明细里），不另存
                     raw_request,
                     raw_response: None,
                     // 转发主链路：不是模型测试
                     is_test: false,
+                    // 来源客户端：入口判好带进来
+                    client: client.clone(),
                 },
                 Some(message),
             );

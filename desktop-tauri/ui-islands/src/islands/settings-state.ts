@@ -861,7 +861,7 @@ async function proceedDbRestore(): Promise<void> {
   }
 }
 
-/* ─── 数据保留（三项保留天数） ─────────────── */
+/* ─── 数据保留（事件日志保留天数） ─────────────── */
 
 export function renderRetention(data?: unknown): void {
   if (data === undefined) return
@@ -900,7 +900,7 @@ function askRetentionShrink(head: string): Promise<boolean> {
   })
 }
 
-/** 改小保留期会立即删数据，文案必须点名「删的是哪一档」 */
+/** 改小保留期会立即删数据，文案必须点名「删的是哪一档」（泛化：选项来自 RETENTION_FIELDS） */
 function shrinkPromptHead(field: NumberField, previous: number | null, days: number): string {
   return previous === null
     ? t('没能读到「{label}」的当前值，改为 {days} 天可能会删除超出的历史数据。', {

@@ -38,7 +38,10 @@ use crate::server::config;
 use crate::server::core::task_state::{self, Claim, TaskState};
 use crate::server::logging;
 
-use super::{client, pick_installer, UpdateError, UpdateManager, CURRENT_VERSION, GITHUB_API};
+use super::{
+    api_base, client, pick_asset_by_name, pick_installer, server_bundle_name, UpdateError,
+    UpdateManager, CURRENT_VERSION,
+};
 
 /// GitHub API 探测请求的总超时（下载走 `None`，见 `mod.rs` 的同名说明）。
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
@@ -195,7 +198,9 @@ impl UpdateManager {
     /// 排期（本模块）与「带上 GITHUB_TOKEN」（`client::github_headers`）。
     async fn fetch_release(&self) -> Result<(Option<Value>, i64), (UpdateError, i64)> {
         let repository = self.repository();
-        let url = format!("{GITHUB_API}/repos/{repository}/releases/latest");
+        // 更新源根地址：默认 GitHub，`WORKBUDDY_UPDATE_API_BASE` 可指向自建源
+        // （返回体与 GitHub 同形：tag_name / name / body / assets[]…）
+        let url = format!("{}/repos/{repository}/releases/latest", api_base());
         let response = client::fetch_with_egress(&url, &client::github_headers(), Some(REQUEST_TIMEOUT_MS))
             .await.map_err(|error| (error, 0))?;
         let status = response.status().as_u16();
@@ -220,6 +225,16 @@ impl UpdateManager {
         let name = text("name");
         let page_url = text("html_url");
         let published_at = text("published_at");
+        // 容器内更新的两件套：本机架构的更新包 + 它的 `.sha256` 伴随文件。
+        // 包名先算一次（`server_bundle_name()` 在非 Linux 是 None，两个字段
+        // 于是都为空 —— 桌面端根本用不到这条链路）。
+        let bundle = server_bundle_name();
+        let bundle_asset = bundle
+            .as_deref()
+            .and_then(|name| pick_asset_by_name(payload.get("assets"), name));
+        let bundle_checksums = bundle
+            .as_deref()
+            .and_then(|name| pick_asset_by_name(payload.get("assets"), &format!("{name}.sha256")));
         Ok((Some(json!({
             "tag": tag,
             "name": if name.is_empty() { raw_tag } else { name },
@@ -228,6 +243,8 @@ impl UpdateManager {
             "pageUrl": if page_url.is_empty() { format!("https://github.com/{repository}/releases") } else { page_url },
             "prerelease": payload.get("prerelease").and_then(Value::as_bool) == Some(true),
             "asset": pick_installer(payload.get("assets")),
+            "serverBundle": bundle_asset.unwrap_or(Value::Null),
+            "serverChecksums": bundle_checksums.unwrap_or(Value::Null),
         })), retry_at))
     }
 }

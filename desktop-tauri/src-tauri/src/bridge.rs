@@ -663,9 +663,15 @@ const BRIDGE_JS: &str = r#"
     exportLogs: () => invoke('export_logs'),
 
     // ── 请求统计报表 / 数据保留 ──
-    // range 只认 today / 7 / 30 / month / all，非法值由后端返回 400
-    // （不在这里静默改口径：界面选了什么就该拿到什么，报错比默默换区间好排查）
-    getStatsSummary: range => call('GET', '/api/stats/summary?range=' + encodeURIComponent(range)),
+    // range 只认 today / 7 / 30 / month / all / custom，非法值由后端返回 400
+    // （不在这里静默改口径：界面选了什么就该拿到什么，报错比默默换区间好排查）。
+    // dates（`{start, end}`，`YYYY-MM-DD`）**只在 range=custom 时**给：
+    // 后端对 custom 会强制要求这两个参数，其余档位带上反而是噪音
+    getStatsSummary: (range, dates) => call('GET', '/api/stats/summary' + toQuery({
+      range,
+      startDate: dates && dates.start,
+      endDate: dates && dates.end,
+    })),
     // 筛选条件是可选对象，复用上面 toQuery 的「空值跳过」语义：
     // 清空的输入框不该变成 `?model=` 这种永不命中的条件
     getStatsRequests: query => call('GET', '/api/stats/requests' + toQuery(query)),

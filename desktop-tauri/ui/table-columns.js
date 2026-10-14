@@ -125,6 +125,9 @@
         { key: 'retry', sel: '.req-retry', track: '52px' },
         { key: 'status', sel: '.req-status', track: '96px' },
         { key: 'model', sel: '.req-model', track: 'minmax(0, 1.3fr)' },
+        // 客户端（来源 UA 的归类，见后端 core::client）：同列的 track 与
+        // page-requests.css 的 grid-template-columns 默认值必须同步
+        { key: 'client', sel: '.req-client', track: '110px' },
         { key: 'dur', sel: '.req-dur', track: '96px' },
         { key: 'usage', sel: '.req-usage', track: 'minmax(0, 1.6fr)' },
         { key: 'error', sel: '.req-error-cell', track: 'minmax(0, 1.2fr)' },

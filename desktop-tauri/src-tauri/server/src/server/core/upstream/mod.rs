@@ -241,6 +241,12 @@ pub struct ForwardRequest {
     /// 生产链路一律传 `false`；白名单为空（未限制）时本标记给不出候选链，
     /// 会走「没有可用的提供商」—— 唯一调用方恒带 `provider_only`，不会触发。
     pub ignore_model_gate: bool,
+    /// 单次请求的出网代理临时覆盖（目前仅模型测试 `api::model_test` 使用）。
+    ///
+    /// - `None`（生产链路恒为此值）：跟随选中账号自身绑定的代理配置；
+    /// - `Some(None)`：本次强制直连（忽略账号绑定的代理，且不回退系统代理）；
+    /// - `Some(Some(proxy))`：本次强制走指定代理节点。
+    pub proxy_override: Option<Option<ResolvedProxy>>,
 }
 
 /// 转发结果：要么是可直接下发的流，要么是聚合好的 JSON
@@ -391,6 +397,7 @@ impl UpstreamService {
         // 钉住的账号与它同样处理：ownership 移出来、借给 context，
         // 于是 `request` 在下面不再被借用（理由同上一条）
         let pinned_account = request.pinned_account;
+        let proxy_override = request.proxy_override;
         let context = payload::ProviderContext {
             body: &upstream_body,
             stream: request.stream,
@@ -402,6 +409,7 @@ impl UpstreamService {
             pinned_account: pinned_account.as_deref(),
             // bool 是 Copy，直接读：不存在上面那两条的借用问题
             ignore_model_gate: request.ignore_model_gate,
+            proxy_override: proxy_override.as_ref(),
         };
         provider_loop::forward_with_providers(self, context, &mut slot, &mut connections).await
     }

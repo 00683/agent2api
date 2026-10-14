@@ -166,7 +166,7 @@ use crate::server::core::models::ModelCatalog;
 use crate::server::core::update::UpdateManager;
 use crate::server::core::upstream::UpstreamService;
 use crate::server::db::Db;
-use crate::server::request_stats::{RequestStats, Retention};
+use crate::server::request_stats::RequestStats;
 
 /// 服务器共享状态。handler 通过 `axum::extract::State` 拿到它的克隆。
 ///
@@ -344,8 +344,8 @@ impl ServerState {
         // 顺带做旧 kv 快照的一次性迁移与内存事实表的装载（见 usage_records 模块头）。
         core::usage_records::install(db.clone());
         // 签到记录的明细台账（签到中心「签到记录」页）：装句柄即可，记账点在
-        // `core::billing::checkin::run_checkin`（唯一），保留期裁剪随每次记账
-        // 与「立即清理」进行（见 checkin_records 模块头）。
+        // `core::billing::checkin::run_checkin`（唯一），台账全量保留 ——
+        // 清历史走签到记录页自己的「清空 / 按筛选删除」（见 checkin_records 模块头）。
         core::checkin_records::install(db.clone());
         // 定时签到的「签到范围」一次性补齐：把加入版本晚于配置里那一版的家补进
         // 每条条目的范围（用户的期望是 OfficeAce 果办 / CodeArts 默认开启）。
@@ -503,18 +503,10 @@ impl ServerState {
         // `requestStatsDir` 这个键仍被迁移项读（去自定义目录里找那两个旧文件，
         // 见 `db::migrate::requests`），本文件不再碰它。
         //
-        // 保留期走**回调**，每次裁剪时动态读配置：明细天数来自
-        // `requestRetentionDays`、聚合天数来自 `dailyRetentionDays`
-        // （`config::retention_settings()` 读的是 config::init() 装好的内存快照，
-        // 而 `PUT /api/retention` 会同步刷新它）——
-        // 于是设置页改完天数，下一次记账 / prune 立即生效，**不需要重启进程**。
-        let request_stats = Arc::new(RequestStats::with_db(db.clone(), || {
-            let settings = config::retention_settings();
-            Retention {
-                request_days: settings.request_days,
-                daily_days: settings.daily_days,
-            }
-        }));
+        // 请求统计**全量保留**：没有保留天数、没有条数上限，记账不再带任何裁剪
+        // （明细 / 原始正文 / 按天聚合都不自动淘汰；清历史是请求日志页自己的
+        // 「清空 / 按筛选删除」）。所以构造不再接收保留期回调。
+        let request_stats = Arc::new(RequestStats::with_db(db.clone()));
         // 启动即收尾上次运行遗留的进行中行（详情见方法注释）：不等到第一条
         // 请求进来才清理，界面打开时看到的就已经是「已中断」的终态
         request_stats.sweep_stale_running();

@@ -563,7 +563,7 @@ async fn attempt_queue(
         if ctx.telemetry.is_cancelled() {
             return Err(cancellation::cancelled_error());
         }
-        let target = rotate::select_target_account(
+        let mut target = rotate::select_target_account(
             service,
             provider_ids,
             &cooldown_keys,
@@ -572,6 +572,10 @@ async fn attempt_queue(
             &conv_key,
         )
         .await?;
+        if let Some(override_proxy) = ctx.proxy_override {
+            target.proxy = override_proxy.clone();
+            target.proxy_notice = None;
+        }
         // 决策快照挂进 telemetry（最后一次为准：请求日志的「路由回放」显示
         // 的是最终承载那次选路的完整排序 —— 与 attempts 明细的换号链互补，
         // 那边回答「试了谁」，这边回答「当时为什么这么排」）。
@@ -1032,8 +1036,9 @@ async fn attempt_queue(
                 headers: plan.headers,
                 payload,
                 proxy: target.proxy.clone(),
-                // 能力位由适配器给；账号已配代理时它不参与（proxy 优先）
-                system_proxy_when_unset: adapter.system_proxy_when_unset(),
+                // 能力位由适配器给；账号已配代理或本次显式指定了直连/节点时它不参与
+                system_proxy_when_unset: ctx.proxy_override.is_none()
+                    && adapter.system_proxy_when_unset(),
             };
             // ── 调试模式：抓一份即将发出去的原始报文 ──────────────────
             // 位置在 `build_chat_request` 之后（URL / 头 / body 都已定稿）。

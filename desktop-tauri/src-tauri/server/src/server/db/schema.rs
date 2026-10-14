@@ -238,7 +238,31 @@ pub fn is_reserved(key: &str) -> bool {
 /// （领成功 / 已领过 / 失败及其错误原文 / 收益文案），补上改造前「只有
 /// config.json 里一条聚合同 lastResult」看不见的明细。写入方是
 /// `core::checkin_records`（记账点唯一：`core::billing::checkin::run_checkin`）。
-pub const SCHEMA_VERSION: i64 = 11;
+///
+/// ── 版本 12：requests 补「来源客户端」一列 ─────────────────────
+/// 见 [`V12_SCHEMA`]。与 v5 / v10 同一形态（既有表加列，单条 ALTER）。
+/// 请求日志的「客户端」列读它：入口 handler 从下游 `User-Agent` 按
+/// `core::client` 的规则表判出客户端类型（`Codex` / `ZCode` / `Claude Code`
+/// …），随记账落库。存归类结果而不是原始 UA：UA 带版本号，逐条存既撑大
+/// 明细也读不出「是谁」。旧行 DEFAULT '' = 没有记录（那时还没采集），
+/// 展示层显示占位符 —— 不给旧数据猜值。
+///
+/// ── 版本 13：清空 `request_raw` 的历史正文（一次性空间回收）─────
+/// 预览对话的下游正文从本版起改为**仅调试模式开启时采集**
+/// （对齐 OmniProxy 的口径：不开调试模式就不保存任何原始正文），而升级前
+/// 无条件采集下来的那批正文在此清空 —— 它们对用户不再有意义（新语义下也
+/// 不会有新数据填补开关关闭的时段），留着只白占空间。
+///
+/// 注意这一版是**数据动作**而不是结构变更（表结构一字未动）。放在 schema
+/// 版本里而不是启动期的 kv 标记：两者都「只跑一次」，但版本号是既有的幂等
+/// 机制（`user_version` 与语句同事务提交），复用它就是零新增状态 —— 那条
+/// kv 标记会变成第二个「这条数据动作跑过没有」的事实来源。
+///
+/// 语句不写成 `*_SCHEMA` 常量而在 `apply_version` 的 v13 分支里单独执行：
+/// 要拿**被删的行数**，`migrate` 据此决定是否紧跟着 VACUUM（把空闲页真正
+/// 还给文件系统 —— 光 DELETE 不会让库文件缩小，而「省空间」正是这一版的
+/// 目的），完整说明见 `migrate` 尾部那段。
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -439,8 +463,8 @@ CREATE INDEX IF NOT EXISTS idx_debug_traffic_ts ON debug_traffic(ts);
 ///
 /// ── 为什么用 ALTER 而不重建表 ────────────────────────────────
 /// 两张表的其它列与索引一个都不动，重建要「建新表 → 搬数据 → 删旧表 → 重建索引」，
-/// 而 `requests` 可能有几万行（`MAX_ENTRIES` = 20000）。ALTER ADD COLUMN 是
-/// SQLite 的元数据操作（常数时间、不重写数据），代价可以忽略。
+/// 而 `requests` 是全量保留的明细表（长期使用可达几万甚至几十万行）。
+/// ALTER ADD COLUMN 是 SQLite 的元数据操作（常数时间、不重写数据），代价可以忽略。
 ///
 /// ── 为什么这里不能写 IF NOT EXISTS ───────────────────────────
 /// SQLite 的 `ALTER TABLE ... ADD COLUMN` **不支持** `IF NOT EXISTS`（这是它与
@@ -471,11 +495,15 @@ ALTER TABLE requests ADD COLUMN sensitive_hits TEXT NOT NULL DEFAULT '[]';
 /// 版本 3：`request_raw` 表 —— 请求/响应的**下游侧**原始正文（预览对话功能的地基）。
 ///
 /// ── 它和 debug_traffic 表是什么关系 ──────────────────────────
-/// `debug_traffic`（调试报文）是**调试模式专用**的上游侧报文（头部脱敏、
-/// 有全局字节闸、开关关闭时完全不采集）；本表是**始终采集**的下游侧正文
-/// （客户端发来的请求体 + 网关下发的响应体），供请求日志的「预览对话」弹窗
-/// 用。两表按同一个 `id`（请求关联 id）各存各的，谁也不依赖谁 ——
-/// `core::debug_traffic` 的现有行为一字未动，本表是纯粹的并行补充。
+/// `debug_traffic`（调试报文）是调试模式的**上游侧**报文（头部脱敏、
+/// 有全局字节闸）；本表是**下游侧**正文（客户端发来的请求体 + 网关下发的
+/// 响应体），供请求日志的「预览对话」弹窗用。两表按同一个 `id`（请求关联 id）
+/// 各存各的，谁也不依赖谁。
+///
+/// ── 采集条件：与调试模式同一个开关（v13 起）───────────────────
+/// 正文**只在调试模式开启时采集**（对齐 OmniProxy 的口径：不开调试模式就不
+/// 保存任何原始正文）—— 关着时连截断转换都不做，采集路径零开销。v13 之前的
+/// 版本是无条件采集的，那批历史正文已由 v13 一次清空（见 [`SCHEMA_VERSION`]）。
 ///
 /// ── 为什么独立成表而不是给 requests 加两列 ────────────────────
 /// 正文是大字段（两侧各 128 KiB 上限），明细列表的每次分页都要取
@@ -493,10 +521,10 @@ ALTER TABLE requests ADD COLUMN sensitive_hits TEXT NOT NULL DEFAULT '[]';
 /// `sqlite3` 命令行里直接看（排障的主要用法）。
 ///
 /// ── 为什么没有索引（连 ts 都不建）────────────────────────────
-/// 本表只有两种读法：按主键 id 取单行（主键自带）、按「保留最新 N 行」裁剪
-/// （2000 行的表全排序是微秒级）。唯一会按 ts 范围查它的是清理预览的计数，
-/// 那条走的是 `id IN (SELECT id FROM requests ...)` 主键查找。表有行数硬闸，
-/// 不会长到大到需要索引。
+/// 本表只有两种读法：按主键 id 取单行（主键自带）、清理时按
+/// 「`id IN (SELECT id FROM requests …)`」定位（主键查找）。唯一的全表扫描是
+/// 用户手动清空（`DELETE FROM request_raw`），而正文只在调试模式开启期间写入
+/// —— 表的增长由那个开关天然约束，不会长到需要为检索建索引。
 const V3_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS request_raw (
   id            TEXT PRIMARY KEY,
@@ -703,6 +731,20 @@ CREATE INDEX IF NOT EXISTS idx_checkin_records_outcome ON checkin_records(outcom
 CREATE INDEX IF NOT EXISTS idx_checkin_records_provider ON checkin_records(provider);
 ";
 
+/// 版本 12：requests 补「来源客户端」一列（schema v12）。
+///
+/// 与 v5 / v7 / v10 同一形态（既有表加列，单条 ALTER，幂等靠版本号）：
+/// `client` 存入口从下游 `User-Agent` 判出的客户端类型（`core::client`），
+/// 请求日志的「客户端」列读它。DEFAULT ''：旧行与「请求没带 UA」的路径都是
+/// 空串 —— 两者在展示层的处理相同（占位符），不必分两种形态。
+const V12_SCHEMA: &str = "
+-- ── requests 补来源客户端列（schema v12）─────────────────────
+ALTER TABLE requests ADD COLUMN client TEXT NOT NULL DEFAULT '';
+";
+// v13 没有对应的 `*_SCHEMA` 常量：它只有一条 DELETE，且在 `apply_version`
+// 的分支里用 `execute` 单独执行（要拿被删行数），语句就在那里 —— 见
+// `SCHEMA_VERSION` 的 v13 段。
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// 返回 `rusqlite::Result` 而不是本模块自造的字符串错误：调用方 `Db::open`
@@ -717,6 +759,9 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // 意味着删列删表，那是不可逆的数据丢失 —— 两者都不该自动发生。
         return Ok(());
     }
+    // v13 清掉的历史正文行数（0 = 这一轮什么都没删）：循环后据此决定是否
+    // VACUUM（见本函数尾部那段）。放循环外是因为 VACUUM 不能在事务里跑。
+    let mut cleaned_raw_rows = 0usize;
     for version in (current + 1)..=SCHEMA_VERSION {
         // 每个版本一个独立事务：DDL 与版本号必须一起生效或一起不生效，
         // 否则中断后会出现「表已建、版本号还是旧的」（下次启动重跑 DDL，
@@ -733,21 +778,44 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // 写事务的独占性由 SQLite 自己保证（同一连接上不允许第二条语句并发），
         // 不是靠 Rust 的独占借用。
         let tx = conn.unchecked_transaction()?;
-        apply_version(&tx, version)?;
+        apply_version(&tx, version, &mut cleaned_raw_rows)?;
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
+    }
+    if cleaned_raw_rows > 0 {
+        // ── 删完之后顺手 VACUUM 一次（v13 的「省空间」在这里真正落地）──
+        // `DELETE` 只是把行标成空闲页，库文件**不会缩小** —— 对「升级后马上想
+        // 看到磁盘降下来」的用户，只有 VACUUM（重建整库文件）才把空闲页还给
+        // 文件系统。触发条件是 `cleaned_raw_rows > 0`：全新库（表本来就空）与
+        // 已升过级的库都删 0 行、不付这个代价；只有「确实有历史正文被清掉」的
+        // 那次升级会做一遍整库重建（几十 MB 的库通常秒级，一次性成本）。
+        //
+        // VACUUM 不能在事务里，所以放在循环外（每个版本的事务都已提交）；
+        // 失败**不报错**：数据已经删掉了，回收空间是尽力而为的优化 —— 用户
+        // 之后仍可在请求日志页的「清理」弹窗里手动压缩（那条路有后台线程与
+        // 进度状态，见 `RequestStats::compact`）。
+        let _ = conn.execute_batch("VACUUM;");
     }
     Ok(())
 }
 
-/// 执行某个版本的 DDL。**新增版本时在这里加一个分支**，并在上面写好该版本的
-/// 建表/改表语句常量。
+/// 执行某个版本的 DDL / 数据动作，并把「清掉的历史正文行数」带回给 `migrate`
+/// （只有 v13 会写非零值，其余版本写 0）。**新增版本时在这里加一个分支**，
+/// 并在上面写好该版本的建表/改表语句常量。
+///
+/// `cleaned_raw_rows` 做成出参而不是返回值：绝大多数分支只是跑一段 DDL、
+/// 没有数据要上报，若改成 `Result<usize>` 则每个分支都得包一层 `Ok(0)`
+/// （形式噪音），出参让「只有关心它的那一版」写它。
 ///
 /// `_` 分支返回 Ok 而不是 unreachable!：版本号是外部输入（库文件可能来自
 /// 更新的二进制，被旧版读到），越过 [`SCHEMA_VERSION`] 的版本不该 panic。
 /// `migrate` 的主循环也不可能走到这里（循环上界就是 SCHEMA_VERSION），
 /// 所以这个分支实际是「调用方传了越界的 version」的防御。
-fn apply_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
+fn apply_version(
+    conn: &Connection,
+    version: i64,
+    cleaned_raw_rows: &mut usize,
+) -> rusqlite::Result<()> {
     match version {
         1 => conn.execute_batch(V1_SCHEMA),
         // v2：requests 补两个 JSON 文本列（重试链 / 敏感词命中）。
@@ -772,6 +840,19 @@ fn apply_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
         10 => conn.execute_batch(V10_SCHEMA),
         // v11：checkin_records 签到记录明细台账（签到记录页的数据源，见 V11_SCHEMA）
         11 => conn.execute_batch(V11_SCHEMA),
+        // v12：requests 补「来源客户端」一列（请求日志的客户端列，见 V12_SCHEMA）
+        12 => conn.execute_batch(V12_SCHEMA),
+        // v13：清空预览对话的历史正文（一次性空间回收，见 SCHEMA_VERSION 的
+        // v13 段）。先重放 v3 建表：存量库里有「版本号不低、request_raw 表却
+        // 缺失」的个例（v4 就是为修它而加的）—— 对那种库直接 DELETE 会报
+        // 「no such table」并把整个版本事务回滚，迁移就卡死了。
+        // 用 `execute` 而不是 `execute_batch`：要拿被删行数带出去，`migrate`
+        // 据此决定是否紧跟着 VACUUM（光 DELETE 不会让库文件缩小）。
+        13 => {
+            conn.execute_batch(V3_SCHEMA)?;
+            *cleaned_raw_rows = conn.execute("DELETE FROM request_raw", [])?;
+            Ok(())
+        }
         _ => Ok(()),
     }
 }

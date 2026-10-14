@@ -83,9 +83,9 @@ pub struct RuntimeConfig {
     locale: String,
     default_model: String,
     last_request_model: Option<String>,
-    /// 三档保留天数（事件日志 / 请求日志 / 按天聚合）。
+    /// 保留期设置（只剩事件日志一项；请求日志 / 按天聚合已全量保留）。
     ///
-    /// 为什么解析进字段而不是让调用方每次去 `raw` 里翻：保留期要被**每次记账 / 写日志**
+    /// 为什么解析进字段而不是让调用方每次去 `raw` 里翻：保留期要被**每次写日志**
     /// 取用（回调形式），从 `Value` 里逐个取值要处理类型不符、缺字段、范围夹紧，
     /// 放在这里解析一次即可；`raw` 仍是写盘时的唯一底稿。
     retention: RetentionSettings,
@@ -857,10 +857,9 @@ pub fn cors_enabled() -> bool {
 
 /// 只取保留期设置的轻量读取（**不克隆整份 raw**）。
 ///
-/// 为什么不让调用方用 `current().retention()`：保留期是在**每次记账 / 写日志**
-/// 上调用的（`RequestStats::record` → `retention_bounds`，`LogStore::append`
-/// → 裁剪），而 `current()` 每次都会克隆整个 `raw` Map —— 热路径上没必要。
-/// 这里只读锁取一个 `Copy` 值。
+/// 为什么不让调用方用 `current().retention()`：保留期是在**每次写日志**
+/// 上调用的（`LogStore::append` → 裁剪），而 `current()` 每次都会克隆整个
+/// `raw` Map —— 热路径上没必要。这里只读锁取一个 `Copy` 值。
 ///
 /// 读的是内存快照而不是磁盘：`update()` 落盘后会同步刷新快照，所以
 /// 「设置页刚保存 → 下一次裁剪就用新值」成立，且不必每次读文件。
@@ -1118,7 +1117,7 @@ pub fn update_raw_field(key: &str, value: Value) -> bool {
     })
 }
 
-/// 更新三档保留天数（`None` = 该项不动），返回是否写盘成功。
+/// 更新保留天数（`None` = 该项不动），返回是否写盘成功。
 ///
 /// 调用方（`stats_api::put_retention`）**必须先校验范围**：本函数按「已合法」
 /// 处理，越界值会被 `days_field` 的回读逻辑丢弃（那会让用户以为设置生效了）。
@@ -1130,20 +1129,11 @@ pub fn set_retention(patch: RetentionPatch) -> bool {
     update(|config| {
         let mut next = config.retention;
         // 只写传进来的项：缺省项保持原值，也**不落盘**成默认值 ——
-        // 否则「只改日志天数」会把另外两项一并固化成默认值，抹掉用户设置
-        let mut apply = |key: &str, value: Option<i64>, slot: &mut i64| {
-            if let Some(days) = value {
-                config.raw.insert(key.to_string(), Value::from(days));
-                *slot = days;
-            }
-        };
-        apply(KEY_LOG_RETENTION_DAYS, patch.log_days, &mut next.log_days);
-        apply(
-            KEY_REQUEST_RETENTION_DAYS,
-            patch.request_days,
-            &mut next.request_days,
-        );
-        apply(KEY_DAILY_RETENTION_DAYS, patch.daily_days, &mut next.daily_days);
+        // 否则一次空改会把该项固化成默认值，抹掉用户设置
+        if let Some(days) = patch.log_days {
+            config.raw.insert(KEY_LOG_RETENTION_DAYS.to_string(), Value::from(days));
+            next.log_days = days;
+        }
         config.retention = next;
     })
 }

@@ -452,14 +452,25 @@ pub fn shim_js() -> &'static str {
       return httpCall(request.method || 'GET', request.path || '/', request.body);
     },
     check_update: function () {
-      // 网页端走镜像更新（拉新镜像重启容器），不提供安装包下载
-      return Promise.resolve({
-        currentVersion: 'web', latestVersion: 'web', hasUpdate: false,
-        notes: '网页端通过 Docker 镜像更新：拉取新镜像后重启容器即可。',
-        publishedAt: '', pageUrl: '', installerKind: 'none',
-      });
+      // 网页端没有「壳打包的版本号」这个概念：不带 current，服务端按自己的
+      // 编译期版本比较（见 api/update 的 check 分支）。返回里带 selfUpdate /
+      // serverAsset / backupAvailable —— 面板据此决定显示「一键更新」、
+      // 「回滚」还是退回手动升级命令，不再由这里硬编码。
+      return call('GET', '/api/update/check');
     },
     get_update_status: function () { return call('GET', '/api/update/status'); },
+    // 下载三件套：下载落在服务端的数据目录（/data/updates），进度由面板轮询。
+    // 桌面端这三个走壳命令（壳要往后端转发），网页端直接打接口 —— 桥的两侧
+    // 名字一致，面板代码不感知差异。
+    download_update: function (args) {
+      var payload = args || {};
+      return call('POST', '/api/update/download', {
+        url: String(payload.url || ''),
+        name: payload.name != null ? String(payload.name) : '',
+      });
+    },
+    update_progress: function () { return call('GET', '/api/update/progress'); },
+    cancel_update: function () { return call('POST', '/api/update/cancel', {}); },
     backend_status: function () {
       return Promise.resolve({ ready: true, port: null, portFromEnv: false, failure: null });
     },
@@ -526,9 +537,8 @@ pub fn shim_js() -> &'static str {
     // 文件对话框类：导入要走文件选择，单独给一条带输入框的链路
     if (command === 'import_accounts') return importAccountsViaFile();
     return Promise.reject(new Error(
-      command === 'download_update' || command === 'update_progress' || command === 'cancel_update'
-      || command === 'run_installer'
-        ? '软件更新在网页端不可用：请通过 Docker 镜像更新'
+      command === 'run_installer'
+        ? '网页端不启动安装程序：容器内的更新请用「一键更新」（设置 → 软件更新）'
         : SHELL_UNAVAILABLE
     ));
   }
@@ -934,7 +944,7 @@ pub fn shim_js() -> &'static str {
       return call('POST', '/api/scheduled-tasks/' + encodeURIComponent(String(id || '')) + '/run', {});
     },
 
-    // ── 软件更新（检查可用，下载 / 安装明确拒绝）──
+    // ── 软件更新（检查 / 下载 / 容器内更新；只有「跑安装程序」是桌面专有）──
     checkUpdate: function () { return invokeShell('check_update'); },
     getUpdateStatus: function () { return call('GET', '/api/update/status'); },
     // 「软件更新」的出网线路（null = 直连）：与桌面 bridge 对齐，面板下拉读写
@@ -950,6 +960,15 @@ pub fn shim_js() -> &'static str {
       return invokeShell('run_installer', { path: String(path || ''), restart: restart !== false });
     },
     openReleasePage: function (url) { return invokeShell('open_release_page', { url: String(url || '') }); },
+    // ── 容器内更新（Linux headless / Docker）：安装 → 重启 ──
+    // 三步走：下载（上面三条已接）→ installUpdate（校验 sha256 后原地替换
+    // 二进制与 ui 目录）→ restartService（进程优雅退出，容器由 restart 策略
+    // 拉起，同一个容器、可写层保留）。未开 AGENT2API_SELF_UPDATE 的部署由
+    // 后端 400 拒绝；面板按 check 返回的 selfUpdate 字段决定是否显示这些入口。
+    // 回滚用的是 install 留下的 .backup 备份（同一套替换逻辑的反向操作）。
+    installUpdate: function () { return call('POST', '/api/update/install', {}); },
+    rollbackUpdate: function () { return call('POST', '/api/update/rollback', {}); },
+    restartService: function () { return call('POST', '/api/update/restart', {}); },
 
     // ── 出站指纹脱敏 ──
     getSanitize: function () { return call('GET', '/api/sanitize'); },
@@ -1003,8 +1022,14 @@ pub fn shim_js() -> &'static str {
     exportLogs: function () { return invokeShell('export_logs'); },
 
     // ── 请求统计报表 / 数据保留 ──
-    getStatsSummary: function (range) {
-      return call('GET', '/api/stats/summary?range=' + encodeURIComponent(range));
+    // dates（`{start, end}`，`YYYY-MM-DD`）只在 range=custom 时给，
+    // 与桌面壳 bridge.rs 的同名方法同一口径（toQuery 负责跳过空值）
+    getStatsSummary: function (range, dates) {
+      return call('GET', '/api/stats/summary' + toQuery({
+        range: range,
+        startDate: dates && dates.start,
+        endDate: dates && dates.end,
+      }));
     },
     getStatsRequests: function (query) { return call('GET', '/api/stats/requests' + toQuery(query)); },
     getStatsRequestFilters: function () { return call('GET', '/api/stats/requests/filters'); },

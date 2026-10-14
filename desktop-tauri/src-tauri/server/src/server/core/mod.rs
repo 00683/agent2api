@@ -67,6 +67,7 @@ pub mod checkin_history;
 pub mod checkin_records;
 pub mod checkin_schedules;
 pub mod clash;
+pub mod client;
 pub mod credential_maintenance;
 pub mod custom_providers;
 pub mod debug_traffic;

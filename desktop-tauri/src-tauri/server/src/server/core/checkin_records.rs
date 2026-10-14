@@ -33,7 +33,6 @@ use std::sync::OnceLock;
 use rusqlite::params;
 use serde_json::{json, Value};
 
-use crate::server::config;
 use crate::server::core::beijing;
 use crate::server::core::billing::checkin::{checkin_completed_today, claim_pending};
 use crate::server::db::Db;
@@ -205,13 +204,17 @@ struct Entry<'a> {
     kept_active: bool,
 }
 
-/// 落一行 + 顺手按保留期裁超期行（一次事务）。失败打 verbose，不向上报
+/// 落一行台账（一次事务）。失败打 verbose，不向上报
 /// （见模块头「写失败不报错」）。
+///
+/// 台账**全量保留**：不按天数裁、也没有条数上限（与请求日志同一取向）——
+/// 要清历史用签到记录页自己的「清空 / 按筛选删除」（`clear_all` /
+/// `clear_where`）。这里原本会顺带按「请求日志保留天数」裁超期行，
+/// 那套保留期已随请求日志一起移除。
 fn insert(entry: Entry<'_>) {
     let Some(db) = database() else { return };
     let ts = logging::now_ms();
     let date = beijing::today_key();
-    let cutoff = retention_cutoff();
     let failed = db
         .with_mut(|conn| -> Result<(), rusqlite::Error> {
             conn.execute(
@@ -234,10 +237,6 @@ fn insert(entry: Entry<'_>) {
                     entry.kept_active as i64,
                 ],
             )?;
-            // 保留期沿用「请求日志」的天数（不新增设置项）。签到记账一天几条，
-            // 顺手裁一条 DELETE 的代价可以忽略（同 request_stats::record 的理由：
-            // 只靠启动与「立即清理」裁，桌面端常驻数周会一直涨）。
-            conn.execute("DELETE FROM checkin_records WHERE date < ?1", [cutoff])?;
             Ok(())
         })
         .map(|result| result.is_err())
@@ -254,35 +253,6 @@ fn text_or(value: Option<&Value>, fallback: &str) -> String {
         .filter(|text| !text.is_empty())
         .unwrap_or(fallback)
         .to_string()
-}
-
-// ─── 保留期 ──────────────────────────────────────────────────
-
-/// 保留期的日期下界（北京时间键）：沿用「请求日志」的天数，口径与
-/// `RetentionBounds` 一致 —— 保留 N 天 = 含今天在内的 N 个自然日，往前推
-/// N-1 天；下限 1 天、上限 10 年（同 `Retention::normalized`）。
-/// 按 `date` 列（整日粒度）裁，与「签到按自然日」的语义对齐。
-fn retention_cutoff() -> String {
-    let days = config::retention_settings().request_days.clamp(1, 3650);
-    let today = beijing::today_key();
-    // date 键直接做日历减法有跨月坑，用 chrono 日期算再转回来
-    match chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d") {
-        Ok(today) => (today - chrono::Duration::days(days - 1))
-            .format("%Y-%m-%d")
-            .to_string(),
-        Err(_) => today, // 系统时钟异常到连日期键都不是合法格式：不裁比乱裁好
-    }
-}
-
-/// 「立即清理」（设置页 / 保留期改小后）与外部裁剪入口。
-/// 只按时间维度裁 —— 筛选维度的删除走 `clear_where`。
-pub fn prune() {
-    let Some(db) = database() else { return };
-    let cutoff = retention_cutoff();
-    let _ = db.with_mut(|conn| {
-        conn.execute("DELETE FROM checkin_records WHERE date < ?1", [cutoff])
-            .ok()
-    });
 }
 
 // ─── 查询与删除 ──────────────────────────────────────────────
