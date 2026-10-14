@@ -28,6 +28,7 @@ import {
   QUEUE_FIELDS,
   RETENTION_FIELDS,
   RETRY_FIELDS,
+  ROUTE_PROTECTION_SWITCHES,
   ROUTE_STICKY_OPTIONS,
   ROUTE_STRATEGIES,
   STATES,
@@ -218,6 +219,45 @@ function PanelHead({ title, tip, badge, actions }: PanelHeadProps) {
       {badge}
       {actions ? <div className='head-actions'>{actions}</div> : null}
     </div>
+  )
+}
+
+/**
+ * 可折叠面板：整块（标题栏 + 正文）收进 `<details>`，默认折叠。
+ *
+ * ── 为什么用原生 details/summary ─────────────────────────────
+ * 折叠是纯展示行为，原生元素自带键盘可达性（Enter/Space 切换）、
+ * 无脚本时也能用，且与请求日志页既有的 `.cv-details` 同一手法。
+ * 不引状态：`<details>` 自己记开合，React 只负责画一次。
+ *
+ * ── 折叠状态跨分类切换会保留 ─────────────────────────────────
+ * 各分类的 pane 是常驻挂载、靠 CSS 显隐（见 `paneClass`），
+ * 所以 `<details>` 的开合态天然跟着组件存活 —— 切走再切回来还是
+ * 用户上次的选择，不需要额外持久化。
+ */
+function CollapsiblePanel({ title, tip, badge, actions, children }: PanelHeadProps & { children: React.ReactNode }) {
+  // `summary` 里的一切点击都会切换开合（原生行为），而标题栏里有两类**独立
+  // 动作**的控件：问号提示（点开 tooltip）与右侧操作按钮（如「刷新」）。
+  // 点它们不该顺手把面板折起来 —— 尤其是「展开 → 点问号看说明」这个动作，
+  // 正文会在眼前消失。
+  //
+  // 用 `preventDefault` 而不是 `stopPropagation`：开合是 click 的**默认动作**
+  // （由 `<details>` 在事件传播结束后执行），`stopPropagation` 拦不住它。
+  function keepOpen(event: React.MouseEvent<HTMLElement>): void {
+    const target = event.target as HTMLElement
+    if (target.closest('.tip-q, .head-actions')) event.preventDefault()
+  }
+  return (
+    <details className='panel panel-fold'>
+      <summary className='panel-head' onClick={keepOpen}>
+        <span className='fold-caret' aria-hidden dangerouslySetInnerHTML={{ __html: iconHtml('caretRight', 14) }} />
+        <h2>{title}</h2>
+        {tip ? <span className='tip-q' data-tip={tip}></span> : null}
+        {badge}
+        {actions ? <div className='head-actions'>{actions}</div> : null}
+      </summary>
+      {children}
+    </details>
   )
 }
 
@@ -1178,6 +1218,19 @@ function RetryPane({ snap }: { snap: SettingsSnapshot }) {
 
 /* ─── 路由分类（转发选路的策略 + 会话粘性）── */
 
+/**
+ * 自愈开关的后端键 → 前端状态字段。
+ *
+ * 两边命名不同（后端是 `routingSink` 这类带前缀的长键，前端状态是 `sink`
+ * 这类短字段），这里显式列一张表而不是拼字符串 —— 拼出来的名字一旦对不上，
+ * 表现是「开关点了没反应」，那种静默失败最难查。
+ */
+const PROTECTION_STATE_FIELD = {
+  routingFailoverBackoff: 'failoverBackoff',
+  routingSink: 'sink',
+  routingBreakerEnabled: 'breakerEnabled',
+} as const
+
 function RoutingPane({ snap }: { snap: SettingsSnapshot }) {
   const routing: RoutingState = snap.routing
   // 读不到（桥不在 / 后端不可用）或还在检测时锁住两档 —— 锁住比发出一次注定失败的保存强
@@ -1202,6 +1255,7 @@ function RoutingPane({ snap }: { snap: SettingsSnapshot }) {
         <div className='retention-list'>
           {/* 两行的说明都收进行内问号（[data-tip]，tooltip.js 统一服务），并且**跟随当前档位**
               换内容 —— 每档干的事不一样，一段固定文案说不清 */}
+          <div className='prompt-group'>{t('选路规则')}</div>
           <div className='retention-row'>
             <label>{t('路由策略')}</label>
             <div className='routing-row'>
@@ -1226,6 +1280,35 @@ function RoutingPane({ snap }: { snap: SettingsSnapshot }) {
                 onValueChange={value => void saveRoutingField({ routingSticky: String(value) })} />
             </div>
           </div>
+          {/* 三个自愈开关：后端 v3.0.2 起就有，前端此前没有入口（说明文案还写着
+              「不需要配置」）。默认值下确实不用管，但实测踩过一次「垫底把整个
+              提供商压在队尾」的坑之后，做成看得见的开关更实在 —— 后端 API 现成，
+              这里只是补上控件。
+              分组条把「怎么排队」与「出了事怎么自愈」分开 —— 不分开时它们是
+              一串同构的行，读不出哪几行管选路、哪几行管失败处置。 */}
+          <div className='prompt-group'>
+            {t('自愈保护')}
+            <span className='note'>{t('默认值通常够用，出问题时才需要调')}</span>
+          </div>
+          {ROUTE_PROTECTION_SWITCHES.map(item => {
+            // label 与 Switch 靠 htmlFor/id 配对（同页既有写法，见 SwitchRow 与
+            // DB 面板）：点文字也能拨动，读屏才念得出这一项叫什么 —— 此前是
+            // 一个没有 htmlFor 的兄弟 <label> 配一个没有 id 的 Switch。
+            const switchId = `route-protection-${item.key}`
+            return (
+              <div key={item.key} className='retention-row'>
+                <label htmlFor={switchId}>{item.label}</label>
+                <div className='routing-row'>
+                  <span className='tip-q' data-tip={item.tip}></span>
+                  <Switch
+                    id={switchId}
+                    checked={routing[PROTECTION_STATE_FIELD[item.key]]}
+                    disabled={disabled}
+                    onCheckedChange={next => void saveRoutingField({ [item.key]: next })} />
+                </div>
+              </div>
+            )
+          })}
         </div>
         <div className='hint retention-note'>{NOTES.routing}</div>
       </div>
@@ -1448,17 +1531,16 @@ function ClineHeadersPanel({ snap }: { snap: SettingsSnapshot }) {
   const dirty = ready && !sameOverrides(buildOverrides(), state.overrides)
 
   return (
-    <section className='panel'>
-      <PanelHead
-        title={t('Cline 伪装头')}
-        tip={TIPS.clineHeaders}
-        badge={state.status === 'ready'
-          ? <StatusBadge tone='ok'>{t('已生效')}</StatusBadge>
-          : state.status === 'unavailable'
-            ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
-            : <StatusBadge tone='idle'>{t('检测中…')}</StatusBadge>}
-        actions={<RefreshButton id='btn-cline-headers-refresh' onClick={() => void refreshClineHeaders()} />}
-      />
+    <CollapsiblePanel
+      title={t('Cline 伪装头')}
+      tip={TIPS.clineHeaders}
+      badge={state.status === 'ready'
+        ? <StatusBadge tone='ok'>{t('已生效')}</StatusBadge>
+        : state.status === 'unavailable'
+          ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+          : <StatusBadge tone='idle'>{t('检测中…')}</StatusBadge>}
+      actions={<RefreshButton id='btn-cline-headers-refresh' onClick={() => void refreshClineHeaders()} />}
+    >
       <div className='panel-body'>
         <div className='retention-list'>
           {ready
@@ -1530,7 +1612,7 @@ function ClineHeadersPanel({ snap }: { snap: SettingsSnapshot }) {
         </div>
         <div className='hint retention-note'>{NOTES.clineHeaders}</div>
       </div>
-    </section>
+    </CollapsiblePanel>
   )
 }
 

@@ -341,8 +341,30 @@ fn codearts_daily_pool_envelope_cools_to_the_boundary_instead_of_ten_minutes() {
 
     let stored = rotate::account_limit_reset_at(&service, &id, "glm-5.3-flash");
     assert_eq!(stored, *reset_at, "落库的恢复时刻必须是适配器算出的日池重置点");
+    // ── 断言「是下一个北京零点」，而不是「距现在 > 10 分钟」（2026-10-13 修）──
+    //
+    // 原断言写的是 `minutes > 10`，本意是「不是 10 分钟兜底常量」；但它有个
+    // 时变缺陷：日池重置点就是**下一个北京零点**，于是每天 23:50–00:00 这十分钟
+    // 里「距零点」天然小于 10 分钟，用例必然变红（实测 2026-10-13 23:49 撞上）。
+    // 那是测试写法的问题，不是实现的 —— 与兜底常量无关的失败被报成了兜底。
+    //
+    // 改成直接钉住真正的判据：恢复时刻必须落在**当天或次日的北京零点**上，
+    // 且距现在不超过 24 小时（日池的语义就是「到零点重置」）。这样任何时刻
+    // 跑都成立，也不再依赖「现在离零点有多远」。
     let minutes = (stored - logging::now_ms()) / 60_000;
-    assert!(minutes > 10, "日池文案被压成 {minutes} 分钟 = 兜底常量，透传没生效");
+    assert!(
+        (0..=24 * 60).contains(&minutes),
+        "日池的恢复时刻应当落在 24 小时以内，实际 {minutes} 分钟"
+    );
+    // 判据：恢复时刻在北京时区里必须是 00:00:00 —— 日池按天重置。
+    // 10 分钟兜底常量（now + 10min）落在零点上的概率可忽略，这一条足以把它排除。
+    let at = crate::server::core::beijing::date_time_of_ms(stored).expect("合法时间戳");
+    use chrono::Timelike;
+    assert!(
+        at.hour() == 0 && at.minute() == 0 && at.second() == 0,
+        "恢复时刻必须是北京零点（日池按天重置），实际 {}",
+        at.format("%Y-%m-%d %H:%M:%S")
+    );
 }
 
 #[test]

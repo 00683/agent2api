@@ -501,11 +501,13 @@ async fn attempt_queue(
     // 建一次、整条请求共用 —— 选路、429 记账、成功清理三处读的必须是同一个键，
     // 否则冷却会写在一个名字上、查在另一个名字上。
     let cooldown_keys = rotate::CooldownKeys::new(&model);
-    // 会话粘性键（`route_state::conversation_key`）：模型 + 首条用户消息的
-    // 进程内哈希。空串 = 这条请求没有可用的会话特征（无 messages），粘性
-    // 自动不生效。整个请求周期只用这一个键 —— 429 顺延的后续选路查的是
-    // 同一个会话，粘住的账号失败后同样顺延（粘性不等于无条件）。
-    let conv_key = super::route_state::RouteState::conversation_key(&ctx.body);
+    // 会话粘性键（`route_state::conversation_key`）：优先取请求里的**显式会话
+    // 标识**（trace 头 / `prompt_cache_key` / Claude Code 的 `metadata.user_id`
+    // 等），都没有才回落到「模型 + 首条用户消息」的进程内哈希。空串 = 既没有
+    // 标识、也没有可用的会话特征（无 messages），粘性自动不生效。整个请求周期
+    // 只用这一个键 —— 429 顺延的后续选路查的是同一个会话，粘住的账号失败后
+    // 同样顺延（粘性不等于无条件）。
+    let conv_key = super::route_state::RouteState::conversation_key(ctx.client_headers, &ctx.body);
     let mut tried_ids: Vec<String> = Vec::new();
     // ── 两份独立的预算（见 config::RetrySettings）─────────────────────
     //   - `budget`：同一个账号上还能**原地重发**几次。整份请求共用一份，
