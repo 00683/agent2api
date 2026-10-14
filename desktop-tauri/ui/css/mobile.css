@@ -23,7 +23,13 @@
       7. 报表两列卡片网格 -> 单列
 
    桌面端（>=768px）整份不生效：全部规则锁在 @media (max-width:767px) 内。
-   选择器都锚在既有 class 上，不动原 CSS 文件的其它声明。 */
+   选择器都锚在既有 class 上，不动原 CSS 文件的其它声明。
+
+   注意「不生效」只等于「本文件不覆盖桌面」，它管不到新加的元素本身：
+   **移动端专有的元素必须自己保证在桌面端不占位**（见下面的 .mobile-menu-btn
+   / .nav-scrim）—— .shell 是「2 列 + 100vh」的 grid，只要多一个在流内的
+   子元素，就会多出一个隐式行，align-content 把 100vh 的富余高度在两行之间
+   平分，侧栏与主区会提前结束、窗口底部空出一条。 */
 
 /* ═══ 顶栏：加一条汉堡按钮（768px 以下才出现） ═══ */
 .topbar { position: relative; }
@@ -64,6 +70,13 @@
 
 /* ═══ 侧边栏抽屉化（纯 CSS，#nav-toggle 驱动） ═══ */
 .nav-toggle-input { position: absolute; opacity: 0; pointer-events: none; }
+/* 遮罩在桌面端必须**彻底不存在**，不能只是"看不见"：它是 .shell 的直接子
+   元素，而 .shell 是「2 列 + 100vh」的 grid —— 没有样式时它会成为第三个
+   网格项，多出的隐式行把 100vh 的富余高度分走一半，表现就是侧栏与主区提前
+   结束、窗口底部空出一条白带（内容越矮越明显）。.nav-toggle-input 靠
+   position:absolute 脱离了流才没踩到这条；遮罩要盖满整屏只能用 fixed，
+   所以这里直接 display:none，767px 内再打开。 */
+.nav-scrim { display: none; }
 
 @media (max-width: 767px) {
   .shell { grid-template-columns: 1fr; }
@@ -91,8 +104,10 @@
   .sidebar .sidebar-status { padding: 10px 14px; align-items: flex-start; }
   .sidebar .status-line { justify-content: flex-start; }
 
-  /* 遮罩（.nav-scrim 与 #nav-toggle 同为 .shell 子元素，在它之后） */
+  /* 遮罩（.nav-scrim 与 #nav-toggle 同为 .shell 子元素，在它之后）
+     display:block 是压掉顶层那条 display:none —— 少了它手机上遮罩照样不显示 */
   .nav-scrim {
+    display: block;
     position: fixed; inset: 0;
     background: rgba(0,0,0,.35);
     z-index: 30;
