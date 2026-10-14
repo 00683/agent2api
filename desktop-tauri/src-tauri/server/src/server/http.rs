@@ -860,7 +860,7 @@ async fn require_api_key(mut request: Request, next: Next) -> Response {
                 if seen_headers.is_empty() { "无".to_string() } else { seen_headers.join("+") },
             ),
         );
-        return errors::panel_login_required_response();
+        return errors::panel_login_required_response(request.headers());
     }
     // ── 未注册闸门（headless 专属，桌面壳不开启）────────────────
     // 管理员还没注册（也没用环境变量预置）：/api/* 只放行 /api/panel/
@@ -878,7 +878,7 @@ async fn require_api_key(mut request: Request, next: Next) -> Response {
         if !path.starts_with("/api/panel/")
             && !(keys.iter().any(|expected| request_matches_key(&request, expected)))
         {
-            return errors::panel_login_required_response();
+            return errors::panel_login_required_response(request.headers());
         }
         return next.run(request).await;
     }

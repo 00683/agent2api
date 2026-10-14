@@ -66,6 +66,21 @@ const TOKEN_SEP: char = '.';
 /// 也只发一条 —— 判据的形状必须和被预测的对象一致（原来种两枚正是因为登录发两条；
 /// 合成一枚之后两枚探针反而会误报「通道好」）。
 pub const PROBE_COOKIE: &str = "agent2api-panel-probe";
+/// **升级过渡期**的旧 refresh cookie 名（上一版独立签发、`Path=/api/panel`）。
+///
+/// 只读、不签发：合成一枚之后登录/刷新都不再写它，这里读它是为了**升级那一刻
+/// 不把所有在线的人踢掉**。那一版的 access 表在内存里（重启即空），而本次改动
+/// 又把 access 挪到了新 kv 键（`panelAccessSessions`），所以升级后罐里那枚裸
+/// access 必定判无效 —— 唯一还能把会话救回来的是 `panelTokens` 里那条 refresh，
+/// 而它只存在这枚旧 cookie 里（refresh 表格式本次没动，旧记录照旧有效）。
+/// 不读它就等于**升级即全员重登一次**。
+///
+/// 与 `split_session_cookie` 对裸 access 的回退是同一条理由的两半：那边不读会
+/// 把还活着的会话无谓踢掉，这边不读会把还活着的 refresh 一起丢掉。
+///
+/// 排在会话 cookie 之后：两者都在罐里时新的优先（旧值多半是它上一次轮换的残本，
+/// 命中「已轮换记录」只会白走一趟重放判定）。**下个大版本删掉**。
+const LEGACY_REFRESH_COOKIE: &str = "agent2api-panel-rt";
 
 /// access token 有效期（短效）
 const ACCESS_TTL: Duration = Duration::from_secs(2 * 3600);
@@ -642,16 +657,21 @@ fn access_candidates(headers: &HeaderMap) -> Vec<String> {
 }
 
 /// refresh 凭据的**全部候选**，顺序与 `access_candidates` 同形
-/// （会话 cookie 的每一条的第二段 → `x-panel-refresh` → Bearer）。
+/// （会话 cookie 的每一条的第二段 → 升级期旧 refresh cookie → `x-panel-refresh`
+/// → Bearer）。
 ///
 /// 与 access 共用一份「为什么不再短路」的理由：轮换请求同样会被罐里那把旧
 /// refresh 短路，结果是把活链旁边的僵尸链拿去轮换 —— 撞上重放检测，整链作废，
 /// 用户被迫重登（这条路径此前只在日志里见过"登录已过期"，没人看得出是被短路）。
+///
+/// 旧名前那一格是**升级过渡**用的（见 `LEGACY_REFRESH_COOKIE`）：它排在会话 cookie
+/// 之后，新格式在场时旧值不会抢跑。
 pub fn refresh_candidates(headers: &HeaderMap) -> Vec<String> {
     dedup(
         session_cookie_halves(headers)
             .into_iter()
             .filter_map(|half| half.1)
+            .chain(cookie_values(headers, LEGACY_REFRESH_COOKIE))
             .chain(named_header_tokens(headers, "x-panel-refresh"))
             .chain(bearer_tokens_of(headers))
             .collect(),
@@ -759,6 +779,42 @@ pub fn rotate_session(headers: &HeaderMap) -> Option<IssuedSession> {
     drop(table);
     revoke_access_of_session(&session);
     None
+}
+
+/// 请求里是否带着一把**仍活着**的 refresh（未过期、未轮换）。只读：不轮换、
+/// 不判重放、不动任何会话链。
+///
+/// 存在的理由是 401 的处置必须分清两件事，而这两件事在请求上长得一模一样：
+///
+/// - **access 过期、refresh 还活着**：这是续期前的**正常**中间态。那枚会话 cookie
+///   必须留在浏览器手里 —— 客户端拿到 401 的下一步就是拿它去 `/api/panel/refresh`
+///   换新令牌。此时清掉等于把 30 天的静默续期砍成每 2 小时一次强制重登
+///   （access 寿命就是 `ACCESS_TTL`，而同一枚 cookie 里装着 30 天的 refresh）。
+/// - **整条会话链已经没了**：这才是该清 cookie 的情形 —— 不清的话那枚死凭据每次
+///   开页都被带回来重新判一次无效（生产读数：同一把对不上任何登录的指纹两天里
+///   出现 51 次）。
+///
+/// 判据与 `rotate_session` 的「活候选」一致：候选里只要有一把命中未轮换且未过期的
+/// 记录，就说明轮换走得通，cookie 不能清。
+pub fn has_live_refresh(headers: &HeaderMap) -> bool {
+    let hashes: Vec<String> = refresh_candidates(headers)
+        .iter()
+        .map(|token| sha256_hex(token))
+        .collect();
+    if hashes.is_empty() {
+        return false;
+    }
+    let now = now_ms();
+    let mut table = match refresh_tokens().lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    table.retain(|record| record.expires_at > now);
+    hashes.iter().any(|hash| {
+        table
+            .iter()
+            .any(|record| &record.hash == hash && !record.rotated)
+    })
 }
 
 /// 登出：按 refresh 候选找到会话链，整链撤销 + 清掉请求里能定位到的 access。
@@ -1077,6 +1133,46 @@ mod credential_candidate_tests {
         assert_eq!(vec![session.access_token.clone()], access_candidates(&request(&text, &[])));
         assert_eq!(vec![session.refresh_token.clone()], refresh_candidates(&request(&text, &[])));
         assert!(session_valid(&request(&text, &[])), "一枚 cookie 就该把会话撑起来");
+    }
+
+    /// 升级过渡：罐里还留着上一版那枚独立 refresh cookie（`agent2api-panel-rt`）时，
+    /// 它必须仍被当 refresh 候选读出来 —— 否则升级那一刻 access 表是新键（空），
+    /// 唯一能救回会话的就只有它，不读等于**全员被迫重登一次**。
+    ///
+    /// 两条断言分别钉住两侧：能被读出来（旧值不丢），以及**不抢跑**（会话 cookie
+    /// 在场时新值排在前面）。
+    #[test]
+    fn a_legacy_refresh_cookie_still_feeds_the_rotation() {
+        let session = IssuedSession::new_session();
+        // 只有旧名：仍要认得出来
+        let legacy_only = request(
+            &format!("{LEGACY_REFRESH_COOKIE}={}", session.refresh_token),
+            &[],
+        );
+        assert_eq!(
+            vec![session.refresh_token.clone()],
+            refresh_candidates(&legacy_only),
+            "旧名的 refresh 必须仍进候选（升级期不把人踢下线）"
+        );
+        assert!(
+            rotate_session(&legacy_only).is_some(),
+            "带着旧 cookie 的浏览器应当能静默换到新令牌"
+        );
+
+        // 旧名 + 新格式同时在罐里：新的排在前面，旧值不抢跑
+        let both = request(
+            &format!(
+                "{}=acc.{rt}; {LEGACY_REFRESH_COOKIE}=legacy-rt",
+                ACCESS_COOKIE,
+                rt = session.refresh_token
+            ),
+            &[],
+        );
+        assert_eq!(
+            vec![session.refresh_token.clone(), "legacy-rt".to_string()],
+            refresh_candidates(&both),
+            "会话 cookie 的 refresh 段要排在旧名之前"
+        );
     }
 
     /// 本次事故的正对照（2026-09-29，fnOS :5666 中转）：罐里盖着一把**陈年**同名
