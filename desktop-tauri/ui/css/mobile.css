@@ -454,10 +454,13 @@
   .req-row > .req-none,
   .req-row > span:empty { display: none; }
 
-  /* 重置 page-requests.css 的 @media(max-width:1200px) 逐格定位：它把 9 列
-     重排成 4 列 × 4 行的「时间+模型 / 提供商+用时 / 用量 / 详情」表格。
+  /* 重置 page-requests.css 的 @media(max-width:1200px) 逐格定位：它把这几列
+     重排成 4 列 × 4 行的「时间+模型 / 提供商+用时 / 用量 / 客户端+详情」表格。
      改成单列卡片后这些 grid-row/grid-column 会让浏览器隐式生成多余列轨道，
-     单列变成多列。逐格重置为 auto 后回归自然流。 */
+     单列变成多列。逐格重置为 auto 后回归自然流。
+     ⚠️ 这份清单必须与 page-requests.css 那个媒体查询里的逐格定位**逐格对应**：
+     那边新增一列（例如后来的「客户端」）而这边漏了它，漏掉的那一格就会带着
+     grid-column 落进单列卡片里，整块破版。 */
   .req-row > .req-time,
   .req-row > .req-model,
   .req-row > .req-status,
@@ -465,6 +468,7 @@
   .req-row > .req-target,
   .req-row > .req-dur,
   .req-row > .req-usage,
+  .req-row > .req-client,
   .req-row > .req-error-cell,
   .req-row > .req-detail {
     grid-row: auto;
@@ -727,7 +731,6 @@
   .ck-records-table .ck-col-source { grid-column: 1; grid-row: 3; }
   .ck-records-table .ck-col-detail { grid-column: 1 / -1; grid-row: 4; overflow-wrap: anywhere; }
   .ck-records-table .ck-record-reason { margin-left: 6px; }
-}
 }
 
 /* ═══ 定时签到：条目行不折行 → 信息区被压成 0 宽（文字竖排）+ 按钮溢出 ═══

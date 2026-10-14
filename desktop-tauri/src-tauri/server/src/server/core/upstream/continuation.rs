@@ -634,13 +634,49 @@ pub struct Continuation {
 /// 「反正逻辑等价，包一层也无所谓」：包一层要多一次 channel 往返与每帧一次 JSON
 /// 解析，开关关着也要付，换 0 收益。
 ///
-/// 上限 1（= 只发原始那一轮）在这里也归一成 None：与关掉等价，别为它走包装路径。
+/// **两个口径的换算在这里做掉（+1），别让它们各自漂在调用两侧**：配置读出来的
+/// `autoContinueMaxRounds` 是**续写次数**（`AUTO_CONTINUE_MIN_ROUNDS` 的定义是
+/// 「一次请求最多『再问一次』几回」，端点侧「只想把预算收到 1 轮」也是这个意思），
+/// 而 [`Continuation::max_rounds`] 是**含首轮的总轮数**。所以设 3 = 续 3 轮（总 4 轮），
+/// 设 1 = 续 1 轮。
+///
+/// 从前这里是 `(max >= 2).then_some(max)`，把两个口径当成了同一个：设 3 实际只续
+/// 2 轮，设 1（PUT 校验放行的合法值）直接返回 `None` —— 恰好造出配置侧专门反对的
+/// 那个状态（「开着开关却一轮都不续，与关掉开关是同一件事」，见
+/// `AUTO_CONTINUE_MIN_ROUNDS`）。
 pub fn plan() -> Option<usize> {
     if !config::auto_continue() {
         return None;
     }
-    let max = config::auto_continue_max_rounds().clamp(0, 1_000) as usize;
-    (max >= 2).then_some(max)
+    Some(total_rounds_of(config::auto_continue_max_rounds()))
+}
+
+/// 配置口径（续写次数）→ [`Continuation::max_rounds`]（含首轮的总轮数）。
+///
+/// 单独抽成纯函数是为了能被钉住：`plan()` 读的是全局配置，而并发用例改全局配置
+/// 会互相踩（本仓已有同类教训），所以算术归算术、读配置归读配置。
+fn total_rounds_of(continuations: i64) -> usize {
+    continuations.clamp(1, 1_000) as usize + 1
+}
+
+#[cfg(test)]
+mod round_budget_tests {
+    //! 续写次数 → 总轮数 的换算。钉它是因为这里**真的错过一次**：从前 `plan()`
+    //! 把两个口径当同一个（`(max >= 2).then_some(max)`），于是设 3 只续 2 轮、
+    //! 设 1（PUT 校验放行的合法值）直接返回 None 把功能关掉 —— 而配置侧专门写了
+    //! 「想关就去关开关，不要用数字表达关闭」（见 `AUTO_CONTINUE_MIN_ROUNDS`）。
+
+    use super::*;
+
+    #[test]
+    fn the_configured_continuation_count_becomes_rounds_including_the_first() {
+        assert_eq!(total_rounds_of(1), 2, "设 1 = 续一轮（不是关掉功能）");
+        assert_eq!(total_rounds_of(3), 4, "设 3 = 续三轮（默认值，别少一轮）");
+        assert_eq!(total_rounds_of(8), 9, "上限 8 = 续八轮");
+        // 越界走夹紧（配置层已校验 1..=8，这里是纵深防御：直读环境变量兜底那条路）
+        assert_eq!(total_rounds_of(0), 2);
+        assert_eq!(total_rounds_of(-5), 2);
+    }
 }
 
 impl Continuation {

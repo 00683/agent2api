@@ -47,7 +47,10 @@
         if (k) map.set(k, labelOf(th));
       });
     }
-    if (!map.size && !hasKey) return;   // 既没 key 也没 fallback 可用的表
+    // 判据要问「这张表有没有可写的标签」，不能问「有没有 key」：网络代理页与
+    // 订阅表的表头一个 data-col 都没有（它们走下面按列序兜底那一支），只看 hasKey
+    // 会让这两张表整表跳过 —— 卡片化之后每个格子上方只剩一条空标签，列名全丢。
+    if (!hasKey && !ths.some(th => labelOf(th))) return;
 
     table.querySelectorAll('tbody tr').forEach(tr => {
       const cells = tr.children;
