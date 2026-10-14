@@ -104,6 +104,7 @@ fn main() -> ExitCode {
     // 面板访问控制的库句柄与刷新令牌载入（注册 / 双令牌落盘都走它）
     agent2api_server::server::access::attach_db(state.db().cloned());
     agent2api_server::server::access::load_refresh_tokens();
+    agent2api_server::server::access::load_access_tokens();
     // env 预置的管理员同步进库（明文在此前已转哈希，库里只存哈希）
     agent2api_server::server::access::sync_env_admin_to_store();
 
