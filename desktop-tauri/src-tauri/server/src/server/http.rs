@@ -521,6 +521,17 @@ pub fn panel_router(state: ServerState) -> Router {
             "/api/keepalive-strip",
             get(api::keepalive::get_keepalive_strip).put(api::keepalive::put_keepalive_strip),
         )
+        // ── 长度截断的自动续写 ──
+        // 与 /api/keepalive-strip 同一族（GET 读 / PUT 写、默认关、改的是客户端
+        // 看得见的行为），比它多一项：一个布尔开关 + 一个有界整数（轮数上限）——
+        // 上限是续写链两道停机里那道硬保险（相似度闸是软判据），两项合起来才
+        // 决定一次请求最多打上游几回，所以挂在同一条端点上。
+        // 挂 protected 的理由与那两者相同：开着它会为一次客户端请求多打若干次
+        // 上游往返、多花账号额度（判据与代价见 core::upstream::continuation）。
+        .route(
+            "/api/auto-continue",
+            get(api::auto_continue::get_auto_continue).put(api::auto_continue::put_auto_continue),
+        )
         // ── 机器人校验开关 ──
         // 与 /api/sanitize 同形的单开关端点（GET 读 / PUT 写），挂 protected：
         // 它决定登录 / 注册是否要求 ALTCHA proof-of-work，敏感度同级。

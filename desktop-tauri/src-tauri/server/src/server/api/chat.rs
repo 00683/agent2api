@@ -51,6 +51,7 @@ use serde_json::{json, Value};
 
 use crate::server::config;
 use crate::server::core::upstream::cancellation;
+use crate::server::core::upstream::continuation::{self, Continuation};
 use crate::server::core::upstream::usage::RequestTelemetry;
 use crate::server::core::upstream::{ForwardOutcome, ForwardRequest};
 use crate::server::errors::GatewayError;
@@ -194,6 +195,18 @@ pub async fn chat_completions(
     // body 还是客户端发来的原值；送进转发层后 payload 会被就地改写（默认模型注入）。
     // **仅调试模式开启时采集** —— 关着时这里是零开销的 None（预览对话没有正文）
     let raw_request = pipeline::capture_raw_body(&body);
+    // 自动续写的上下文（开关 `autoContinue` **默认关**）。关着时这里连一份 clone
+    // 都不做 —— `plan()` 先问开关，再决定要不要复制请求体/请求头/白名单。
+    // 判据、多轮拼接与用量合并口径都在 `core::upstream::continuation`。
+    let continuation = continuation::plan().map(|max_rounds| Continuation {
+        service: state.upstream().clone(),
+        base_body: payload.clone(),
+        stream,
+        client_headers: headers.clone(),
+        telemetry: telemetry.clone(),
+        allowed_providers: scope.clone(),
+        max_rounds,
+    });
     let outcome = state
         .upstream()
         .forward(ForwardRequest {
@@ -219,6 +232,14 @@ pub async fn chat_completions(
         Ok(ForwardOutcome::Stream { status, stream: source }) => {
             // 流式：记账**不能**在这里做 —— 这里只是「响应头已就绪」，
             // 内容还在下发。包装一层，由流自己在跑完/被丢弃时记账
+            //
+            // 续写包装在 `RecordingStream` **之前**：记账要覆盖整条客户端可见的流
+            // （含所有续写轮的耗时与用量），而终止帧的过滤必须发生在下游协议
+            // 状态机看到它之前 —— 顺序反了会让 Responses/Anthropic 的机器提前收尾。
+            let source = match &continuation {
+                Some(context) => context.stream(source),
+                None => source,
+            };
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
             let context = RecordContext {
                 stats,
@@ -252,6 +273,12 @@ pub async fn chat_completions(
             .into_response()
         }
         Ok(ForwardOutcome::Completion { body }) => {
+            // 非流式：续写在这里问完（聚合体已经拿到全文，判断与再打一轮都是同步
+            // 分支）。没开关时 `continuation` 是 None，body 一个字节都不动。
+            let body = match continuation {
+                Some(context) => context.complete(body).await,
+                None => body,
+            };
             // 响应正文在记账前抄一份（完整 JSON 文本；序列化失败或调试模式
             // 关着给 None，那一侧少存一份正文不影响明细）
             let raw_response = pipeline::capture_raw_json(&body);
