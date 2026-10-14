@@ -543,27 +543,115 @@ pub fn shim_js() -> &'static str {
     ));
   }
 
-  async function importAccountsViaFile() {
+  /**
+   * 网页端的「导入账号」：浏览器没有原生文件对话框，用 <input type=file> 顶替。
+   *
+   * 移动端的三处坑（都踩过，改动时别退回去）：
+   *   · 输入框**不能** `display:none` —— iOS Safari 会忽略对隐藏 file input 的
+   *     程序化 `click()`，表现成「点了没反应」。改成视觉隐藏（离屏 + 透明）。
+   *   · 在系统选择器里点「取消」时 `change` 不触发，Promise 永远挂着、按钮卡在
+   *     「导入中…」。用 window focus / visibilitychange 兜底：回到页面后仍没拿到
+   *     文件就按取消落定（与桌面壳返回 `{canceled:true}` 同一契约）。
+   *   · `accept` 只写扩展名：Android 各家文件管理器对 MIME 形（application/json）
+   *     支持不一，带上它反而可能把 .json 过滤掉。
+   *
+   * 解析口径与桌面壳 `commands.rs::import_accounts` 对齐，见 buildImportPayload。
+   */
+  function importAccountsViaFile() {
     return new Promise(function (resolve, reject) {
       var input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.json,application/json';
-      input.style.display = 'none';
-      input.addEventListener('change', async function () {
-        var file = input.files && input.files[0];
+      input.accept = '.json';
+      input.setAttribute('aria-hidden', 'true');
+      input.tabIndex = -1;
+      // 视觉隐藏而非 display:none（理由见上）
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      input.style.top = '0';
+      input.style.width = '1px';
+      input.style.height = '1px';
+      input.style.opacity = '0';
+
+      var settled = false;      // 结果只落定一次
+      var picked = false;       // change 是否已同步拿到文件（压过取消兜底）
+      var settleTimer = null;
+
+      function cleanup() {
+        window.removeEventListener('focus', onReturn);
+        document.removeEventListener('visibilitychange', onVisibility);
+        if (settleTimer !== null) { window.clearTimeout(settleTimer); settleTimer = null; }
         input.remove();
-        if (!file) { reject(new Error('未选择文件')); return; }
-        try {
-          var text = await file.text();
-          var payload = JSON.parse(text);
-          resolve(await call('POST', '/api/accounts/import', payload));
-        } catch (error) {
+      }
+      function settleCancel() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ canceled: true });
+      }
+      function onReturn() {
+        if (settleTimer !== null) return;
+        // 给系统选择器一点时间派发 change，再判定「没选」= 取消
+        settleTimer = window.setTimeout(function () {
+          settleTimer = null;
+          if (!picked) settleCancel();
+        }, 400);
+      }
+      function onVisibility() {
+        if (document.visibilityState === 'visible') onReturn();
+      }
+
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        if (!file) { settleCancel(); return; }
+        picked = true;          // 同步置位：兜底那条链不再当取消
+        cleanup();
+        file.text().then(function (text) {
+          var payload;
+          try {
+            payload = buildImportPayload(JSON.parse(text));
+          } catch (error) {
+            settled = true;
+            reject(asError(error));
+            return;
+          }
+          call('POST', '/api/accounts/import', payload).then(
+            function (result) { settled = true; resolve(result); },
+            function (error) { settled = true; reject(asError(error)); }
+          );
+        }, function (error) {
+          settled = true;
           reject(asError(error));
-        }
+        });
       });
+
       document.body.appendChild(input);
+      window.addEventListener('focus', onReturn);
+      document.addEventListener('visibilitychange', onVisibility);
       input.click();
     });
+  }
+
+  /**
+   * 把用户选的文件整成 `POST /api/accounts/import` 的请求体。
+   * 与桌面壳 `commands.rs::import_accounts` + `unwrap_envelope_file` 同口径：
+   * 「导出文件」（顶层 accounts）、「裸账号数组」、以及网页端旧版把 `{success,data}`
+   * 信封整个存进文件的情况 —— 三种形状都认，自定义提供商定义一并带上。
+   */
+  function buildImportPayload(parsed) {
+    var document_ = parsed;
+    if (document_ && !Array.isArray(document_)
+      && !document_.accounts && document_.data && document_.data.accounts) {
+      document_ = document_.data;
+    }
+    var accounts = Array.isArray(document_) ? document_ : (document_ && document_.accounts);
+    if (!Array.isArray(accounts)) {
+      throw new Error('文件里没有 accounts 数组（不是本程序导出的账号文件？）');
+    }
+    var body = { accounts: accounts };
+    if (document_ && !Array.isArray(document_) && document_.customProviders) {
+      body.customProviders = document_.customProviders;
+    }
+    return body;
   }
 
   // ── 装配对外接口 ─────────────────────────────────────────
