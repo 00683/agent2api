@@ -250,6 +250,13 @@ fn defer_to_next_account(
 /// 它的出路只有换号一条（见 [`defer_to_next_account`]）。
 const TRANSIENT_RETRY_STATUSES: &[u16] = &[408, 500, 502, 503, 504];
 
+/// 按**请求体字节数**拒收的状态码：这一档的结论只由「这份 body 有多大」决定，
+/// 重发同一份字节必然得到同一个失败 ⇒ 不进原地重发（见 [`fallback_retry_advice`]）。
+///
+/// 与 [`TRANSIENT_RETRY_STATUSES`] 相反：那三个码说的是「上游或链路自己抖了一下」，
+/// 再看一眼有意义；413 没有任何会变的量。
+const PAYLOAD_SIZE_REJECTION_STATUSES: &[u16] = &[413];
+
 /// 这次的失败状态码是否命中「指定错误码直接换号」名单（设置页「通用 → 请求重试」）。
 ///
 /// 命中的失败**跳过本账号**：不进 [`send_with_retry`] 的原地重发，也不做同
@@ -318,7 +325,12 @@ fn transport_retry_advice(error: &super::request::UpstreamRequestError, remainin
 ///     走到这里说明已经刷过一轮仍失败，重发没有新变量；
 ///   - `ContentBlocked`（内容策略拦截）：也有专属动作（换中性提示词重发一次，
 ///     见 `attempt_queue` 的动作 0），走到这里说明那次补救已经用掉 ——
-///     再原地重发同一份 body 结论不变（拦的是字节，不是账号）。
+///     再原地重发同一份 body 结论不变（拦的是字节，不是账号）；
+///   - `Fatal` + **413**（见 [`PAYLOAD_SIZE_REJECTION_STATUSES`]）：上游入口按请求体
+///     字节数拒收（实测 Loomy 的网关回 `{"error_code":"APIG.0201","error_msg":
+///     "Request entity too large"}`），判据里没有任何会变的量。而代价不对称：
+///     每次往返约 13 秒 + 一个 5 秒间隔，三次下来客户端的 60 秒等待墙先到，
+///     面板里只剩下「408 客户端在响应完成前断开」，真实成因埋在 attempt_details。
 fn fallback_retry_advice(
     class: &UpstreamErrorClass,
     remaining: usize,
@@ -331,6 +343,11 @@ fn fallback_retry_advice(
         UpstreamErrorClass::QuotaLimited { .. }
         | UpstreamErrorClass::TokenExpired { .. }
         | UpstreamErrorClass::ContentBlocked { .. } => None,
+        // 体积被入口拒收：重发同一份字节只会得到同一个 413（换号也一样，但那是
+        // 编排层的事，这里只撤「原地再发一次」这一件事）
+        UpstreamErrorClass::Fatal { .. } if PAYLOAD_SIZE_REJECTION_STATUSES.contains(&status) => {
+            None
+        }
         UpstreamErrorClass::Fatal { .. } => Some(RetryAdvice {
             delay_ms: config::retry_settings().delay_ms(),
             reason: format!("上游错误（HTTP {status}），换账号前先原地重发"),

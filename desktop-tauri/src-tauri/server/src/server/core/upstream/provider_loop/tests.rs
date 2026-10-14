@@ -411,3 +411,76 @@ fn that_one_argument_is_the_divider_between_a_day_and_ten_minutes() {
         (after - before) / 60_000
     );
 }
+
+const APIG_TOO_LARGE_BODY: &str = r#"{"error_msg":"Request entity too large","error_code":"APIG.0201","request_id":"apig-test"}"#;
+
+fn fatal(status: u16) -> UpstreamErrorClass {
+    UpstreamErrorClass::Fatal {
+        status,
+        message: format!("上游返回 {status}"),
+        upstream_code: None,
+    }
+}
+
+/// 413 说的是「这份字节太大」，重发一遍没有任何会变的量 ⇒ 不消耗原地重发预算。
+/// 改造前它落到兜底那一档，三次 ×5 秒间隔 + 每次约 13 秒往返 = 客户端的 60 秒
+/// 等待墙先到，面板只剩「408 客户端在响应完成前断开」，真因（413）埋在明细里。
+#[test]
+fn a_payload_size_rejection_gets_no_in_place_retry() {
+    assert!(
+        PAYLOAD_SIZE_REJECTION_STATUSES.contains(&413),
+        "413 应当在「按体积拒收」名单里"
+    );
+    assert!(
+        fallback_retry_advice(&fatal(413), 3, 413).is_none(),
+        "预算还剩 3 次也不该给 413 提原地重发"
+    );
+}
+
+/// 反对照：其它 4xx/未知失败照旧走兜底原地重发（这条改动只放开"体积拒收"那一格，
+/// 没有把 400 这类"含义由上游决定"的码一并排除）。
+#[test]
+fn other_fatal_statuses_still_get_the_fallback_resend() {
+    for status in [400u16, 404, 409] {
+        assert!(
+            fallback_retry_advice(&fatal(status), 3, status).is_some(),
+            "HTTP {status} 的语义由上游决定，兜底原地重发的既有行为不该变"
+        );
+    }
+    assert!(
+        !TRANSIENT_RETRY_STATUSES.contains(&413),
+        "413 不该被当成瞬时抖动（否则瞬时那一档会把它重发回去）"
+    );
+}
+
+/// 端到端：打到真实返回 413 的替身上身，**只发一次**（改造前是 1 + 3 次）。
+#[tokio::test]
+async fn a_real_413_response_is_sent_once_and_handed_back() {
+    let (transport, hits, task) =
+        mock_upstream(413, "application/json; charset=utf-8", APIG_TOO_LARGE_BODY).await;
+    let mut budget = RetryBudget::new(3);
+    let capture = crate::server::core::debug_traffic::TrafficCapture::begin("payload-too-large");
+    let result = send_with_retry(
+        &ZCODE_ADAPTER,
+        &transport,
+        &mut budget,
+        Some(&capture),
+        &RequestTelemetry::new(),
+        false,
+    )
+    .await;
+    task.abort();
+    let failure = match result {
+        Ok(_) => panic!("HTTP 413 不该被当成成功流"),
+        Err(failure) => failure,
+    };
+    assert_eq!(
+        1,
+        hits.load(Ordering::SeqCst),
+        "体积拒收的失败应当一次就交回，不该原地重发"
+    );
+    assert!(
+        matches!(failure.class, UpstreamErrorClass::Fatal { status: 413, .. }),
+        "状态码 413 要原样带回，不该被折成别的失败"
+    );
+}
