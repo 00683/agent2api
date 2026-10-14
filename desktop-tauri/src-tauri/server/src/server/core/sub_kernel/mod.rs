@@ -35,6 +35,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 
+use crate::server::core::account_store::AccountStore;
 use crate::server::core::proxy_pool;
 use crate::server::logging;
 
@@ -51,6 +52,24 @@ pub const KERNEL_DIR_NAME: &str = "proxy-kernel";
 /// 内核目录：`{config_dir}/proxy-kernel/`
 pub fn kernel_dir() -> PathBuf {
     crate::paths::config_dir().join(KERNEL_DIR_NAME)
+}
+
+/// 进程级账号存储句柄（bootstrap 时 install 一次）。
+///
+/// 内核的 lazy listeners（`runtime::allocate_listeners`）要回答「哪些节点被
+/// 账号引用着」—— 这个答案在账号存储里，而 worker 是独立任务、拿不到
+/// `ServerState`。与 `proxy_pool::install` 同一形态：bootstrap 把句柄装进来，
+/// runtime 用它读引用集合。`None`（库不可用）时读引用一律给空集合 —— 内核
+/// 一个监听器都不开，节点仍镜像进池，可恢复（见 runtime 的说明）。
+static STORE: OnceLock<Option<AccountStore>> = OnceLock::new();
+
+/// 接线（`ServerState::bootstrap` 调用）。重复调用无副作用。
+pub fn install_store(store: Option<AccountStore>) {
+    let _ = STORE.set(store);
+}
+
+fn account_store() -> Option<&'static AccountStore> {
+    STORE.get().and_then(Option::as_ref)
 }
 
 /// 当前平台的发布资产（名字 + sha256 pin）。

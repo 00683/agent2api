@@ -56,6 +56,21 @@ fn database() -> Option<&'static Db> {
 
 // ─── 记账 ────────────────────────────────────────────────────
 
+/// 行的 `activity` 段是否携带「活跃上报成功」读数（`report.succeeded`）。
+///
+/// 国际版每日活跃的三件事里，**只有活跃上报点亮连登**（`/v2/report` 实测，
+/// 见 `billing::activity::report_chat_activity`）；领取依赖上游活动开放、
+/// 保活对话不参与活跃计数。「活动未开启」轮次的成败就认这一格 —— 与
+/// `claim_pending` 只认中性文案是同一条克制原则：上报失败、网络错误都照旧
+/// 落 failed，不会把真故障美化成成功。
+fn activity_report_ok(row: &Value) -> bool {
+    row.get("activity")
+        .and_then(|activity| activity.get("report"))
+        .and_then(|report| report.get("succeeded"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// 签到结果行的记账（`run_checkin` 的每账号行，`{id, name, claim, activity?,
 /// error}` 形状）。`provider` 由调用方从账号记录带上（结果行里没有这个字段，
 /// 账号页的过滤列要用它）。
@@ -64,6 +79,9 @@ fn database() -> Option<&'static Db> {
 ///   - 行的 `error` 非空 → **failed**（执行出错：网络 / 凭证 / 未接入）；
 ///   - claim 判「今日已完成」→ success（真领到）或 already（上游说已领过）；
 ///   - claim 判「中性未领取」→ **pending**（此刻没有可领的活动，等窗口）；
+///   - 国际版每日活跃「活动未开启但活跃上报成功」→ **already** —— 活动没开
+///     是上游运营态（谁也领不到），而活跃上报已把连登点亮，这一天的「日活」
+///     实际完成了；记 failed 会把每天的正常轮次刷成一片红（改造前的实况）。
 ///   - 其余 → **failed**，错误原文取行的 `error`，缺了取 claim 的 `msg`
 ///     （claim.success=false 且带文案的失败，如「登录态已过期」）。
 pub fn record_row(row: &Value, provider: &str, source: &str, reason: &str) {
@@ -84,6 +102,8 @@ pub fn record_row(row: &Value, provider: &str, source: &str, reason: &str) {
         (outcome, None)
     } else if claim_pending(&claim) {
         (OUTCOME_PENDING, None)
+    } else if activity_report_ok(row) {
+        (OUTCOME_ALREADY, None)
     } else {
         // 失败且行上没有 error：失败文案在 claim.msg 里（claim_result 的
         // Err 分支已经把 message 放进行 error，这里兜的是直接给出
@@ -121,10 +141,12 @@ pub fn record_row(row: &Value, provider: &str, source: &str, reason: &str) {
 /// 国际版活动的手动领取 / 保活（`api::billing::run_activity` 的返回行，
 /// `{id, name, mode, claim, activity}`）。
 ///
-/// 判定按 mode 分两条：`keepalive` 只看保活读数（`pokeSucceeded`）—— 它的
+/// 判定按 mode 分两条：`keepalive` 看「上报成功或保活成功」任一 —— 它的
 /// claim 是 `{success:false, msg:"活跃保活完成"}` 的形态，走 claim 判据会被
-/// 误判成 failed；`full` / `claim` 与签到同判据（claim），保活读数单独留在
-/// `kept_active` 列。reason 用人话（界面的「来源/说明」列直接展示）。
+/// 误判成 failed，而这一颗按钮的本意就是「维持账号活跃」，活跃上报（点亮
+/// 连登的那条通道）成功同样算数；`full` / `claim` 与签到同判据（claim），
+/// 「活动未开启但活跃上报成功」按 `record_row` 同款落到 already。
+/// reason 用人话（界面的「来源/说明」列直接展示）。
 pub fn record_activity(row: &Value, provider: &str, mode: &str) {
     let reason = match mode {
         "keepalive" => "手动保活",
@@ -137,8 +159,9 @@ pub fn record_activity(row: &Value, provider: &str, mode: &str) {
         .and_then(|activity| activity.get("pokeSucceeded"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let report_ok = activity_report_ok(row);
     let (outcome, error, ok) = if mode == "keepalive" {
-        match kept_active {
+        match kept_active || report_ok {
             true => (OUTCOME_SUCCESS, None, true),
             false => (
                 OUTCOME_FAILED,
@@ -161,6 +184,10 @@ pub fn record_activity(row: &Value, provider: &str, mode: &str) {
         (outcome, None, true)
     } else if claim_pending(&claim) {
         (OUTCOME_PENDING, None, false)
+    } else if report_ok {
+        // full / claim 模式「活动未开启但活跃上报成功」：与 record_row 同款，
+        // 这一天的国际版日活实际完成了，不落 failed。
+        (OUTCOME_ALREADY, None, true)
     } else {
         (
             OUTCOME_FAILED,

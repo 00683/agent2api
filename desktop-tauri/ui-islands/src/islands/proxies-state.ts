@@ -55,6 +55,11 @@ export type ProxyPoolItem = {
   orphan?: boolean
 }
 
+/** lazy listeners：条目是否「还没有监听端口」（订阅节点的 port 为 null） */
+export function isUnprovisionedItem(item: ProxyPoolItem): boolean {
+  return item.source === 'subscription' && (item.port === null || item.port === undefined)
+}
+
 /**
  * Clash Verge 实时快照（列表响应里的 `clash` 字段）。
  *
@@ -96,6 +101,19 @@ export type ProxyTestResult = {
   items?: ProxyPoolItem[]
 }
 
+/** 代理设置（GET /api/proxies/settings 的响应体；`defaults` 供弹窗恢复默认） */
+export type ProxySettings = {
+  listenerPortBase?: number
+  listenerPortEnd?: number
+  /** 空串 = 未自定义（用默认网址） */
+  testUrl?: string
+  defaults?: {
+    listenerPortBase?: number
+    listenerPortEnd?: number
+    testUrl?: string
+  }
+}
+
 /* ─── 桥（只声明本页用到的成员；不 declare global，理由见 accounts-shared）─── */
 
 export type ProxyPoolBridge = {
@@ -108,6 +126,11 @@ export type ProxyPoolBridge = {
   syncClashToProxyPool?: () => Promise<ProxyPoolPayload | null | undefined>
   /** 测**未保存**的表单内容（弹窗里的「测试出口」，payload 是 `{proxy}`） */
   testProxy?: (payload: { proxy: unknown }) => Promise<ProxyTestResult | null | undefined>
+  /** 代理设置（节点端口范围 + 测试网址，「网络代理」页的设置弹窗） */
+  getProxySettings?: () => Promise<ProxySettings | null | undefined>
+  saveProxySettings?: (payload: Record<string, unknown>) => Promise<ProxySettings | null | undefined>
+  /** 补建订阅节点监听器（lazy listeners：`{pending, missing}`，pending=已投重启命令） */
+  provisionProxyPool?: () => Promise<{ pending?: boolean; missing?: number } | null | undefined>
 }
 
 export type ProxySharedWindow = {
@@ -357,7 +380,12 @@ export async function syncClash(): Promise<void> {
   }
 }
 
-export async function testItem(item: ProxyPoolItem): Promise<void> {
+/**
+ * 行内「测试」。`provisionFirst` 为 true（未分配端口的订阅节点）时先请求
+ * 补建监听器：后端投一条内核重启命令，本轮测试会带回「正在补建」的解释
+ * 性错误，几秒后重测就是补建后的结果 —— 成功后顺手刷新一次列表拿端口值。
+ */
+export async function testItem(item: ProxyPoolItem, provisionFirst = false): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.testProxyPoolItem !== 'function') {
     toast(t('当前环境不支持代理测试（桥接方法缺失）'), 'err')
@@ -366,9 +394,12 @@ export async function testItem(item: ProxyPoolItem): Promise<void> {
   if (state.testing) return
   patch({ testing: item.id })
   try {
+    if (provisionFirst) await provisionPool()
     const data = await bridge.testProxyPoolItem(item.id)
     if (data?.items) accept({ items: data.items })
     if (data?.success) {
+      // 补建完成后端口的值落回了条目 —— 刷新一次列表把它拉回来
+      if (provisionFirst) void loadPanel(true)
       const suffix = durationText(data.durationMs)
       // 出口 IP / 耗时是附带读数：IP 是后端数据、耗时只有数字，各自做形参不做键
       toast(t('✅ 「{name}」出口可用{ip}{took}', {
@@ -479,6 +510,9 @@ export async function batchTest(): Promise<void> {
   const targets = items().filter(item => state.selected.has(item.id))
   if (!targets.length) return
   patch({ batchBusy: true, batchProgress: { done: 0, total: targets.length } })
+  // 批次里有「未分配端口」的订阅节点 → 先整批补建一次（后端幂等：一条
+  // 内核重启命令补全部缺口），避免每条都白测一轮「连接被拒」
+  if (targets.some(isUnprovisionedItem)) await provisionPool()
   let ok = 0
   let failed = 0
   let saveError = ''
@@ -598,4 +632,59 @@ function payloadOfItem(item: ProxyPoolItem): Record<string, unknown> {
     password: item.password,
     enabled: item.enabled,
   }
+}
+
+/* ─── 代理设置（设置弹窗）────────────────────── */
+
+/** 读代理设置（设置弹窗打开时调一次；拿不到返回 null，弹窗显示读取失败） */
+export async function loadSettings(): Promise<ProxySettings | null> {
+  const bridge = wb().workbuddyDesktop
+  if (typeof bridge?.getProxySettings !== 'function') {
+    throw new Error(t('当前环境不支持代理设置（桥接方法缺失）'))
+  }
+  const data = await bridge.getProxySettings()
+  if (!data || typeof data !== 'object') {
+    throw new Error(t('代理设置响应异常'))
+  }
+  return data
+}
+
+/**
+ * 补建订阅节点监听器（手动兜底；账号保存时后端也会自动触发一次）。
+ *
+ * 返回 pending=true 表示投了内核重启命令 —— 端口要等重建完成（几秒），
+ * 调用方随后轮询一次列表即可看到端口值。
+ */
+export async function provisionPool(): Promise<boolean> {
+  const bridge = wb().workbuddyDesktop
+  if (typeof bridge?.provisionProxyPool !== 'function') return false
+  try {
+    const data = await bridge.provisionProxyPool()
+    return data?.pending === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 保存代理设置（弹窗的整份表单提交）。
+ *
+ * 返回保存后的公开形态。**端口范围改完不会自动重启内核** —— 已注册的端口
+ * 不回收（沿用注册表）、新分配才受新范围约束，前端保存成功后提示用户手动
+ * 重启内核让新范围完整生效（内核重启会重建全部监听器，不该在保存时静默做）。
+ */
+export async function saveSettings(payload: {
+  listenerPortBase: number
+  listenerPortEnd: number
+  testUrl: string
+}): Promise<ProxySettings> {
+  const bridge = wb().workbuddyDesktop
+  if (typeof bridge?.saveProxySettings !== 'function') {
+    throw new Error(t('当前环境不支持代理设置（桥接方法缺失）'))
+  }
+  const data = await bridge.saveProxySettings(payload)
+  if (!data || typeof data !== 'object') {
+    throw new Error(t('代理设置响应异常'))
+  }
+  return data
 }

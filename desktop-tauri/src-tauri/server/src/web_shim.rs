@@ -887,6 +887,12 @@ pub fn shim_js() -> &'static str {
     removeProxyPoolItem: function (id) { return call('POST', '/api/proxies/pool/remove', { id: String(id || '') }); },
     testProxyPoolItem: function (id) { return call('POST', '/api/proxies/pool/test', { id: String(id || '') }); },
     syncClashToProxyPool: function () { return call('POST', '/api/proxies/pool/sync-clash', {}); },
+    // 补建订阅节点监听器（与桌面壳 bridge.rs 的同名方法成对存在，契约见 api::proxies）
+    provisionProxyPool: function () { return call('POST', '/api/proxies/pool/provision', {}); },
+    // 代理设置（「网络代理」页的设置弹窗；与桌面壳 bridge.rs 的同名方法
+    // 成对存在，契约见 api::proxies 的模块头 settings 两条）
+    getProxySettings: function () { return call('GET', '/api/proxies/settings'); },
+    saveProxySettings: function (payload) { return call('POST', '/api/proxies/settings', payload || {}); },
     // 订阅（「网络代理」页的订阅区块；与桌面壳 bridge.rs 的同名方法成对存在，
     // 契约见 api::subscriptions 的模块头 —— 写操作后端投一条内核命令（异步），
     // 节点数与运行状态由轮询 kernel 看结果）

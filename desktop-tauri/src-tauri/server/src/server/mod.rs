@@ -387,6 +387,10 @@ impl ServerState {
         // 与任务状态同为「kv 固定键 + 整份读写」的形态，把同一个 `Db` 传进去。
         // 它不参与启动预热，位置只要求早于任何一次 `/api/proxies/pool*` 请求。
         core::proxy_pool::install(db.clone());
+        // 代理设置（节点监听端口范围 + 出口测试网址，「网络代理」页的设置
+        // 弹窗）：与 proxyPool 同一形态的 kv 固定键。内核端口分配与出口
+        // 测试在运行期直接读它，位置只要求早于第一次内核启动 / 测试请求。
+        core::proxy_settings::install(db.clone());
         // 订阅存储（「订阅」区块维护的订阅链接）：同一个 `Db`（与 proxyPool
         // 同一形态）。位置只要求早于任何一次 `/api/subscriptions*` 请求。
         core::subscriptions::install(db.clone());
@@ -487,6 +491,10 @@ impl ServerState {
         // 的其余部分（日志、模型目录、健康检查、配置页）不依赖账号，让它们继续
         // 可用比整体拒绝启动更有用 —— 用户能在界面上看到那条 ❌ 日志并处理磁盘问题。
         let store = AccountStore::with_db(db.clone());
+        // 账号存储句柄给订阅内核（lazy listeners：内核 runtime 读「哪些订阅节点
+        // 被账号引用」决定给谁开监听器，见 `sub_kernel::runtime::allocate_listeners`）。
+        // AccountStore 是轻量 Arc 句柄，clone 与 ServerState 里那份同实例。
+        core::sub_kernel::install_store(Some(store.clone()));
         let context = core::endpoints::default_context();
         let auth = AuthService::new(store.clone(), context);
         let login = LoginService::new(auth.clone(), store.clone());

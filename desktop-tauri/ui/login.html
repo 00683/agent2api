@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="Agent2API · 登录">Agent2API · 登录</title>
   <script>
-    // 语言引导：在 head 解析期定下界面语言，再注入词典域清单（各域词典文件改由 i18n.js
-    // 执行时补写，原因见下方）—— 与 index.html 同一套，
+    // 语言引导：在 head 解析期定下界面语言，再同步注入词典（与 index.html 同一套，
     // 解析规则与 ui/i18n.js 的 resolveLocale 逐字一致，改一处要一起改）。
     // 登录页的静态文案只有 <title>；卡片内容由 React 岛渲染，本页内联登录脚本里的
     // 中文属后续批次，这里不碰。
@@ -31,10 +30,11 @@
       }
       document.documentElement.lang = locale;
       if (locale === 'zh-Hans') return; // 简体无词典：查不到即显示简体原文
-      // 只写域清单 manifest；各域词典文件由 i18n.js 在自己执行时补写 ——
-      // document.write 之后同步读 __WB_I18N_DOMAINS 拿到的是 undefined（manifest
-      // 要等本脚本块结束才执行），在这里循环只会写出 0 个。
       document.write('<script src="i18n/manifest.js"><\/script>');
+      var domains = window.__WB_I18N_DOMAINS || [];
+      for (var d = 0; d < domains.length; d++) {
+        document.write('<script src="i18n/' + locale + '/' + domains[d] + '.js"><\/script>');
+      }
     })();
   </script>
   <!-- 组件库产物（ui-kit + Tailwind，由 ui-islands 构建）：与主面板同一份。
@@ -121,8 +121,8 @@
     panel-captcha[state='error'] .pc-label { color: var(--ui-destructive); }
     @keyframes pc-spin { to { transform: rotate(360deg); } }
   </style>
-  <!-- 多语言运行时（域清单由上面 head 的引导脚本注入，各域词典由 i18n.js 执行时补写）：
-       排在所有 css 之后，且早于 body 末尾的 islands/ui.js 与 panel-captcha.js。 -->
+  <!-- 多语言运行时（词典已在上面 head 的引导脚本里同步注入）：排在所有 css 之后，
+       且早于 body 末尾的 islands/ui.js 与 panel-captcha.js。 -->
   <script src="i18n.js"></script>
 </head>
 <body>
@@ -166,35 +166,35 @@
 
       // ── 会话传输探测：cookie 在本环境能不能往返 ─────────────────
       // fnOS docker 管理页这类宿主中转入口会把 Set-Cookie/Cookie 掐掉。
-      // 服务端种**一枚**探针 cookie（`/api/panel/cookie-probe` 连打
-      // 两发，第二发读得回同一把值 = roundtrip:true）。探测通过 → 纯 cookie
+      // 服务端种**两枚**探针 cookie（`/api/panel/cookie-probe` 连打
+      // 两发，第二发两枚都读得回 = roundtrip:true）。探测通过 → 纯 cookie
       // 会话：登录请求不带任何标记，响应体没有令牌（与直连旧行为一致，
       // JS 读不到任何令牌）；失败 → 登录请求带 x-panel-auth-mode: body，
       // 令牌才进响应体，存 localStorage 走头部回退。探测测的是本环境的
       // 真实传输，不猜代理行为 —— 哪天中转把 cookie 修好了会自动回归。
-      // 为什么现在是**一枚**：登录响应只发一条 Set-Cookie（会话 cookie 一枚装
-      // access+refresh 两段），探针要和它同形才预测得了。从前种两枚是因为登录发
-      // 两条 —— 而那条单枚探针在中转上是**通过**的（值比对对得上），登录却弹回：
-      // 中转把两条拼成一条逗号分隔的，`Path=/` 因此降级成一个名叫 `path` 的 cookie
-      // （回带名单里 path|domain|max-age|expires|session|version 那几项就是碎片），
-      // 新会话没按 `/` 存进罐子。拼接的根源既然已经从服务端消掉，判据也跟着收成一条。
+      // 为什么必须是**两枚**：登录响应下发两条 Set-Cookie（access + refresh），
+      // 探针要和它同形才预测得了。单枚探针在那台中转上是**通过**的（值比对
+      // 对得上），登录却弹回 —— 它把两条拼成一条逗号分隔的，`Path=/` 因此
+      // 降级成一个名叫 `path` 的 cookie（回带名单里 path|domain|max-age|
+      // expires|session|version 那几项就是碎片），新会话没按 `/` 存进罐子。
       var headerMode = false;
       // 探针改**值比对**：cookie 按主机算、不分端口 —— 从 fnOS（:5666）中转
       // 进来时，浏览器会把直连 :3065 时存下的**旧探针**一起带上；只判「有没
-      // 有」会被它骗成「通道完好」（实测弹回登录页，那把旧探针在生产上出现了
-      // 63 次）。所以第一发记住服务端刚发的值，第二发用 ?expect= 让服务端比对
-      // —— 旧探针的值对不上才算不通。两发都用 POST：与登录同动词，防中转按
-      // 方法区别对待 Set-Cookie。
+      // 有」会被它骗成「通道完好」（实测弹回登录页）。所以第一发记住服务端
+      // 刚发的值，第二发用 ?expect= / ?expect-b= 让服务端比对 —— 旧探针的值
+      // 对不上才算不通。两发都用 POST：与登录同动词，防中转按方法区别对待 Set-Cookie。
       var probeDone = fetch('/api/panel/cookie-probe?step=1', { method: 'POST', cache: 'no-store' })
         .then(function (resp) { return resp.json(); })
         .then(function (payload) {
           var data = payload && payload.data;
           var issued = data && data.token;
-          // 拿不到值就按不通处理：服务端没发探针（或响应被动过、页面是旧版缓存），
-          // 这种环境下不敢把会话全押在 cookie 上
-          if (!issued) return { roundtrip: false };
+          var issuedB = data && data.tokenB;
+          // 少一枚就按不通处理：服务端只发两枚，缺一枚说明响应被动过（或页面
+          // 是旧版缓存），这种环境下不敢把会话全押在 cookie 上
+          if (!issued || !issuedB) return { roundtrip: false };
           return fetch('/api/panel/cookie-probe?step=2'
-            + '&expect=' + encodeURIComponent(issued),
+            + '&expect=' + encodeURIComponent(issued)
+            + '&expect-b=' + encodeURIComponent(issuedB),
             { method: 'POST', cache: 'no-store' }).then(function (resp) { return resp.json(); });
         })
         .then(function (payload) {
@@ -245,12 +245,12 @@
         var registered = data && data.data && data.data.registered;
         isSetup = !registered;
         tip.textContent = isSetup
-          ? wbI18n.t('首次使用：创建一个管理员账号，用于登录此面板')
-          : wbI18n.t('请输入管理员账号与密码');
-        $('submit').textContent = isSetup ? wbI18n.t('创建账号并进入面板') : wbI18n.t('登录');
-        if (isSetup) $('password').placeholder = wbI18n.t('设置密码（至少 8 位）');
+          ? '首次使用：创建一个管理员账号，用于登录此面板'
+          : '请输入管理员账号与密码';
+        $('submit').textContent = isSetup ? '创建账号并进入面板' : '登录';
+        if (isSetup) $('password').placeholder = '设置密码（至少 8 位）';
       }).catch(function () {
-        tip.textContent = wbI18n.t('无法连接网关，请确认服务已启动');
+        tip.textContent = '无法连接网关，请确认服务已启动';
       });
 
       async function doSubmit(username, password) {
@@ -288,12 +288,12 @@
           // 后端的错误信封是 {success:false, error:"账号或密码不正确"}，error
           // 是字符串；也兼容 {message:"…"} 形态的对象
           if (detail && typeof detail === 'object') detail = detail.message;
-          errorEl.textContent = detail || wbI18n.t('请求失败，请重试');
+          errorEl.textContent = detail || '请求失败，请重试';
           button.disabled = false;
           captchaPayload = null; // payload 是一次性的：失败后重新验证
           if (captchaRequired) widget.reset();
         }).catch(function () {
-          errorEl.textContent = wbI18n.t('无法连接网关');
+          errorEl.textContent = '无法连接网关';
           button.disabled = false;
           captchaPayload = null;
           if (captchaRequired) widget.reset();
@@ -306,11 +306,11 @@
         var username = $('username').value.trim();
         var password = $('password').value;
         if (!username || !password) {
-          errorEl.textContent = wbI18n.t('请填写账号与密码');
+          errorEl.textContent = '请填写账号与密码';
           return;
         }
         if (captchaRequired && !captchaPayload) {
-          errorEl.textContent = wbI18n.t('请先勾选「我不是机器人」完成验证');
+          errorEl.textContent = '请先勾选「我不是机器人」完成验证';
           return;
         }
         doSubmit(username, password);

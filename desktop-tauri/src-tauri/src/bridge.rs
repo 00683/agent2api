@@ -387,6 +387,16 @@ const BRIDGE_JS: &str = r#"
     removeProxyPoolItem: id => call('POST', '/api/proxies/pool/remove', { id: String(id || '') }),
     testProxyPoolItem: id => call('POST', '/api/proxies/pool/test', { id: String(id || '') }),
     syncClashToProxyPool: () => call('POST', '/api/proxies/pool/sync-clash', {}),
+    // 补建订阅节点监听器（lazy listeners：账号保存引用后由壳侧自动触发；
+    // 这里给前端一个手动兜底入口。响应 `{pending, missing}`，pending=true
+    // 表示投了内核重启命令、端口要等重建完成）
+    provisionProxyPool: () => call('POST', '/api/proxies/pool/provision', {}),
+    // ── 代理设置（「网络代理」页的设置弹窗：节点端口范围 + 测试网址）──
+    // 与 web_shim.rs 的同名方法成对存在（教训同上）。契约见 `api::proxies`
+    // 的模块头 settings 两条：GET 带 `defaults`（弹窗的默认值读它），
+    // POST 是整份表单、非法形状 400 + 一句可读的中文。
+    getProxySettings: () => call('GET', '/api/proxies/settings'),
+    saveProxySettings: payload => call('POST', '/api/proxies/settings', payload || {}),
 
     // ── 订阅（「网络代理」页的订阅区块）──
     // 与 web_shim.rs 的同名方法成对存在（教训同上）。契约（详见

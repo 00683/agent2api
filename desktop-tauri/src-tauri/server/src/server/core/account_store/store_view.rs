@@ -151,6 +151,33 @@ impl AccountStore {
         self.snapshot(&state)
     }
 
+    /// 全部账号 proxy 指向的池条目 id 集合（去重）。
+    ///
+    /// 判据是 `proxy.config.source == "pool"`（引用在 describe 之后的形态，
+    /// 见 `proxies::describe_account_proxy` —— 解析失败的引用 config 也在，
+    /// 所以「引用了一个已删掉的条目」同样统计得到）。消费方是内核的
+    /// lazy listeners（`sub_kernel::runtime` 只给被引用的订阅节点开监听器，
+    /// 见 `proxy_pool::subscription_node_keys`），这里不做启用状态过滤：
+    /// 禁用账号的引用也算「在用」—— 重新启用不该再付一次内核重启的等待。
+    pub fn referenced_pool_ids(&self) -> std::collections::HashSet<String> {
+        let _guard = self.guard();
+        let state = self.load(&_guard);
+        state
+            .accounts
+            .iter()
+            .filter_map(|record| {
+                let proxy = record.proxy();
+                let config = proxy.get("config")?;
+                config.get("source").and_then(Value::as_str).filter(|source| *source == "pool")?;
+                config
+                    .get("proxyId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
     /// 账号 id → 该记录最近一次改动的时刻（`max(addedAt, updatedAt)`，毫秒）。
     ///
     /// 给「这条结论现在还算不算数」的时效判定用（见 `core::usage_query` 的快照

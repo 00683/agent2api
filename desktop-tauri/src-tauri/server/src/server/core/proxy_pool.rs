@@ -268,9 +268,16 @@ pub fn resolve_item(item: &Value) -> Option<ProxyResolution> {
         json!({ "source": "clash", "listenerUid": text_of(item, "listenerUid") })
     } else if source == "subscription" {
         let Some(port) = valid_port(item.get("port")) else {
-            return Some(ProxyResolution::Failed(
-                "订阅节点已不存在（订阅更新后节点被移除，等下一次同步或重新订阅）".to_string(),
-            ));
+            // 两种「没有端口」要分开说：节点还在但 lazy listeners 还没给它开
+            // 监听器（未被引用 / 引用刚保存内核还没重建完），与节点已被订阅
+            // 移除 —— 处置动作完全不同
+            let node_alive = crate::server::core::subscriptions::ids()
+                .contains(&text_of(item, "providerId"));
+            return Some(ProxyResolution::Failed(if node_alive {
+                "该节点还没有分配监听端口（保存引用后等几秒，内核会自动补建；或到「网络代理」页对它点一次「测试」）".to_string()
+            } else {
+                "订阅节点已不存在（订阅更新后节点被移除，等下一次同步或重新订阅）".to_string()
+            }));
         };
         return Some(ProxyResolution::Resolved(crate::server::core::proxies::ResolvedProxy {
             source: "pool".to_string(),
@@ -715,8 +722,10 @@ pub struct SubscriptionNodeTarget {
     pub sub_name: String,
     /// 节点名（条目名的后半段；同时是内核配置里监听器绑定的出口名）
     pub node: String,
-    /// 内核监听端口（http://127.0.0.1:端口）
-    pub port: u16,
+    /// 内核监听端口；**None = 未分配**（lazy listeners：内核只为被账号引用的
+    /// 节点开监听器，未引用的节点仍镜像进池供浏览选择，端口为空 —— 引用后
+    /// 由 provision 链路触发内核重启补上，见 `api::proxies::pool_provision`）
+    pub port: Option<u16>,
 }
 
 /// 把订阅节点集合整体镜像进池（与 `sync_clash` 同一套只读镜像语义）：
@@ -748,13 +757,18 @@ pub fn sync_subscription_nodes(targets: &[SubscriptionNodeTarget]) -> Result<usi
         });
         match existing {
             Some(index) => {
-                let port_changed = items[index].get("port").and_then(Value::as_u64)
-                    != Some(target.port as u64);
+                let current_port = items[index].get("port").and_then(Value::as_u64).map(|v| v as u16);
+                let port_changed = current_port != target.port;
                 let name_changed = text_of(&items[index], "name") != name;
                 if port_changed || name_changed {
                     if let Some(object) = items[index].as_object_mut() {
                         object.insert("name".to_string(), Value::String(name));
-                        object.insert("port".to_string(), Value::from(target.port));
+                        // None = 未分配端口（lazy listeners）：写 null 而不是删键，
+                        // 前端按 null 显示「未分配」
+                        object.insert(
+                            "port".to_string(),
+                            target.port.map(|port| Value::from(port)).unwrap_or(Value::Null),
+                        );
                         object.insert("updatedAt".to_string(), Value::from(now));
                     }
                     changes += 1;
@@ -770,7 +784,8 @@ pub fn sync_subscription_nodes(targets: &[SubscriptionNodeTarget]) -> Result<usi
                         "providerId": target.provider_id,
                         "node": target.node,
                         "enabled": true,
-                        "port": target.port,
+                        // None = 未分配（lazy listeners，见 SubscriptionNodeTarget.port）
+                        "port": target.port.map(|port| Value::from(port)).unwrap_or(Value::Null),
                         "createdAt": now,
                         "updatedAt": now,
                         "lastTest": Value::Null,
@@ -807,4 +822,45 @@ pub fn sync_subscription_nodes(targets: &[SubscriptionNodeTarget]) -> Result<usi
         write_items(&items)?;
     }
     Ok(changes)
+}
+
+/// 被引用的订阅节点键集合（`<订阅id>::<节点名>`，与内核端口注册表的键同一形态）。
+///
+/// `pool_ids` 是账号 proxy 指向的池条目 id（调用方从账号存储收集）。id 不在池里
+/// 的引用（条目已被删）查不出节点、自然跳过 —— 那类引用解析时本来就会报「不存在」。
+/// 内核的 `allocate_listeners` 用它决定「哪些节点开监听器」（lazy listeners）。
+pub fn subscription_node_keys(pool_ids: &std::collections::HashSet<&str>) -> std::collections::HashSet<String> {
+    read_items()
+        .iter()
+        .filter(|item| is_subscription_item(item))
+        .filter(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(|id| pool_ids.contains(id))
+                .unwrap_or(false)
+        })
+        .filter_map(|item| {
+            let provider_id = item.get("providerId").and_then(Value::as_str)?;
+            let node = item.get("node").and_then(Value::as_str)?;
+            Some(format!("{provider_id}::{node}"))
+        })
+        .collect()
+}
+
+/// 列出池里**已分配端口**的订阅节点条目（`{id, providerId, node, port}`）。
+///
+/// provision 链路（`api::proxies::pool_provision`）的读入口：把「还没有端口的
+/// 被引用节点」找出来交给内核补建监听器。`provider_nodes`（provider 缓存）里
+/// 没有的节点跳过 —— 订阅还没拉到内容时谈不上补建。
+pub fn subscription_entries_with_ports() -> Vec<(String, String, Option<u16>)> {
+    read_items()
+        .iter()
+        .filter(|item| is_subscription_item(item))
+        .filter_map(|item| {
+            let provider_id = item.get("providerId").and_then(Value::as_str)?.to_string();
+            let node = item.get("node").and_then(Value::as_str)?.to_string();
+            let port = item.get("port").and_then(Value::as_u64).map(|v| v as u16);
+            Some((provider_id, node, port))
+        })
+        .collect()
 }

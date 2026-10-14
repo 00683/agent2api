@@ -43,9 +43,6 @@ use crate::server::logging;
 /// 控制端口候选范围（避开 Clash Verge 默认的 7897 与常见 9090）
 const CONTROLLER_PORT_BASE: u16 = 19090;
 const CONTROLLER_PORT_END: u16 = 19099;
-/// 节点监听端口候选起点（控制端口段之外，向上顺延）
-const LISTENER_PORT_BASE: u16 = 19101;
-const LISTENER_PORT_END: u16 = 19200;
 /// 等控制器就绪 / 等 provider 拉取的总时长
 const CONTROLLER_WAIT_MS: u64 = 10_000;
 const PROVIDER_WAIT_MS: u64 = 25_000;
@@ -288,14 +285,17 @@ fn build_config(
     }
     let listener_list: Vec<Value> = listeners
         .iter()
-        .map(|target| {
-            json!({
+        // 未分配端口的节点（lazy listeners：未被引用）不进配置 —— 它们只
+        // 参与代理池镜像，provision 后才会出现在这里
+        .filter_map(|target| {
+            let port = target.port?;
+            Some(json!({
                 "name": format!("wbn_{}", short_hash(&node_key(&target.provider_id, &target.node))),
                 "type": "mixed",
-                "port": target.port,
+                "port": port,
                 "listen": "127.0.0.1",
                 "proxy": target.node,
-            })
+            }))
         })
         .collect();
     let config = json!({
@@ -315,6 +315,25 @@ fn build_config(
 /// 节点键（端口注册表与代理池条目共用的稳定标识）
 fn node_key(provider_id: &str, node: &str) -> String {
     format!("{provider_id}::{node}")
+}
+
+/// 当前被账号引用的订阅节点键集合（`<订阅id>::<节点名>`）。
+///
+/// 从账号存储读「proxy 指向 pool 条目」的引用集合（`store_view::
+/// referenced_pool_ids`），再对到池的订阅条目上。存储未接线 / 不可用 /
+/// 读失败一律给空集合：内核一个监听器都不开（账号转发会看到「连接被拒」），
+/// 但节点仍全量镜像进池、provision 链路可恢复 —— 与 `proxy_pool` 的
+/// 「解析失败按空表处理」同一恢复哲学。
+fn referenced_node_keys() -> HashSet<String> {
+    let Some(store) = crate::server::core::sub_kernel::account_store() else {
+        return HashSet::new();
+    };
+    let pool_ids = store.referenced_pool_ids();
+    if pool_ids.is_empty() {
+        return HashSet::new();
+    }
+    let borrowed: HashSet<&str> = pool_ids.iter().map(String::as_str).collect();
+    crate::server::core::proxy_pool::subscription_node_keys(&borrowed)
 }
 
 /// 短哈希（监听器名用，只求稳定不求密码学强度）
@@ -373,24 +392,24 @@ pub async fn run_restart(providers: &[ProviderInput]) -> Result<(), String> {
     let provider_ids: Vec<String> = providers.iter().map(|provider| provider.id.clone()).collect();
     let live = poll_providers(controller_port, &secret, &provider_ids, PROVIDER_WAIT_MS).await;
     let mut final_targets = targets;
-    if nodes_changed(&final_targets, &live) {
-        let live_nodes: Vec<(String, Vec<String>)> = provider_ids
-            .iter()
-            .map(|id| {
-                let names = live
-                    .get(id)
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (id.clone(), names)
-            })
-            .collect();
+    // 全量节点清单（provider 缓存优先，轮询到的新节点并入）—— 比较与镜像都按它
+    let mut live_nodes: Vec<(String, Vec<String>)> = provider_ids
+        .iter()
+        .map(|id| (id.clone(), read_provider_nodes(id)))
+        .collect();
+    for (id, names) in live_nodes.iter_mut() {
+        if let Some(latest) = live.get(id).and_then(Value::as_array) {
+            let latest: Vec<String> = latest
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            if !latest.is_empty() {
+                *names = latest;
+            }
+        }
+    }
+    if nodes_changed(&final_targets, &live_nodes) {
         let next_targets = allocate_listeners(providers, &state_ports(&state), &live_nodes)?;
         let mut state = read_state();
         write_ports(&mut state, &next_targets);
@@ -399,10 +418,34 @@ pub async fn run_restart(providers: &[ProviderInput]) -> Result<(), String> {
         final_targets = next_targets;
     }
 
-    // ⑥ 节点镜像进代理池 + 记录各订阅的同步结果
-    sync_nodes_to_pool(&final_targets);
+    // ⑥ 节点镜像进代理池（**全量**：未被引用的节点端口为 None，界面上照常
+    //    可见可选）+ 记录各订阅的同步结果
+    let port_of = |provider_id: &str, node: &str| -> Option<u16> {
+        let key = node_key(provider_id, node);
+        final_targets
+            .iter()
+            .find(|target| node_key(&target.provider_id, &target.node) == key)
+            .and_then(|target| target.port)
+    };
+    let all_targets: Vec<NodeTarget> = live_nodes
+        .iter()
+        .flat_map(|(provider_id, nodes)| {
+            let sub_name = providers
+                .iter()
+                .find(|provider| &provider.id == provider_id)
+                .map(|provider| provider.name.clone())
+                .unwrap_or_default();
+            nodes.iter().map(move |node| NodeTarget {
+                provider_id: provider_id.clone(),
+                sub_name: sub_name.clone(),
+                node: node.clone(),
+                port: port_of(provider_id, node),
+            })
+        })
+        .collect();
+    sync_nodes_to_pool(&all_targets);
     for provider in providers {
-        let count = final_targets
+        let count = all_targets
             .iter()
             .filter(|target| target.provider_id == provider.id)
             .count();
@@ -417,7 +460,12 @@ pub async fn run_restart(providers: &[ProviderInput]) -> Result<(), String> {
     Ok(())
 }
 
-/// 把节点的端口映射写回状态（重启后端口稳定，账号引用不漂移）
+/// 把节点的端口映射写回状态（重启后端口稳定，账号引用不漂移）。
+///
+/// **只写本次分配的端口，不做整体裁剪**：上次运行分配过、本次已不被引用的
+/// 端口留在注册表里 —— 用户取消引用又反悔（改回来）时端口原样恢复，不用
+/// 重启内核重新分配；注册表残留的量级很小（引用过的节点数），不值得为省它
+/// 冒「引用还在但端口被顺手清掉」的风险。
 fn write_ports(state: &mut Value, targets: &[NodeTarget]) {
     let mut port_map = state_ports(state);
     for target in targets {
@@ -654,7 +702,22 @@ async fn ensure_controller_port(state: &mut Value, secret: &str) -> Result<u16, 
     Ok(port)
 }
 
-/// 给节点分配监听器端口：已知节点沿用注册表里的端口，新节点从空闲口里挑。
+/// 给节点分配监听器端口 —— **只为被引用的节点分配**（lazy listeners）。
+///
+/// 订阅动辄几百个节点，而账号实际引用的通常只有几个：给全部节点开监听器
+/// 会让配置体积、内核内存与启动时间都跟着节点数走（真正的性能大头其实是
+/// mihomo 逐节点的健康检查与监听器结构）。因此这里只给「账号引用中的池
+/// 条目」分配端口；全量节点仍镜像进代理池（浏览 / 选择体验不变），条目
+/// 在未分配端口时 `port` 为 null、解析报「端口未分配」（见 proxy_pool 的
+/// resolve_item 与 provision 链路）。
+///
+/// 端口分配细节：
+///   · 已注册的端口**沿用前先探活**——停机期间被别的进程占走的口不再沿用，
+///     换新口并更新注册表（引用按节点不按端口，换口对账号无感）；
+///   · 新分配从代理设置的范围（`core::proxy_settings::listener_port_range`）
+///     里挑第一个空闲口；
+///   · 分配不出（范围用尽）返回 Err —— 此时内核带着其余监听器照常跑，
+///     失败文案里点名设置入口。
 ///
 /// `sub_name` 从 providers 里按 id 查（provider_nodes 只有 id；节点条目命名
 /// 要用订阅名）。
@@ -663,6 +726,9 @@ fn allocate_listeners(
     ports: &Map<String, Value>,
     provider_nodes: &[(String, Vec<String>)],
 ) -> Result<Vec<NodeTarget>, String> {
+    let (listener_base, listener_end) =
+        crate::server::core::proxy_settings::listener_port_range();
+    let referenced = referenced_node_keys();
     let mut taken: HashSet<u16> = HashSet::new();
     for port in ports.values().filter_map(json_u16) {
         taken.insert(port);
@@ -676,13 +742,18 @@ fn allocate_listeners(
             .map(|provider| provider.name.clone())
             .unwrap_or_default();
         for node in nodes {
+            // 没被任何账号引用的节点不开监听器（lazy listeners，见函数头）
             let key = node_key(provider_id, node);
+            if !referenced.contains(&key) {
+                continue;
+            }
             let port = match ports.get(&key).and_then(json_u16) {
-                Some(port) => port,
-                None => {
-                    let port = alloc_port(&taken, LISTENER_PORT_BASE, LISTENER_PORT_END)
+                // 注册表里有：沿用前探活，被占（停机期间被别的进程抢走）就当没有
+                Some(port) if port_free(port) => port,
+                Some(_) | None => {
+                    let port = alloc_port(&taken, listener_base, listener_end)
                         .ok_or_else(|| {
-                            format!("没有可用的节点端口（{LISTENER_PORT_BASE}-{LISTENER_PORT_END} 用尽）")
+                            format!("没有可用的节点端口（{listener_base}-{listener_end} 用尽）—— 节点太多时可在「网络代理」页的设置里扩大端口范围")
                         })?;
                     port
                 }
@@ -692,38 +763,42 @@ fn allocate_listeners(
                 provider_id: provider_id.clone(),
                 sub_name: sub_name.clone(),
                 node: node.clone(),
-                port,
+                port: Some(port),
             });
         }
     }
     Ok(targets)
 }
 
-/// 节点集合是否与当前监听器不一致（provider 轮询后判断要不要重建配置）
-fn nodes_changed(targets: &[NodeTarget], live: &Map<String, Value>) -> bool {
-    for target in targets {
-        let Some(names) = live
-            .get(&target.provider_id)
-            .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        else {
-            continue; // 该 provider 还没拉到（缓存缺失），不当作变化
-        };
-        if !names.contains(&target.node.as_str()) {
-            return true; // 配置里的节点在最新清单里消失了
+/// 节点集合是否与当前监听器不一致（provider 轮询后判断要不要重建配置）。
+///
+/// 比较的是**全量节点清单**而不是已分配端口的子集：机场加了新节点时，哪怕
+/// 没人引用它，也要让代理池的镜像跟上（sync 在重启后做，但重建配置的触发
+/// 在这里）。
+fn nodes_changed(targets: &[NodeTarget], live_nodes: &[(String, Vec<String>)]) -> bool {
+    for (provider_id, names) in live_nodes {
+        // 配置里的节点（targets 只含被引用的）必须在最新清单里
+        for target in targets.iter().filter(|target| &target.provider_id == provider_id) {
+            if !names.contains(&target.node) {
+                return true; // 引用中的节点在最新清单里消失了
+            }
+        }
+        // 清单里出现了配置里没有的节点（新节点 → 池镜像要更新）
+        let known: HashSet<&str> = targets
+            .iter()
+            .filter(|target| &target.provider_id == provider_id)
+            .map(|target| target.node.as_str())
+            .collect();
+        for name in names {
+            if !known.contains(name.as_str()) {
+                return true;
+            }
         }
     }
-    for (provider_id, names) in live {
-        let Some(names) = names.as_array() else {
-            continue;
-        };
-        for name in names.iter().filter_map(Value::as_str) {
-            let known = targets.iter().any(|target| {
-                &target.provider_id == provider_id && target.node == name
-            });
-            if !known {
-                return true; // 清单里出现了配置里没有的新节点
-            }
+    // 上次有监听器、这次订阅整个消失（live_nodes 没有这家）—— 也要重建
+    for target in targets {
+        if !live_nodes.iter().any(|(provider_id, _)| &target.provider_id == provider_id) {
+            return true;
         }
     }
     false

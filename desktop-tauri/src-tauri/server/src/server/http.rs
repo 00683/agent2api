@@ -328,6 +328,8 @@ pub fn panel_router(state: ServerState) -> Router {
         .route("/api/proxies/pool/remove", any(api::accounts::proxies_entry))
         .route("/api/proxies/pool/test", any(api::accounts::proxies_entry))
         .route("/api/proxies/pool/sync-clash", any(api::accounts::proxies_entry))
+        .route("/api/proxies/settings", any(api::accounts::proxies_entry))
+        .route("/api/proxies/pool/provision", any(api::accounts::proxies_entry))
         // ── 订阅（「网络代理」页的订阅区块：机场订阅 → 内核本地监听器）──
         // 固定路径 + api::subscriptions::entry 按 (方法, 剩余段) 分发（理由同上：
         // 通配段与 404 兜底互相干扰）。内核命令是异步的（重启 / 拉订阅要几秒

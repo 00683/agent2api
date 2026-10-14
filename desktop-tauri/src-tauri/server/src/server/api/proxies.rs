@@ -8,6 +8,10 @@
 //!   POST /api/proxies/pool/remove 删除池条目（body 带 id；Clash 同步来的不可删）
 //!   POST /api/proxies/pool/test  测试池条目并把结果记进条目
 //!   POST /api/proxies/pool/sync-clash 手动同步 Clash Verge 出口
+//!   POST /api/proxies/pool/provision 补建订阅节点监听器（lazy listeners 的
+//!                                    主动入口：账号保存 / 测试前调用）
+//!   GET  /api/proxies/settings   代理设置（节点端口范围 + 测试网址 + 默认值）
+//!   POST /api/proxies/settings   保存代理设置（整份表单；非法形状 400）
 //!
 //! 前两条是账号侧的出口能力（Node 版原有）；`pool` 那六条是「网络代理」页
 //! 的代理池管理（对照 OmniProxy 的 proxies CRUD + sync-clash + 测试，存储、
@@ -28,6 +32,8 @@ use serde_json::{json, Value};
 use crate::server::core::egress;
 use crate::server::core::proxies::normalize_account_proxy;
 use crate::server::core::proxy_pool;
+use crate::server::core::proxy_settings;
+use crate::server::core::sub_kernel;
 use crate::server::errors::management_error;
 use crate::server::http::{ok_json, parse_body};
 use crate::server::logging;
@@ -355,7 +361,16 @@ pub async fn pool_test(state: &ServerState, body: &Bytes) -> Response {
         Ok(proxy) => proxy,
         Err(message) => return management_error(400, message),
     };
-    let result = egress::test_proxy(Some(&proxy)).await;
+    // lazy listeners：被引用的订阅节点可能还没有监听器（端口未分配）——
+    // 测之前先补建一次；投了命令的话本轮测试会失败（监听器要等内核重建），
+    // 错误里说明原因，用户重测一次就是补建后的结果
+    let provisioned = provision_missing_listeners(state);
+    let mut result = egress::test_proxy(Some(&proxy)).await;
+    if provisioned && !result.success {
+        // 补建刚投出去、内核还没重建完：把「连接被拒」换成一个可行动的解释
+        // （测试结果照常落条目，用户重测一次就是补建后的结果）
+        result.error = Some("监听器正在补建（内核重建中），稍等几秒后重测一次".to_string());
+    }
     let write_error = proxy_pool::record_test(
         id,
         &proxy_pool::TestOutcome {
@@ -392,4 +407,85 @@ pub async fn pool_test(state: &ServerState, body: &Bytes) -> Response {
         );
     }
     ok_json(data)
+}
+
+// ─── 代理设置（「网络代理」页的设置弹窗）─────────────────────
+
+/// GET /api/proxies/settings —— 代理设置的公开形态（含默认值，弹窗的
+/// placeholder 与「恢复默认」读它）。
+pub async fn settings_get() -> Response {
+    ok_json(proxy_settings::get())
+}
+
+/// POST /api/proxies/settings —— 保存代理设置。
+///
+/// 校验在 `core::proxy_settings::save`（Err 是一句可读的中文 → 400）。
+/// **端口范围改完不会自动重启内核**：已注册的端口不回收（沿用注册表），
+/// 新分配才受新范围约束，前端在保存成功后提示用户手动重启内核使新范围
+/// 完整生效 —— 内核重启要重建全部监听器，静默做会让界面节点端口闪变。
+pub async fn settings_save(body: &Bytes) -> Response {
+    let payload = match parse_body(body) {
+        Ok(value) => value,
+        Err(_) => return management_error(400, "请求内容不是有效 JSON"),
+    };
+    match proxy_settings::save(&payload) {
+        Ok(value) => ok_json(value),
+        Err(message) => management_error(400, message),
+    }
+}
+
+// ─── 节点监听器补建（lazy listeners 的主动入口）──────────────
+
+/// 给被引用但还没有端口的订阅节点补建监听器（lazy listeners 的主动入口）。
+///
+/// lazy 的语义是「内核只为被引用的节点开监听器」（见
+/// `sub_kernel::runtime::allocate_listeners`）；引用动作发生在账号保存时，
+/// 那时后端要触发一次内核重启把新引用节点的监听器建出来 —— 这就是本函数
+/// 存在的理由：它是一个**幂等的重启请求**，只在确实有缺口（被引用 ∧ 无端口）
+/// 时才投命令，重复调用无害。
+///
+/// 三类调用方：
+///   · 账号保存链路（`api::accounts` 的写操作收尾）—— 引用变化后自动补；
+///   · `pool_test`（测试一个没有端口的订阅节点前先补建，否则连不上）;
+///   · HTTP：POST /api/proxies/pool/provision（前端手动兜底）。
+///
+/// 返回是否投了重启命令：true 时节点端口要等内核重建完成才有值，前端轮询
+/// 列表即可。同步版（投命令是 mpsc send，无需 await）—— 账号写操作收尾在
+/// 持锁路径的边缘调用它，不想为它包一层 spawn。
+pub fn provision_missing_listeners(state: &ServerState) -> bool {
+    let pool_ids = state.store().referenced_pool_ids();
+    let missing = if pool_ids.is_empty() {
+        Vec::new()
+    } else {
+        let borrowed: std::collections::HashSet<&str> =
+            pool_ids.iter().map(String::as_str).collect();
+        let referenced_keys = proxy_pool::subscription_node_keys(&borrowed);
+        proxy_pool::subscription_entries_with_ports()
+            .into_iter()
+            .filter(|(provider_id, node, port)| {
+                port.is_none() && referenced_keys.contains(&format!("{provider_id}::{node}"))
+            })
+            .collect::<Vec<_>>()
+    };
+    if missing.is_empty() {
+        return false;
+    }
+    // 有缺口才重启内核（重建配置把缺的监听器建出来）。内核未安装时投命令
+    // 也无害（restart 早退在「未安装」上，见 `sub_kernel` worker 的说明）。
+    sub_kernel::request_restart(crate::server::core::subscriptions::enabled_provider_inputs());
+    logging::log(
+        "[Proxies]",
+        &format!(
+            "🔄 检测到 {} 个被引用的订阅节点还没有监听器，已请求内核补建",
+            missing.len()
+        ),
+    );
+    true
+}
+
+/// POST /api/proxies/pool/provision —— 前端手动兜底的补建入口（响应带
+/// `pending`：true = 投了重启命令，端口等内核重建完成后轮询列表可见）。
+pub async fn pool_provision(state: &ServerState) -> Response {
+    let pending = provision_missing_listeners(state);
+    ok_json(json!({ "pending": pending, "missing": pending as u8 }))
 }

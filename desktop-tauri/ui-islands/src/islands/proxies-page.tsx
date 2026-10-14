@@ -81,9 +81,10 @@ import { poolItemAddress } from './accounts-shared'
 import {
   batchRemove, batchTest, clearSelection, durationText, errorMessage,
   formatTime, getSnapshot, isOrphanSubscriptionItem, isPicked, isReadonlyPoolItem,
-  isSubscriptionItem, items, loadPanel, pickableIds, readonlyHint, removeItem, saveItem,
-  setAllPicked, subscribe, syncClash, testItem, toggleItem, togglePick, toast, wb,
-  type ProxyPoolItem,
+  isSubscriptionItem, isUnprovisionedItem, items, loadPanel, loadSettings, pickableIds,
+  provisionPool, readonlyHint, removeItem, saveItem, saveSettings, setAllPicked, subscribe,
+  syncClash, testItem, toggleItem, togglePick, toast, wb,
+  type ProxyPoolItem, type ProxySettings,
 } from './proxies-state'
 import { SubscriptionSection } from './proxies-sub-view'
 import { loadSection } from './proxies-sub-state'
@@ -101,6 +102,7 @@ const CELL = ['ta-center', '', '', '', 'ta-center', '', 'ta-right']
 function ProxiesPage() {
   const snapshot = React.useSyncExternalStore(subscribe, getSnapshot)
   const [modal, setModal] = React.useState<{ item: ProxyPoolItem | null } | null>(null)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
   const rows = items()
   const ready = snapshot.data !== null
   const selectedCount = snapshot.selected.size
@@ -163,9 +165,14 @@ function ProxiesPage() {
         // 地址统一成「协议 主机:端口」（与账号侧下拉同一口径，见
         // accounts-shared 的 poolItemAddress）：resolved.label 对 Clash 条目是
         // 「监听器名（:端口）」、对混合端口是「Clash 混合端口 7892」—— 都不含主机，
-        // 形态还随来源变。主机与端口在这里是核对「这条连的是哪儿」的唯一读数
+        // 形态还随来源变。主机与端口在这里是核对「这条连的是哪儿」的唯一读数。
+        // lazy listeners：未分配端口的节点显示提示（测试它会先补建监听器）
         return item.resolveError ? (
           <span className='text-destructive' title={item.resolveError}>{t('解析失败')}</span>
+        ) : isUnprovisionedItem(item) ? (
+          <span className='text-subtle' title={t('还没有监听端口（引用它的账号保存后自动补建；现在点「测试」也会先补建）')}>
+            {poolItemAddress(item) || t('未分配端口')}
+          </span>
         ) : (
           <span className='font-mono text-[12px] text-text-2'>{poolItemAddress(item) || '—'}</span>
         )
@@ -191,7 +198,7 @@ function ProxiesPage() {
         return (
           <div className='row-actions'>
             <Button size='sm' variant='ghost' disabled={locked || snapshot.testing !== null}
-              onClick={() => void testItem(item)}>
+              onClick={() => void testItem(item, isUnprovisionedItem(item))}>
               {snapshot.testing === item.id ? t('测试中…') : t('测试')}
             </Button>
             <Button size='sm' variant='ghost' disabled={locked || readonly}
@@ -229,6 +236,12 @@ function ProxiesPage() {
               不必等用户看到页脚的 Clash 说明才反应过来 */}
           <span className='text-[11px] text-subtle'>{t('订阅与 Clash 的出口自动镜像进来')}</span>
         <div className='head-actions'>
+          {/* 设置放在最左：低频配置项（端口范围 / 测试网址），不必挤在主操作旁边。
+              弹窗是打开时才读设置（loadSettings 在弹窗内部），这里只负责开门 */}
+          <Button variant='outline' disabled={snapshot.batchBusy}
+            onClick={() => setSettingsOpen(true)}>
+            {t('设置')}
+          </Button>
           {/* 同步放在刷新左边：它做的事比「刷新」多一层（把 Clash 的出口集合
               镜像进池），而进页面时的那次自动同步是静默的 —— 用户想在
               「我刚在 Clash 里加了出口」之后立刻见效时点它。
@@ -357,6 +370,9 @@ function ProxiesPage() {
           item={modal.item}
           onClose={() => setModal(null)}
         />
+      ) : null}
+      {settingsOpen ? (
+        <ProxySettingsModal onClose={() => setSettingsOpen(false)} />
       ) : null}
       </section>
     </>
@@ -547,6 +563,167 @@ function ProxyModal({
           <div className='mr-auto' />
           <Button variant='outline' disabled={saving} onClick={onClose}>{t('取消')}</Button>
           <Button variant='default' disabled={saving} onClick={() => void save()}>
+            {saving ? t('保存中…') : t('保存')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* ─── 设置弹窗 ─────────────────────────────── */
+
+/**
+ * 代理设置弹窗：节点监听端口范围 + 出口连通性测试网址。
+ *
+ * 数据是**打开时读一次**的本地快照（低频配置，不值得进全局 store）：
+ * 打开 → loadSettings 回填表单 → 改 → 保存。保存成功后不自动重启内核 ——
+ * 已注册的节点端口沿用注册表、新分配才受新范围约束（见
+ * `core::proxy_settings` 的模块头），所以只提示「重启内核后新节点按新范围
+ * 分配」，重启入口在订阅区块。
+ *
+ * 校验在两层：这里先把「明显写错」挡住（端口 1-65535、起≤止），后端
+ * `proxy_settings::save` 再校一次（错误文案 400 原样显示）—— 与新增代理
+ * 弹窗的 draftPayload 同一分工。
+ */
+function ProxySettingsModal({ onClose }: { onClose: () => void }) {
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [base, setBase] = React.useState('')
+  const [end, setEnd] = React.useState('')
+  const [testUrl, setTestUrl] = React.useState('')
+  const [defaults, setDefaults] = React.useState<NonNullable<ProxySettings['defaults']>>({})
+  const [error, setError] = React.useState('')
+  /** 保存成功后的一条常驻提示（告知内核重启的口径，不算错误） */
+  const [saved, setSaved] = React.useState(false)
+
+  React.useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const data = await loadSettings()
+        if (!alive || data === null) return
+        setBase(String(data.listenerPortBase ?? ''))
+        setEnd(String(data.listenerPortEnd ?? ''))
+        setTestUrl(String(data.testUrl ?? ''))
+        setDefaults(data.defaults ?? {})
+        setLoading(false)
+      } catch (loadError) {
+        if (!alive) return
+        setError(errorMessage(loadError))
+        setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  /** 表单 → 提交 payload；形状非法时返回 null（错误写进 status 行） */
+  function draftPayload(): { listenerPortBase: number; listenerPortEnd: number; testUrl: string } | null {
+    const baseNumber = Number(base)
+    const endNumber = Number(end)
+    if (!Number.isInteger(baseNumber) || baseNumber < 1 || baseNumber > 65535
+      || !Number.isInteger(endNumber) || endNumber < 1 || endNumber > 65535) {
+      setError(t('端口范围必须是 1-65535 的整数'))
+      return null
+    }
+    if (baseNumber > endNumber) {
+      setError(t('起始端口不能大于结束端口'))
+      return null
+    }
+    const url = testUrl.trim()
+    if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
+      setError(t('测试网址要以 http:// 或 https:// 开头'))
+      return null
+    }
+    setError('')
+    return { listenerPortBase: baseNumber, listenerPortEnd: endNumber, testUrl: url }
+  }
+
+  async function save(): Promise<void> {
+    if (saving || loading) return
+    const payload = draftPayload()
+    if (!payload) return
+    setSaving(true)
+    try {
+      await saveSettings(payload)
+      setSaved(true)
+    } catch (saveError) {
+      setError(errorMessage(saveError))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** 恢复默认：把默认值回填进表单（还不是「保存」—— 用户确认后一起提交） */
+  function resetToDefaults(): void {
+    setBase(String(defaults.listenerPortBase ?? ''))
+    setEnd(String(defaults.listenerPortEnd ?? ''))
+    setTestUrl(String(defaults.testUrl ?? ''))
+    setSaved(false)
+    setError('')
+  }
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open && !saving) onClose() }}>
+      <DialogContent className='max-w-[560px]'>
+        <DialogHeader>
+          <DialogTitle>{t('代理设置')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody className='flex flex-col gap-3.5'>
+          {loading ? (
+            <p className='text-xs text-subtle'>{t('加载中…')}</p>
+          ) : (
+            <>
+              <div className='flex flex-row items-end gap-2.5'>
+                <div className='flex min-w-0 flex-1 flex-col gap-1.5'>
+                  <Label htmlFor='proxy-settings-base'>{t('节点端口范围（起始）')}</Label>
+                  <Input id='proxy-settings-base' type='number' min={1} max={65535}
+                    placeholder={String(defaults.listenerPortBase ?? '')} autoComplete='off'
+                    value={base} onChange={event => { setBase(event.currentTarget.value); setSaved(false) }} />
+                </div>
+                <span aria-hidden='true' className='flex-none pb-[7px] text-subtle'>—</span>
+                <div className='flex min-w-0 flex-1 flex-col gap-1.5'>
+                  <Label htmlFor='proxy-settings-end'>{t('节点端口范围（结束）')}</Label>
+                  <Input id='proxy-settings-end' type='number' min={1} max={65535}
+                    placeholder={String(defaults.listenerPortEnd ?? '')} autoComplete='off'
+                    value={end} onChange={event => { setEnd(event.currentTarget.value); setSaved(false) }} />
+                </div>
+              </div>
+              <p className='text-xs leading-[1.65] text-subtle'>
+                {t('订阅节点会在本机各占一个监听端口，从该范围里挑空闲的分配；节点多的大订阅把默认范围（{base}-{end}）用尽时会报「没有可用的节点端口」，这时把范围调大再重启内核。已分配出去的端口不会因改范围而失效。', {
+                  base: defaults.listenerPortBase ?? '',
+                  end: defaults.listenerPortEnd ?? '',
+                })}
+              </p>
+
+              <div className='flex flex-col gap-1.5'>
+                <Label htmlFor='proxy-settings-url'>{t('出口测试网址')}</Label>
+                <Input id='proxy-settings-url' placeholder={defaults.testUrl || ''}
+                  autoComplete='off' spellCheck={false} className='font-mono text-[12px]'
+                  value={testUrl} onChange={event => { setTestUrl(event.currentTarget.value); setSaved(false) }} />
+              </div>
+              <p className='text-xs leading-[1.65] text-subtle'>
+                {t('「测试」与「批量测试」访问的目标；留空用默认（打 WorkBuddy 上游）。判据是能否拿到 HTTP 响应，不用考虑该网址返回什么内容。')}
+              </p>
+
+              <div className='min-h-[18px] text-xs'>
+                {error ? <span className='text-destructive'>❌ {error}</span> : null}
+                {!error && saved ? (
+                  <span className='text-success'>
+                    ✅ {t('已保存。重启内核后，新分配的节点端口才会按新范围来。')}
+                  </span>
+                ) : null}
+              </div>
+            </>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant='ghost' disabled={loading || saving} onClick={resetToDefaults}>
+            {t('恢复默认')}
+          </Button>
+          <div className='mr-auto' />
+          <Button variant='outline' disabled={saving} onClick={onClose}>{t('关闭')}</Button>
+          <Button variant='default' disabled={loading || saving} onClick={() => void save()}>
             {saving ? t('保存中…') : t('保存')}
           </Button>
         </DialogFooter>
