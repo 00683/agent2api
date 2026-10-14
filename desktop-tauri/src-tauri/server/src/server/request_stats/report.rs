@@ -361,24 +361,21 @@ pub(super) fn push_account_accum(
     }
 }
 
-/// provider id → 展示 label（中文名）。
+/// provider id → 展示 label。
 ///
-/// 走 `providers::meta` 的注册表换算，**不在这里维护第二份 id→label 映射**：
-/// 注册表是 provider 身份的唯一事实来源，两处映射迟早漂移，而这类漂移不会报错，
-/// 只会让报表里的名字与账号页对不上。
+/// 直接委托 `providers::label_of` —— 「id → 给人看的名字」的唯一入口，报表层
+/// **不得**自建换算（注册表是 provider 身份的唯一事实来源，两处映射迟早漂移，
+/// 而这类漂移不会报错，只会让报表里的名字与账号页对不上）。入口统一处理两类
+/// 身份：内置 provider 走注册表 `meta().label`；`custom-` 前缀的自定义提供商
+/// 查存储里用户起的名字 —— 那是运行期数据（config 内存快照，不碰磁盘），
+/// 只走注册表的话会被原样回显成 `custom-…`。
 ///
-/// 未注册的 id（前端比后端新、或手改文件塞进来的值）**原样返回**：
-/// 显示一个陌生的英文 id 好过显示空白，至少能提示「这是谁」。
-/// 空串同样原样返回（空 label），由展示层决定用什么占位（当前约定是「—」）——
-/// 这一层只回答「id 对应什么名字」，不做展示决策。
+/// 未登记 / 已删除的 id 仍由入口原样回显：显示一个陌生的英文 id 好过显示空白，
+/// 至少能提示「这是谁」。空串同样原样返回（空 label），由展示层决定用什么
+/// 占位（当前约定是「未知」/「—」）—— 这一层只回答「id 对应什么名字」，
+/// 不做展示决策。
 pub(super) fn provider_label(id: &str) -> String {
-    if id.is_empty() {
-        return String::new();
-    }
-    match crate::server::core::providers::kind_from_id(id) {
-        Some(kind) => crate::server::core::providers::meta(kind).label.to_string(),
-        None => id.to_string(),
-    }
+    crate::server::core::providers::label_of(id)
 }
 
 /// 区间级的按 provider 汇总 → `/api/stats/summary` 的 `providers` 数组。

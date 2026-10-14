@@ -55,9 +55,17 @@ pub async fn list_proxies(state: &ServerState) -> Response {
             items
                 .iter()
                 .map(|account| {
+                    // name：统一展示名优先（与账号页同口径，见
+                    // `store_view::display_name_of`），缺键回落记录 name
+                    let name = account
+                        .get("displayName")
+                        .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                        .cloned()
+                        .or_else(|| account.get("name").cloned())
+                        .unwrap_or(Value::Null);
                     json!({
                         "id": account.get("id").cloned().unwrap_or(Value::Null),
-                        "name": account.get("name").cloned().unwrap_or(Value::Null),
+                        "name": name,
                         "priority": account.get("priority").cloned().unwrap_or(Value::Null),
                         "enabled": account.get("enabled").cloned().unwrap_or(Value::Null),
                         "proxy": account.get("proxy").cloned().unwrap_or(Value::Null),
@@ -176,7 +184,13 @@ fn pool_references(state: &ServerState) -> std::collections::HashMap<String, Vec
         };
         references.entry(proxy_id.to_string()).or_default().push(json!({
             "id": account.get("id").cloned().unwrap_or(Value::Null),
-            "name": account.get("name").cloned().unwrap_or(Value::Null),
+            // 统一展示名优先（与列表接口同一取舍，见上面的说明）
+            "name": account
+                .get("displayName")
+                .filter(|value| value.as_str().is_some_and(|text| !text.is_empty()))
+                .cloned()
+                .or_else(|| account.get("name").cloned())
+                .unwrap_or(Value::Null),
             "enabled": account.get("enabled").cloned().unwrap_or(Value::Bool(true)),
         }));
     }
