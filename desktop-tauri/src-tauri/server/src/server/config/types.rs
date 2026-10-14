@@ -915,8 +915,12 @@ pub const KEY_ROUTING_STRATEGY: &str = "routingStrategy";
 pub const KEY_ROUTING_STICKY: &str = "routingSticky";
 /// 失败退避：转发失败的账号休息一会儿再回来（`routingFailoverBackoff`，默认开）
 pub const KEY_ROUTING_FAILOVER_BACKOFF: &str = "routingFailoverBackoff";
-/// 限流垫底（Sink）：还有额度时被 429 的账号排到队尾，轮一圈才回来
-/// （`routingSink`，默认开）
+/// 限流垫底（Sink）：还有额度时被 429 的账号排到队尾，**30 分钟后自动回到队列**，
+/// 或提前成功转发一次即解除（`routingSink`，默认开）。
+///
+/// 数值以 `route_state::SINK_TTL_MS` 为准，别在这里写一个具体数字：从前这里是
+/// 「轮一圈才回来」，而那个语义正是自锁的成因（429 沉底 → 排到队尾 → 轮不到 →
+/// 没机会成功 → 永远解不开；实测国际版 11 个账号被逐个撞完后全部永久沉底）。
 pub const KEY_ROUTING_SINK: &str = "routingSink";
 /// 熔断开关（`routingBreakerEnabled`，默认关）
 pub const KEY_ROUTING_BREAKER_ENABLED: &str = "routingBreakerEnabled";

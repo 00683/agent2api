@@ -112,6 +112,13 @@ impl RouteState {
         Self::default()
     }
 
+    /// 显式标识的**长度上限**（字符）。
+    ///
+    /// 客户端可以自选这个值，而它会成为进程内存里粘性表的一条键（表只在每次查表时
+    /// 按 TTL 清理），所以长度不该由客户端决定 —— 真实会话标识都是 UUID 或十六进制
+    /// 串，256 足够宽；超过就当「没有显式标识」回落到内容哈希，是安全降级。
+    const EXPLICIT_ID_MAX_CHARS: usize = 256;
+
     /// 会话键：**显式标识优先**，都没有才回落到「模型 + 首条用户消息」的内容哈希。
     ///
     /// ── 显式标识从哪来（顺序即优先级）──────────────────────────
@@ -135,7 +142,11 @@ impl RouteState {
     /// 空串 = 既没有显式标识、也没有可用的会话特征（没有 messages / 没有用户
     /// 消息），调用方按「不粘」处理。
     pub(super) fn conversation_key(headers: &HeaderMap, body: &serde_json::Value) -> String {
-        if let Some(explicit) = Self::explicit_conversation_id(headers, body) {
+        // 长度闸加在这一个收口点上，五个来源一次覆盖（来源内部各自校验形状会
+        // 变成五份判据）。超限当「没有显式标识」，回落到内容哈希。
+        if let Some(explicit) = Self::explicit_conversation_id(headers, body)
+            .filter(|value| value.chars().count() <= Self::EXPLICIT_ID_MAX_CHARS)
+        {
             // 带前缀：显式值是客户端给的任意串，与下面 16 位十六进制的内容哈希
             // 分处两个命名空间，免得某个客户端的 id 恰好长成哈希的样子。
             return format!("id:{explicit}");
@@ -207,6 +218,12 @@ impl RouteState {
         // 值取纯字符串、非空即用：`prompt_cache_key` 本就是「缓存命名空间」语义
         // （同一会话稳定复用），拿它当会话标识与该字段的用途一致；它也没有
         // 历史包袱，任何非空值都是调用方自己给的稳定键，不需要形状校验。
+        //
+        // ⚠️ 不校验形状就等于要求调用方真的按「一会话一键」用它：把它当**固定
+        // 常量**发的客户端（所有会话共用一个值）会让整个客户端钉死在同一个账号上
+        // —— 粘性置顶修好之后这会真的生效，等于把轮转关掉。长度另有一道闸
+        // （见 [`Self::EXPLICIT_ID_MAX_CHARS`]）：它是这条链里唯一没有形状校验的
+        // 来源，而键会长住进内存。
         if let Some(value) = body
             .get("prompt_cache_key")
             .and_then(serde_json::Value::as_str)
@@ -256,8 +273,8 @@ impl RouteState {
     /// `HeaderMap::get` 大小写不敏感（HTTP 头名不区分大小写），用小写名查询
     /// 即可。**非 ASCII 头值（中文、emoji）会让 `to_str` 失败、该头被当作
     /// 「没有」**——这是 HTTP 规范的限制（头值是 ISO-8859-1 字节串），不是
-    /// 这里的选择：真实客户端发的 trace 都是 UUID 或十六进制串。手工用 curl
-    /// 测粘性时要留意 —— `-H "AH-Trace-Id: 中文值"` 发出去的请求不带可用
+    /// 这里的选择：真实客户端发的会话标识都是 UUID 或十六进制串。手工用 curl
+    /// 测粘性时要留意 —— `-H "AH-Thread-Id: 中文值"` 发出去的请求不带可用
     /// 标识，看起来就像「粘性不生效」。
     fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
         headers

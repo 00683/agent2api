@@ -116,8 +116,12 @@
   <div class="shell">
     <!-- 移动端侧边栏抽屉开关（仅 <768px 生效，见 css/mobile.css）。
          checkbox 本身隐藏，label.for 指向的汉堡按钮与遮罩都靠 :checked ~ 兄弟选择器驱动，
-         不依赖任何 JS；桌面端整条不影响布局。 -->
-    <input type="checkbox" id="nav-toggle" class="nav-toggle-input" aria-hidden="true">
+         不依赖任何 JS；桌面端整条不影响布局。
+         tabindex="-1"：它带着 aria-hidden 却是文档里第一个可聚焦元素，而隐藏只靠
+         opacity + pointer-events（这条规则在媒体查询之外，桌面端同样生效）—— 不加这一条，
+         桌面用户第一次按 Tab 焦点会落在一个看不见的控件上，同时构成 axe 的
+         aria-hidden-focus 违规。抽屉仍由 label 点击驱动，不受影响。 -->
+    <input type="checkbox" id="nav-toggle" class="nav-toggle-input" tabindex="-1" aria-hidden="true">
     <!-- ─── 左侧导航 ─── -->
     <aside class="sidebar">
       <div class="brand">

@@ -35,8 +35,17 @@
 //!   - **多轮 = 多次上游往返**：一轮的 prompt_tokens 含前几轮的全部历史，所以真实
 //!     成本是各轮**求和**（不是覆盖）。合并口径见 [`sum_tokens`]，收口时由续写侧
 //!     调一次 `report_usage` 覆盖上去（网关侧的报表与限流记账因此拿到总量）。
-//!     客户端**看到的**流式 usage 帧仍是逐轮原样透传的（本模块不合成 usage 帧，
-//!     理由见 [`TurnAccumulator`] 的说明）—— 已知不完全，但不伪造字节。
+//!     客户端**看到的**流式 usage 帧：出现时机变了，内容不变，本模块也不合成总量帧。
+//!     终帧**之前**到的 usage 帧照原样实时透传；终帧**之后**（含与终帧同帧）的那些
+//!     与终帧一起被压住 —— 续写时整段丢弃，不续写时原样放行。OpenAI 的标准形态
+//!     （`stream_options.include_usage`）正是把 usage 帧放在 finish **之后**，所以
+//!     走上续写的那条流里，客户端只能看到**最后一轮**的 usage 帧 —— 已知不完全，
+//!     但不伪造字节：合成一帧上游根本没发过的 usage，比数字不全更坏。
+//!   - **同一份对话会被再发一遍**：续写轮走的是同一条转发链路（同一个
+//!     `UpstreamService::forward`），因此它**会重新走一次选路** —— 可能落到另一个
+//!     账号、甚至另一个供应商（只要该 Key 的提供商白名单允许）。对账号隔离要求严格
+//!     的部署，这是决策信息：开这个开关等于允许「同一次客户端请求的内容出现在多个
+//!     上游账号上」。
 //!   - 转发阶段会被最后一轮决定；账号归属同样是「最后一次为准」——续写换到别家时，
 //!     请求日志的那一行归到最后承载的那一家（与跨家降级同一口径）。
 //!   - 流式路径把**终帧**（带非 null `finish_reason` 的那一帧与 `[DONE]`）压住不发，
@@ -130,6 +139,15 @@ const FRAGMENT_REASONING_RATIO: usize = 4;
 /// 判据是**严格大于**：正好 0.5 时再续一轮（与参考实现一致），因为逐字符位置
 /// 相似度 0.5 更像是「接着写了一段不同的话」而不是复读。
 const SIMILARITY_STOP: f64 = 0.5;
+
+/// 一轮里「终止帧之后的补帧」最多压住多少字节（见 `stream()` 的 held 累积）。
+///
+/// 这个缓冲的存在理由是保住帧序（有些上游在 `finish_reason` 之后才补 usage 帧，
+/// 若只压终止帧就会出现 usage 在 finish 之前 —— 那种顺序变化是本模块自己造的）。
+/// 但压住的量**不能由上游决定**：终止帧之后一直补帧的上游（坏掉的或恶意的）会让
+/// 它无界增长。1 MiB 是量级选择：正常形态（一帧 usage、偶尔几帧）连 1/1000 都用不到，
+/// 而任何超过它的上游都已经不是「补几帧」而是「刷流」。
+const MAX_HELD_BYTES: usize = 1024 * 1024;
 
 /// 续写指令（参考实现 `CONTINUE_INSTRUCTION` 逐字照抄）。
 ///
@@ -799,6 +817,8 @@ impl Continuation {
             loop {
                 let mut accumulator = TurnAccumulator::default();
                 let mut held: Vec<Bytes> = Vec::new();
+                let mut held_bytes = 0usize;
+                let mut held_full = false;
                 let mut client_gone = false;
                 while let Some(item) = current.next().await {
                     match item {
@@ -808,7 +828,24 @@ impl Continuation {
                             // 处理，客户端会先收到 usage 再收到 finish —— 那是本模块
                             // 自己造出来的顺序变化，比少续一轮坏得多。
                             if accumulator.push_frame(&frame) || !held.is_empty() {
-                                held.push(frame);
+                                // 压住的东西**必须有上限**：上游在终止帧之后一直补帧
+                                // （坏掉的或恶意的上游）会让这个 Vec 无界增长 —— 转发层
+                                // 不该给上游一个把网关内存吃干的入口。超限后不再收，
+                                // 但**不改**「已压住就全压住」的形态（多出来的帧丢掉，
+                                // 与续写路径丢掉整段 held 是同一种损失），也不影响
+                                // 「要不要续写」的判定（判据读的是累积器，不是 held）。
+                                if held_bytes + frame.len() > MAX_HELD_BYTES {
+                                    if !held_full {
+                                        held_full = true;
+                                        logging::verbose(
+                                            "Continuation",
+                                            "终止帧之后的补帧超过上限，后续帧丢弃（本轮不再累积）",
+                                        );
+                                    }
+                                } else {
+                                    held_bytes += frame.len();
+                                    held.push(frame);
+                                }
                             } else if sender.send(Ok(frame)).await.is_err() {
                                 client_gone = true;
                                 break;
@@ -850,7 +887,18 @@ impl Continuation {
                     && !accumulator.saw_error()
                     && !repeat
                     && looks_truncated(&verdict)
-                    && !telemetry.is_cancelled();
+                    && !telemetry.is_cancelled()
+                    // 客户端在这一轮 EOF 到「决定续写」之间断开了。上面那处
+                    // `sender.send` 失败是唯一**已经发生**的探测点，而这个窗口里
+                    // 原本没有任何探测 —— 断线之后照样会白打一轮上游（带全量历史，
+                    // 真金白银）。`is_closed` 是同步方法，单独一行挡掉。
+                    && !sender.is_closed()
+                    // 本轮**一个字节都没产出**（正文与思考都空）：没有可续的东西。
+                    // 判据读的是**累积**文本，所以上一轮的半截答案还在、判据仍说截断，
+                    // 相似度闸对空串也不设防（similarity("", x) 恒 0）—— 不拦就会
+                    // 一路问到 `max_rounds`，每轮都白花一次往返。
+                    // 注意只判「两者都空」：正文空但有思考是判据第 3 条要续的正例。
+                    && !(parts.text.trim().is_empty() && parts.reasoning.trim().is_empty());
                 if want_more
                     && append_continuation(&mut working, &parts.text, looks_reasoning_only(&verdict))
                 {

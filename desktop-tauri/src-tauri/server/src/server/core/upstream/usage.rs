@@ -63,7 +63,8 @@ pub struct UsageTokens {
     pub cache_read: i64,
 }
 
-/// 「输入 token 数」的别名表（含驼峰形态；顺序无意义，取第一个正数）。
+/// 「输入 token 数」的别名表（含驼峰形态）。**表序就是优先序**：多项都命中时按表序
+/// 取第一个**正数**（见 [`first_positive`]），不是求和、也不是取末位。
 const PROMPT_KEYS: &[&str] = &["prompt_tokens", "input_tokens", "promptTokens", "inputTokens"];
 /// 「输出 token 数」的别名表。
 const COMPLETION_KEYS: &[&str] = &[
@@ -80,6 +81,13 @@ const TOTAL_KEYS: &[&str] = &["total_tokens", "totalTokens"];
 /// 见 `protocol::anthropic.rs` 与 `protocol::responses_outbound.rs`）；驼峰两项是
 /// Command Code 一族上游的原样形态（`protocol::commandcode_outbound.rs` 归一前读的
 /// 就是这一族键）；`cached_*` 是部分兼容实现把它当顶层字段直接给的做法。
+///
+/// **表序就是优先序**（与 [`PROMPT_KEYS`] 同一条规矩）：`cached_tokens` 排在最前，
+/// 因为它是 OpenAI 标准形态；排它的理由不是「更权威」而是「更常见」，多项都为正数时
+/// 按表序取第一项。真正要挡的是**这一族里某一项恒为 0 时的短路**：取第一个**正数**
+/// 而不是第一个「存在的」，否则嵌套容器里那个恒 0 的 `cached_tokens` 会把顶层真有
+/// 值的 `cache_read_input_tokens` 挡掉（0 在前端不是缺值，是「这家的缓存没生效」的
+/// 读数，比少记一项更难查）。
 const CACHE_READ_KEYS: &[&str] = &[
     "cached_tokens",
     "cached_input_tokens",
