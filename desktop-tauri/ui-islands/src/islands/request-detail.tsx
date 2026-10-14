@@ -506,10 +506,12 @@ function RouteReplay({ row }: { row: RequestRow }) {
   if (!route) return null
   const strategy = String(route.strategy || '')
   const sticky = String(route.sticky || '')
-  // 只有两档（顺序优先 / 负载均衡）；历史记录里可能留着已下线的 'usage'，
-  // 按它的替代者「负载均衡」显示（后端 RouteStrategy::from_id 也是这么归的）
+  // 三档（顺序优先 / 负载均衡 / 家内轮询）；历史记录里可能留着已下线的 'usage'，
+  // 按它的替代者「负载均衡」显示（后端 RouteStrategy::from_id 也是这么归的）。
+  // 认不出的取值原样显示 —— 那是「后端有、前端还没跟上」的信号，藏起来更难查。
   const strategyLabel = strategy === 'rotate' || strategy === 'usage' ? t('负载均衡')
-    : strategy === 'order' ? t('顺序优先') : strategy
+    : strategy === 'order' ? t('顺序优先')
+      : strategy === 'provider' ? t('家内轮询') : strategy
   const stickyLabel = sticky === 'auto' ? t('自动') : sticky === 'session' ? t('会话内')
     : sticky === 'turn' ? t('每轮') : sticky === 'off' ? t('关闭') : sticky
   const ordered = Array.isArray(route.ordered) ? route.ordered as Array<Record<string, unknown>> : []

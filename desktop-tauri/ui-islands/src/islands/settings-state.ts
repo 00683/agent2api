@@ -128,7 +128,17 @@ export type NumericState = { status: LoadStatus; values: Record<string, number> 
  * 账号路由（策略 + 会话粘性）：两档都是受控枚举，读不到时档位回落后端默认
  * （order / auto，由视图侧按合法值表兜底）。
  */
-export type RoutingState = { status: LoadStatus; strategy: string; sticky: string }
+export type RoutingState = {
+  status: LoadStatus
+  strategy: string
+  sticky: string
+  /** 失败退避：转发失败的账号休息一会儿再回来（后端默认开） */
+  failoverBackoff: boolean
+  /** 限流垫底：还有额度时被 429 的账号排到队尾（后端默认开） */
+  sink: boolean
+  /** 熔断开关：连续失败到阈值后打开（后端默认关） */
+  breakerEnabled: boolean
+}
 
 export type DebugState = {
   status: LoadStatus
@@ -326,7 +336,7 @@ const INITIAL: SettingsSnapshot = {
   timeouts: { status: 'loading', values: null },
   queue: { status: 'loading', values: null },
   captchaPool: { status: 'loading', values: null },
-  routing: { status: 'loading', strategy: 'order', sticky: 'auto' },
+  routing: { status: 'loading', strategy: 'order', sticky: 'auto', failoverBackoff: true, sink: true, breakerEnabled: false },
   debug: { status: 'loading', on: false, count: null, limit: null },
   sanitize: { status: 'loading', on: false },
   clineHeaders: { status: 'loading', defaults: {}, overrides: {}, effective: {} },
@@ -1103,6 +1113,9 @@ export async function saveCaptchaPoolField(field: NumberField, raw: string): Pro
 /** 后端给的路由配置里我们关心的两个键（与 /api/routing 的长键名逐字对应） */
 const ROUTING_STRATEGY_KEY = 'routingStrategy'
 const ROUTING_STICKY_KEY = 'routingSticky'
+const ROUTING_FAILOVER_BACKOFF_KEY = 'routingFailoverBackoff'
+const ROUTING_SINK_KEY = 'routingSink'
+const ROUTING_BREAKER_ENABLED_KEY = 'routingBreakerEnabled'
 
 /** 路由配置的合法取值表（逐字来自 settings-model 的档位表，校验与兜底共用） */
 const ROUTING_VALID: Record<string, ReadonlySet<string>> = {
@@ -1111,13 +1124,30 @@ const ROUTING_VALID: Record<string, ReadonlySet<string>> = {
 }
 
 /** 路由响应 → 快照值：只认合法档位，读不到 / 非法时按该键的默认档兜底 */
-function routingValuesFrom(data: unknown): { strategy: string; sticky: string } {
+function routingValuesFrom(data: unknown): {
+  strategy: string
+  sticky: string
+  failoverBackoff: boolean
+  sink: boolean
+  breakerEnabled: boolean
+} {
   const record = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
   const pick = (key: string, fallback: string): string => {
     const raw = record[key]
     return typeof raw === 'string' && ROUTING_VALID[key].has(raw) ? raw : fallback
   }
-  return { strategy: pick(ROUTING_STRATEGY_KEY, 'order'), sticky: pick(ROUTING_STICKY_KEY, 'auto') }
+  // 三个布尔开关：只认字面 true / false（后端返回的一定是布尔），缺字段时回落后端默认值
+  const pickBool = (key: string, fallback: boolean): boolean => {
+    const raw = record[key]
+    return typeof raw === 'boolean' ? raw : fallback
+  }
+  return {
+    strategy: pick(ROUTING_STRATEGY_KEY, 'order'),
+    sticky: pick(ROUTING_STICKY_KEY, 'auto'),
+    failoverBackoff: pickBool(ROUTING_FAILOVER_BACKOFF_KEY, true),
+    sink: pickBool(ROUTING_SINK_KEY, true),
+    breakerEnabled: pickBool(ROUTING_BREAKER_ENABLED_KEY, false),
+  }
 }
 
 export async function loadRouting(): Promise<void> {
@@ -1135,7 +1165,13 @@ export async function loadRouting(): Promise<void> {
  * 保存两档之一：PUT 契约返回生效后的全量值（与超时 / 重试同一模式），直接按响应刷新。
  * 后端只认长键名；未知档位在界面上就发不出来（SegmentedControl 的取值来自档位表）。
  */
-export async function saveRoutingField(patch: { routingStrategy?: string; routingSticky?: string }): Promise<void> {
+export async function saveRoutingField(patch: {
+  routingStrategy?: string
+  routingSticky?: string
+  routingFailoverBackoff?: boolean
+  routingSink?: boolean
+  routingBreakerEnabled?: boolean
+}): Promise<void> {
   if (busyScope) return
   const bridge = shared().workbuddyDesktop
   if (!bridge?.setRoutingConfig) {

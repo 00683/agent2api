@@ -938,6 +938,11 @@ pub const KEY_ROUTING_BREAKER_SUCCESS: &str = "routingBreakerSuccessThreshold";
 
 pub const ROUTING_STRATEGY_ORDER: &str = "order";
 pub const ROUTING_STRATEGY_ROTATE: &str = "rotate";
+/// 家内轮询（`provider`）：家之间按优先级，同一家内部轮流用各账号。
+///
+/// 与「负载均衡」的差别在**轮转的边界**：这里家的先后固定（由优先级定），
+/// 只有家内换人 —— 适合「想优先用某几家、又不愿把某一家的某个账号焊死」。
+pub const ROUTING_STRATEGY_PROVIDER: &str = "provider";
 
 pub const STICKY_OFF: &str = "off";
 pub const STICKY_TURN: &str = "turn";
@@ -956,12 +961,15 @@ pub const ROUTING_BREAKER_MAX_SUCCESS: i64 = 10;
 
 /// 路由策略（`RouteStrategy` 的 Rust 形态；配置里存 `as_str`）
 ///
-/// 两档：顺序优先（队列第 1 位接走所有请求）与负载均衡（逐请求轮换）。
+/// 三档：顺序优先（队列第 1 位接走所有请求）、负载均衡（逐请求轮换）、
+/// 家内轮询（家之间按优先级、同一家内部轮流用各账号）。
 /// 「余额优先（usage）」已下线（2026-10，按用户要求移除）—— 见 `from_id` 的兜底说明。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteStrategy {
     Order,
     Rotate,
+    /// 家内轮询（本仓新增，上游没有）：轮转的边界收在「家」里面
+    Provider,
 }
 
 impl RouteStrategy {
@@ -969,6 +977,7 @@ impl RouteStrategy {
         match self {
             Self::Order => ROUTING_STRATEGY_ORDER,
             Self::Rotate => ROUTING_STRATEGY_ROTATE,
+            Self::Provider => ROUTING_STRATEGY_PROVIDER,
         }
     }
 
@@ -979,6 +988,7 @@ impl RouteStrategy {
     /// 静默退回「排第 1 的接走所有请求」会与他的本意相反。
     pub fn from_id(value: &str) -> Self {
         match value {
+            ROUTING_STRATEGY_PROVIDER => Self::Provider,
             ROUTING_STRATEGY_ROTATE | "usage" => Self::Rotate,
             _ => Self::Order,
         }
