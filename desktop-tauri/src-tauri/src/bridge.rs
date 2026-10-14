@@ -549,6 +549,11 @@ const BRIDGE_JS: &str = r#"
     // 签到中心的聚合快照（每日签到分组 / 自动签到设置 / 签到历史 / 一次性项入口），
     // 见 api::checkin_center 的模块头 —— 页面打开只打这一条
     getCheckinCenter: () => call('GET', '/api/checkin-center'),
+    // Qoder UMID 组件（设备风控身份）的状态与安装（与 web_shim.rs 的同名方法成对）。
+    // 桌面端页面是 tauri:// 协议、裸 fetch 到不了后端，所以只能走这条桥
+    //（call 会把 X-API-Key 一并带上，见 gateway::request_builder）。
+    getQoderUmid: () => call('GET', '/api/qoder-umid'),
+    installQoderUmid: () => call('POST', '/api/qoder-umid/install', {}),
     // 签到记录明细台账（签到记录页）：查询（limit/offset/outcome/provider/keyword/start/end）
     // 与清空（全清必须显式 all=1，护栏见 api::checkin_records 的模块头）
     getCheckinRecords: params => {

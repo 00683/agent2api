@@ -79,6 +79,9 @@ use parse::*;
 /// 写盘时一起回写。
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeConfig {
+    /// 顶层旧字段 `apiKey` 的**磁盘原值**（从本轮改造起可能是 `enc1:` 信封）。
+    /// 唯一读者是 `masked_api_key`，解密也在那里 —— 为什么不在快照构建期解，
+    /// 见那个函数的说明。
     api_key: Option<String>,
     locale: String,
     default_model: String,
@@ -276,8 +279,18 @@ impl RuntimeConfig {
 
     /// 掩码后的 API Key，格式照抄 server.mjs 920 行：前 6 后 4。
     /// 短 key 会前后重叠 —— Node 的 slice(0,6)/slice(-4) 也是这样，保持一致。
+    ///
+    /// ── 为什么在**这里**解密，而不在快照构建期或写侧 ─────────────
+    /// `apiKey` 从本轮改造起可能是 `enc1:` 信封（顶层旧字段的原地加密迁移见
+    /// `core::legacy_api_key`），所以掩码前必须先按 `api_keys` 的口径解出明文 ——
+    /// 直接掩码密文，界面上会显示成 `enc1:b...xxxx`，看起来像 Key 被换掉了。
+    /// 位置放在掩码这一层而不是 `build`：`build` 在 `config::init` 里跑，那时
+    /// 日志库还没装（见 `save_raw` 的说明），「密钥文件丢了、这把 Key 解不开」那条
+    /// 一次性降级告警只会落在控制台上（桌面形态下用户根本看不到）；本方法由界面
+    /// （GET /api/config）调用，那时日志已入库。顺带让启动极早期不做任何解密动作。
     pub fn masked_api_key(&self) -> Option<String> {
-        let key = self.api_key.as_ref().filter(|key| !key.is_empty())?;
+        let stored = self.api_key.as_ref().filter(|key| !key.is_empty())?;
+        let key = crate::server::core::api_keys::stored_plaintext(stored);
         let head: String = key.chars().take(6).collect();
         let total = key.chars().count();
         let tail: String = key.chars().skip(total.saturating_sub(4)).collect();
@@ -436,7 +449,10 @@ fn build(raw: Map<String, Value>) -> RuntimeConfig {
     let captcha_pool = captcha_pool_from(&raw);
     let routing = routing_from(&raw);
     RuntimeConfig {
-        // 文件里有就用文件的，否则环境变量兜底（对应 `if (config.apiKey && !opts.apiKey)`）
+        // 文件里有就用文件的，否则环境变量兜底（对应 `if (config.apiKey && !opts.apiKey)`）。
+        // 这里存的是**磁盘原值**：`apiKey` 从本轮改造起可能是 `enc1:` 信封（顶层旧
+        // 字段的原地加密迁移见 `core::legacy_api_key`）。解开它只发生在
+        // `masked_api_key` —— 为什么不在快照构建期解密，见那个函数的说明。
         api_key: string_field(&raw, "apiKey").or_else(env_api_key),
         locale: env_text("WORKBUDDY_LOCALE")
             .or_else(|| string_field(&raw, "locale"))
@@ -1056,17 +1072,54 @@ pub fn save_raw(raw: &Map<String, Value>) -> bool {
 
 /// 设置 API Key：`None` 表示删除（对应 Node 版 `body.apiKey === null` 分支）。
 /// 返回是否写盘成功；无论成功与否内存快照都已更新（本次运行立即生效）。
-pub fn set_api_key(api_key: Option<String>) -> bool {
-    update(|config| match api_key.clone() {
-        Some(key) => {
-            config.raw.insert("apiKey".to_string(), Value::String(key.clone()));
-            config.api_key = Some(key);
-        }
-        None => {
-            config.raw.remove("apiKey");
+///
+/// ── 写入侧落的是 `enc1:` 信封，不是明文 ───────────────────────
+/// 界面（管理页 POST /api/config）填的当然是明文，但落进 `raw`（= 磁盘那一行）的
+/// 值先经 `crypto::seal(…, SecretScope::Accounts)` —— 密钥域与 `apiKeys` 数组里的
+/// `key`、旧字段的原地加密迁移**共用同一个**（理由见 `api_keys` 模块头，不新增域）。
+/// 不在这里加密的后果是一段本可以不存在的明文窗口：面板上刚设的 Key 会以明文躺在
+/// 库里，直到下次启动的原地加密迁移（`core::legacy_api_key`）才被收敛 —— 而迁移的
+/// 前提是「那次启动跑得起来」，这期间任何一次「单独拷走库文件」都带走网关口令。
+///
+/// 内存快照 `config.api_key` 存**磁盘原值**（即上面的信封），与 `update_raw_field`
+/// （原地加密迁移走它）及 `build` 逐字同一条口径：该字段的唯一读者是
+/// `RuntimeConfig::masked_api_key`，解密也在那里。在这一层或调用方先解一遍，同一个
+/// 字段就会出现两种解释（明文 / 密文），掩码、比对、迁移三处迟早各按各的读法走。
+///
+/// ── 加密失败：fail closed，绝不静默落明文 ─────────────────────
+/// 加密失败只发生在保护最该生效的异常环境（密钥文件或配置目录建不出来、系统随机源
+/// 不可用），此时静默写明文等于「越该保护越失效」，而界面上完全看不出区别。
+/// 所以失败即 `Err` 上抛、**一个字节都不写**（`raw` 与内存快照都保持原样，旧 Key
+/// 照常可用），调用方（`api::config_api::post_config`）把错误报给用户 ——
+/// 与 `api_keys::save` 同一取向（那里的完整论证见 `ApiKeyEntry::to_value`）。
+/// 与它相对的是「落库失败」：那只影响「重启后还在不在」，沿用配置层的既有语义
+/// （`Ok(false)`，内存已更新，不升级成一次请求错误，见 `save_raw` 的说明）。
+pub fn set_api_key(api_key: Option<String>) -> Result<bool, String> {
+    let Some(key) = api_key else {
+        // 删除分支与原先逐字相同：删掉键而不是写空值（多处注释引用的既有语义，
+        // 见 `set_update_proxy` / `set_prompt` 的「与 set_api_key(None) 同一语义」）。
+        // 这条路不经过加密，因此 `Err` 不可能出现
+        return Ok(update(|config| {
+            config.raw.remove(crate::server::core::api_keys::KEY_API_KEY);
             config.api_key = None;
-        }
-    })
+        }));
+    };
+    // 加密必须在 `update` **之前**做：`update` 的闭包只能改内存、没法中止保存，
+    // 把加密塞进闭包的话，加密失败时手里就只剩「写明文」或「写空值」两条路 ——
+    // 两条都是静默的形态错误。放在外面则失败时一个字节都不写（下面这一行不会执行）
+    let envelope = crate::server::core::crypto::seal(
+        key.as_bytes(),
+        crate::server::core::crypto::SecretScope::Accounts,
+    )?;
+    Ok(update(move |config| {
+        config.raw.insert(
+            crate::server::core::api_keys::KEY_API_KEY.to_string(),
+            Value::String(envelope.clone()),
+        );
+        // 快照存磁盘原值（信封）而不是明文：解密在唯一读者 `masked_api_key`，
+        // 见函数头的说明
+        config.api_key = Some(envelope);
+    }))
 }
 
 /// 整份替换 `apiKeys` 列表，并删掉旧的单 Key 字段 `apiKey`（从此只有一份真相；
@@ -1076,7 +1129,7 @@ pub fn replace_api_keys(list: Value) -> bool {
         config
             .raw
             .insert(crate::server::core::api_keys::KEY_API_KEYS.to_string(), list.clone());
-        config.raw.remove("apiKey");
+        config.raw.remove(crate::server::core::api_keys::KEY_API_KEY);
         config.api_key = None;
     })
 }
@@ -1110,9 +1163,12 @@ pub fn update_raw_field(key: &str, value: Value) -> bool {
     let key = key.to_string();
     update(move |config| {
         config.raw.insert(key.clone(), value.clone());
-        // apiKey 属于「生效字段」，写它时要同步内存里的值
-        if key == "apiKey" {
-            config.api_key = string_field(&config.raw, "apiKey");
+        // apiKey 属于「生效字段」，写它时要同步内存里的值。这里存的是**磁盘原值**
+        // （本函数也会被用来往这个键里写 `enc1:` 信封，见 `core::legacy_api_key`
+        // 的原地加密迁移），给界面看的解密在 `RuntimeConfig::masked_api_key` 里
+        // —— 为什么不在这一层解密，那里有说明。
+        if key == crate::server::core::api_keys::KEY_API_KEY {
+            config.api_key = string_field(&config.raw, crate::server::core::api_keys::KEY_API_KEY);
         }
     })
 }

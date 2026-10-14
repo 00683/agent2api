@@ -915,6 +915,10 @@ pub fn shim_js() -> &'static str {
     runCheckinActivity: function (id, mode) { return call('POST', '/api/checkin-activity', { id: id, mode: mode }); },
     // 签到中心的聚合快照（与 bridge.rs 的同名方法同一路径）
     getCheckinCenter: function () { return call('GET', '/api/checkin-center'); },
+    // Qoder UMID 组件（设备风控身份）的状态与安装（与 bridge.rs 的同名方法成对）。
+    // 路径挂 protected：headless 形态必须带面板凭据，所以页面只能走桥、不能裸 fetch。
+    getQoderUmid: function () { return call('GET', '/api/qoder-umid'); },
+    installQoderUmid: function () { return call('POST', '/api/qoder-umid/install', {}); },
     // 签到记录明细台账（查询 / 清空；参数对象里空值不带，与 bridge.rs 成对）
     getCheckinRecords: function (params) {
       const query = new URLSearchParams();

@@ -30,6 +30,7 @@
   "{n} KB": "{n} KB",
   "{n} MB": "{n} MB",
   "{n} 个头将随每个 Cline 请求发送": "{n} cabeçalhos serão enviados em cada requisição da Cline",
+  "⚠️ 密钥警告": "",
   "⚠️ 机器人校验已关闭": "⚠️ Captcha desativado",
   "✅ Cline 伪装头已保存": "✅ Cabeçalhos spoofed do Cline salvos",
   "✅ models.dev 模型元数据已开启": "✅ Metadados de modelos do models.dev ativados",

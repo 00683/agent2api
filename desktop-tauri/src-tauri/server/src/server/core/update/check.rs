@@ -57,6 +57,27 @@ const MIN_CHECK_GAP_MS: i64 = 60_000;
 /// 超时后按冷却/上次结果如实回答，而不是把用户挂在这里。
 const WAIT_RUNNING_MS: i64 = 75_000;
 
+/// 失败冷却期间给用户的等待提示：在通用文案后面补一句「怎么提前解除」。
+///
+/// 冷却截止时刻来自上游的 `Retry-After` / `X-RateLimit-Reset`，匿名请求动辄
+/// 几十分钟（60 次/小时、按出口 IP 计）。而「更新设置」里存一枚 GitHub 令牌会
+/// 换成按用户计的配额桶，并顺手清掉这段冷却（[`UpdateManager::clear_check_cooldown`]）
+/// —— 提示里带上这一句，用户才有「不必干等」这条路可走。
+///
+/// 只对**真的处于失败冷却**时补：`running` 是「那一轮正在跑」、`retry_at` 已过期
+/// 是「刚执行完、还差最短间隔」，两者都不是配额问题，挂这句建议只会把人引到
+/// 「更新设置」里白找。
+fn waiting_message(state: &TaskState) -> String {
+    let message = state.waiting_message();
+    let in_cooldown = !state.running()
+        && state.last_error.is_some()
+        && state.retry_at > logging::now_ms();
+    if !in_cooldown {
+        return message;
+    }
+    format!("{message}，或者在更新设置中完善GitHub 令牌")
+}
+
 impl UpdateManager {
     /// 本条记录的持久化键：**按仓库隔离**（`WORKBUDDY_UPDATE_REPO` 可覆盖仓库，
     /// 换了仓库就该重新排期与重新拉取，不能沿用旧仓库的结果与冷却）。
@@ -154,12 +175,12 @@ impl UpdateManager {
                 }
                 // 等到了结果就复用；仍在跑（或正处于失败冷却）就如实报原因。
                 if state.running() || (state.last_error.is_some() && state.retry_at > logging::now_ms()) {
-                    return Err(UpdateError::new(state.waiting_message()));
+                    return Err(UpdateError::new(waiting_message(&state)));
                 }
                 if state.last_success_at > 0 {
                     return Ok(self.checked_result(current_version, &state));
                 }
-                return Err(UpdateError::new(state.waiting_message()));
+                return Err(UpdateError::new(waiting_message(&state)));
             }
         };
         let outcome = self.fetch_release().await;

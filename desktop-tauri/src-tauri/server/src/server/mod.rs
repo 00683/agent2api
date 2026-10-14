@@ -330,6 +330,27 @@ impl ServerState {
             Ok(db) => Some(db),
             Err(error) => {
                 logging::console_line("[Storage]", &format!("❌ 数据库打开失败: {error}"));
+                // ── 唯一的例外：库版本**高于**本程序 → 明确拒绝启动 ────────────
+                // 这几乎必然是「用户回退到了旧版本」。旧程序读不懂加密后的
+                // `accounts.data`（会把每一行当坏数据跳过），而它的 `save_state`
+                // 会把「读不出来 = 内存里没有」的行 DELETE —— 即「回退一次 =
+                // 账号被删」（完整论证见 `db::schema::migrate` 的拒绝分支）。
+                // 降级继续会让用户看到「服务正常起来了、账号却全报错」，那不是
+                // 「明确拒绝降级」；所以这里直接返回 Err 让启动失败。
+                //
+                // **只加这一个分支**：其余任何 DB 打开失败（磁盘满、权限、库损坏）
+                // 一律保持下面原有的降级行为（`db = None` 继续启动，理由见
+                // `ServerState.db` 字段注释与 `db` 模块头）。判据必须来自
+                // `Db::open` 之外的一次独立读取：`Db::open` 已经失败、没有句柄可用。
+                if let Some(stored) = db::stored_schema_version(&db_path) {
+                    if stored > db::schema::SCHEMA_VERSION {
+                        return Err(format!(
+                            "库 schema 版本（{stored}）高于当前程序（{}）：这通常是回退到了旧版本。\
+                             请使用更新版本的程序，或从备份恢复——用旧程序打开会把加密后的账号静默删除。",
+                            db::schema::SCHEMA_VERSION,
+                        ));
+                    }
+                }
                 None
             }
         };

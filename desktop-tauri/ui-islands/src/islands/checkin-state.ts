@@ -315,9 +315,23 @@ type CheckinBridge = {
     message?: unknown
     credit?: unknown
   } | null | undefined>
+  /**
+   * Qoder UMID 组件（设备风控身份）的状态与安装（与 bridge.rs、web_shim.rs 三处成对）。
+   *
+   * `available` 决定签到页那条提示出不出现，`installSupported` 决定给「一键安装」
+   * 按钮还是文字说明（只有 Linux / headless 支持下载安装），`installing` 让界面在
+   * 安装期间持续回读状态。
+   */
+  getQoderUmid?(): Promise<{
+    available?: boolean
+    source?: string | null
+    installSupported?: boolean
+    installing?: boolean
+  } | null | undefined>
+  installQoderUmid?(): Promise<{ version?: string; registry?: string; installedAt?: number } | null | undefined>
 }
 
-function bridge(): CheckinBridge {
+export function bridge(): CheckinBridge {
   return (shared().workbuddyDesktop ?? {}) as CheckinBridge
 }
 

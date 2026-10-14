@@ -5,7 +5,7 @@ import { PROVIDER_ICONS } from './add-provider-pick'
 import { formatTime, shared, type OnboardingTask } from './accounts-shared'
 import { claimedPlanIdsToday } from './accounts-domain'
 import {
-  claimOnboarding, getCheckinStore, groupTone, loadCheckinCenter, nextScheduleRun,
+  bridge, claimOnboarding, getCheckinStore, groupTone, loadCheckinCenter, nextScheduleRun,
   onboardingExpanded, queryOnboarding, runAllCheckin, setCheckinTab, showCheckinTab,
   signSingleAccount, subscribeCheckinStore, toggleOnboardingExpand, toggleProviderExpand,
   growthExpanded, queryGrowth, runGrowth, runGrowthSchool, runGrowthTravel, toggleGrowthExpand,
@@ -237,13 +237,19 @@ function ProviderRow({ group, expanded }: { group: CheckinProviderGroup; expande
  * 耗时以分钟计，中途刷新页面后不能把「安装中…」永久留在界面上（装完或失败
  * 都要能自己恢复到按钮 / 消失）。平台不支持安装（Windows / macOS）时只说明
  * 怎么补 —— 装客户端或 qodercli 后无需重启网关（组件发现按次执行）。
+ *
+ * ── 为什么必须走桥而不是 fetch ──────────────────────────────
+ * 桌面端的页面来自 `tauri://` 协议（frontendDist 指向 ui/），裸 fetch('/api/…')
+ * 打的是 tauri asset，根本到不了后端；headless / Docker 形态下 `/api/qoder-umid`
+ * 挂在 protected 路由上（安装会下载并落地可执行组件），要求面板凭据 —— 裸 fetch
+ * 不带 `x-api-key` / `x-panel-token`，只会拿到 401。桥的两端各自补齐凭据
+ *（bridge.rs 带 X-API-Key，web_shim.rs 带 Key 与面板令牌），所以这里统一走桥。
  */
 function UmidHint(): React.ReactElement | null {
   const [state, setState] = React.useState<{ available?: boolean; source?: string | null; installSupported?: boolean; installing?: boolean } | null>(null)
   const load = React.useCallback(async (): Promise<void> => {
     try {
-      const response = await fetch('/api/qoder-umid')
-      if (response.ok) setState(await response.json())
+      setState(await bridge().getQoderUmid?.() ?? null)
     } catch { /* 状态是锦上添花，拉不到不挡签到 */ }
   }, [])
   React.useEffect(() => { void load() }, [load])
@@ -257,13 +263,8 @@ function UmidHint(): React.ReactElement | null {
   const install = async (): Promise<void> => {
     try {
       setState(prev => prev ? { ...prev, installing: true } : prev)
-      const response = await fetch('/api/qoder-umid/install', { method: 'POST' })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null)
-        shared().wbApp?.toast?.(t('UMID 组件安装失败：{error}', { error: String(payload?.error ?? response.status) }), 'err')
-      } else {
-        shared().wbApp?.toast?.(t('✅ UMID 组件已安装，下轮签到即可领取国际版积分'))
-      }
+      await bridge().installQoderUmid?.()
+      shared().wbApp?.toast?.(t('✅ UMID 组件已安装，下轮签到即可领取国际版积分'))
     } catch (error) {
       shared().wbApp?.toast?.(t('UMID 组件安装失败：{error}', { error: error instanceof Error ? error.message : String(error) }), 'err')
     } finally {

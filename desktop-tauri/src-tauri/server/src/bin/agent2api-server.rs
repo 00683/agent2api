@@ -76,7 +76,8 @@ fn main() -> ExitCode {
     };
 
     // bootstrap：开库、读配置、探测旧数据、装日志库（与桌面同一套时序）。
-    // 失败只可能来自目录迁移防御性校验 —— 原样透出，不能带错继续。
+    // 失败只可能来自目录迁移防御性校验、以及「库 schema 版本高于本程序」
+    // —— 两者都原样透出，不能带错继续。
     let mut state = match ServerState::bootstrap(port, host) {
         Ok(state) => state,
         Err(reason) => {

@@ -262,7 +262,24 @@ pub fn is_reserved(key: &str) -> bool {
 /// 要拿**被删的行数**，`migrate` 据此决定是否紧跟着 VACUUM（把空闲页真正
 /// 还给文件系统 —— 光 DELETE 不会让库文件缩小，而「省空间」正是这一版的
 /// 目的），完整说明见 `migrate` 尾部那段。
-pub const SCHEMA_VERSION: i64 = 13;
+///
+/// ── 版本 14：账号 `data` 列改为密文（`core::crypto` 的 `enc1:` 信封）──
+/// 这一版**没有任何 DDL**，也不清任何历史行（`cleaned_raw_rows` 写 0）：
+/// 它只是一个**内容形态的标记**。`accounts.data` 从明文 JSON 变成 AES-256-GCM
+/// 密文，而这件事没有列要加、没有表要建 —— 加密是逐行的内容变换，由
+/// `core::account_store::store_admin::encrypt_legacy_accounts`（挂在
+/// `account_bootstrap::run` 的启动迁移里）把存量明文行就地加密；密钥在库外
+/// （`{config_dir}/account.key`，兜底 `AGENT2API_ACCOUNT_KEY`，见
+/// `core::crypto` 模块头）。所以 `apply_version` 的 v14 分支是空操作。
+///
+/// **为什么仍要占一个版本号**（而不是只靠那段启动迁移）：因为「库里的数据形态」
+/// 真的变了，而 `user_version` 是它唯一的事实来源。升到 14 的库，其 `data` 列
+/// 应被当成密文；这条事实**在旧程序那一侧才有用** —— `migrate` 新加的「库版本
+/// 高于程序版本就拒绝打开」判据（见 [`migrate`]）正建立在版本号上：旧程序
+/// （`SCHEMA_VERSION <= 13`）读到 v14 库会明确失败，而不是把密文当坏数据跳过、
+/// 再在写回时把「读不出来的行」当成「内存里没有」DELETE 掉（即「回退一次 =
+/// 账号被删」）。对本程序，v14 只是一次空操作。
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -747,17 +764,55 @@ ALTER TABLE requests ADD COLUMN client TEXT NOT NULL DEFAULT '';
 
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
+/// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
+/// 完整论证见函数体里那个分支的注释）：加密后的 `accounts.data` 被旧程序当坏
+/// 数据跳过、再被它的差异写当成「内存里没有」删掉，静默放行等于「回退一次 =
+/// 账号被删」。库版本**低于**本程序则照常逐版本升级；**等于**则空操作。
+///
 /// 返回 `rusqlite::Result` 而不是本模块自造的字符串错误：调用方 `Db::open`
 /// 是唯一消费点，它把错误包成一句人能读的话（`format!`）就够了；而这里需要
 /// 区分「读版本号失败 / 跑 DDL 失败 / 写版本号失败」三种，保留 rusqlite 的
-/// 错误类型（含 SQLite 的错误码与消息）才说得清是哪一步坏的。
+/// 错误类型（含 SQLite 的错误码与消息）才说得清是哪一步坏的。那句「库比程序新」
+/// 的拒绝理由用 `ToSqlConversionFailure` 承载（它的 `Display` 就是原话）。
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if current >= SCHEMA_VERSION {
-        // 版本比本二进制新（用户从新版回退到旧版）：**不报错、也不动库**。
-        // 报错会让旧版直接起不来（用户只是想回退一次），而「降级 schema」
-        // 意味着删列删表，那是不可逆的数据丢失 —— 两者都不该自动发生。
+    if current == SCHEMA_VERSION {
+        // 已是最新版：什么都不做（全新库跑完建表之后、已升级的库每次启动都走这里）。
         return Ok(());
+    }
+    if current > SCHEMA_VERSION {
+        // ── 库比程序新：**拒绝打开**（本切片有意反转的一条既有决定）─────────
+        //
+        // 改造前这里的口径是「不报错、也不动库」：理由写的是「用户从新版回退到
+        // 旧版，报错会让旧版直接起不来，而他只是想回退一次」。那条理由在
+        // `accounts.data` 是明文的年代成立 —— 旧程序读不懂新库的新列/新表，
+        // 但账号那几张表它写得回去，最坏是丢一点新功能的数据。
+        //
+        // **本版起它不再成立**：`accounts.data` 是 `enc1:` 密文（v14 起），而旧程序
+        // （`SCHEMA_VERSION <= 13`）的 `decode_data` 只认明文 JSON —— 于是：
+        //   1. 旧程序读出每一行都会失败，把它们**当成坏数据跳过** → 界面上账号
+        //      全部消失；
+        //   2. 更致命的是写路径：旧程序的 `save_state` 按 id 做差异写，「库里有、
+        //      内存状态里没有」的行会被 `DELETE FROM accounts WHERE id = ?` ——
+        //      它读不出来的那些密文行**恰好**落进这个分支。于是「回退一次并触发
+        //      任意一次账号写入」= 把加密后的账号**静默删光**。
+        // 静默放行等于「回退一次 = 账号被删」，而账号数据丢了是不可逆的用户损失
+        // —— 所以这里改成明确失败：让启动在日志里说清原因，用户退回去用新版。
+        //
+        // 这不是「降级 schema」（那才需要删列删表、不可逆，本函数从没做过，也不
+        // 会做）：这里只是**在动手之前先拒绝**，库文件一个字节都不碰。
+        //
+        // 用什么承载这句错误：`ToSqlConversionFailure` 的 `Display` 就是里面那句
+        // 话的原文（本仓既有手法，见 `db::migrate::logs::assign_log_id` 的说明），
+        // 于是 `Db::open` 的 `format!("建表/升级 schema 失败: {error}")` 会把这段
+        // 话原样带到启动日志里。
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            format!(
+                "库 schema 版本（{current}）高于当前程序（{SCHEMA_VERSION}）：这通常是回退到了旧版本。\
+                 请使用更新的程序，或从备份恢复——用旧程序打开会把加密后的账号静默删除。"
+            )
+            .into(),
+        ));
     }
     // v13 清掉的历史正文行数（0 = 这一轮什么都没删）：循环后据此决定是否
     // VACUUM（见本函数尾部那段）。放循环外是因为 VACUUM 不能在事务里跑。
@@ -853,6 +908,14 @@ fn apply_version(
             *cleaned_raw_rows = conn.execute("DELETE FROM request_raw", [])?;
             Ok(())
         }
+        // v14：账号 `data` 列改为密文（`enc1:` 信封）。
+        // **这一版没有 DDL**，所以是空操作：加密是逐行的内容变换（由启动迁移
+        // `account_store::store_admin::encrypt_legacy_accounts` 把存量明文行就地
+        // 加密），没有列要加、没有表要建、也没有历史行要删（`cleaned_raw_rows`
+        // 保持 0，不触发 VACUUM）。版本号的作用在**旧程序那一侧**：它让旧程序
+        // 读到 v14 库时明确失败（见 `migrate` 的拒绝分支），而不是把密文当坏
+        // 数据跳过后又删掉。完整说明见 [`SCHEMA_VERSION`] 的 v14 段。
+        14 => Ok(()),
         _ => Ok(()),
     }
 }

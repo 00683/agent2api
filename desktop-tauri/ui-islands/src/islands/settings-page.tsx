@@ -730,7 +730,7 @@ function promptSourceText(source: string): string {
 
 /** 降级行的说明：只在真的处于降级期时出现（平时它是一行与用户无关的状态噪音） */
 function degradeHint(prompt: PromptState): string {
-  return t('已自动切换到最小中性提示词（撞了上游内容拦截，多半是 system 指纹误报），到 {until} 自动解除。期间本模式自己的提示词不会发出；把提示词改好后可以立即解除。', {
+  return t('已自动改用最小中性提示词（撞了上游内容拦截，多半是 system 指纹误报），到 {until} 自动解除。', {
     until: prompt.degradeUntilText || STATES.degradeUntilFallback,
   })
 }
@@ -1013,6 +1013,9 @@ function PromptPanel({ snap }: { snap: SettingsSnapshot }) {
         actions={<RefreshButton id='btn-prompt-refresh' onClick={() => void refreshPrompt()} />}
       />
       <div className='panel-body'>
+        {/* 状态行放在最前面：这一节要回答的第一个问题是「现在到底走哪条路」，
+            放在末尾时用户得先读完所有配置项才看得到它（旧实现如此）。 */}
+        <div className='settings-state'>{promptStateText(prompt)}</div>
         <div className='retention-list'>
           {/* 两个分组条把「默认」与「某家的例外」分开：上面那几行是所有未单独配置的
               家共用的默认值，下面那张表是逐家的例外 —— 不分开时它们是一串同构的行，
@@ -1071,7 +1074,7 @@ function PromptPanel({ snap }: { snap: SettingsSnapshot }) {
           </div>
 
           <div className='prompt-group'>
-            {t('按提供商配置')}<span className='note'>{t('只列单独配置过的家，其余沿用上面的全局配置')}</span>
+            {t('按提供商配置')}<span className='note'>{t('其余沿用上面的全局配置')}</span>
           </div>
 
           <ProviderPromptRows prompt={prompt} locked={locked} busy={busy} />
@@ -1094,7 +1097,6 @@ function PromptPanel({ snap }: { snap: SettingsSnapshot }) {
             </div>
           ) : null}
         </div>
-        <div className='settings-state'>{promptStateText(prompt)}</div>
         <div className='hint retention-note'>{NOTES.prompt}</div>
       </div>
     </section>
@@ -1682,6 +1684,19 @@ function DataPane({ snap }: { snap: SettingsSnapshot }) {
             }
           />
           <div className='panel-body'>
+            {/* 恢复后的密钥警告（后端 warning 原文，密钥对不上时导入后账号解不开）：
+                排在面板最前 —— 用户刚点完标题栏的「恢复整库」，视线就在这片区域，
+                这条警告必须第一眼看到；而且它**常驻**，不像 toast 那样 3.5 秒后
+                消失（用户错过就只能对着空账号列表发懵，不知道账号去哪了）。
+                呈现沿用本页既有的 .danger-zone 警示框（与下面那条备份说明同款），
+                不自造组件；文案是服务端生成的数据，原样显示、不翻译 */}
+            {snap.dbWarning ? (
+              <div className='danger-zone' id='settings-db-warning'>
+                <strong>{t('⚠️ 密钥警告')}</strong>
+                <br />
+                {snap.dbWarning}
+              </div>
+            ) : null}
             <div className='retention-row'>
               <label htmlFor='settings-db-include-logs'>{t('包含日志与调试报文')}</label>
               <Switch
