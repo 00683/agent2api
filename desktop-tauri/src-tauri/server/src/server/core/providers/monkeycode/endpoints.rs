@@ -154,18 +154,27 @@ pub fn ws_headers(region: Region, session: &str) -> Vec<(String, String)> {
     ]
 }
 
-/// 接口类型 → 上游 CLI / Agent 名（`proxy/src/task-runner.ts` 的映射，逐字核实）。
+/// 接口类型 → 上游 CLI / Agent 名。
 ///
-/// 三种 `interface_type` 决定容器里装哪个 coding agent（`docs/03-llm/02-interface-types.md`）：
+/// 三种 `interface_type` 理论上映射（`docs/03-llm/02-interface-types.md`）：
 ///   - `openai_chat`      → `opencode`（通用 OpenAI 兼容）
 ///   - `openai_responses` → `codex`
 ///   - `anthropic`        → `claude`
+///
+/// 但 2026-10 起上游免费层实际行为与文档不符：`openai_responses` 的模型
+/// （如 `monkeycode-basic/qwen3.8-flash`）在网页端建任务实测发的是
+/// `cli_name: opencode`，且免费层强制要求 OpenCode ≥ 1.18.0——按文档发
+/// `codex` 的任务一律失败（卡 processing 或 EXECUTION_FAILED
+/// "OpenCode 1.18.0 or newer is required to use the free tier"，同一账号
+/// 同镜像同模型、网页 opencode 成功 / 网关 codex 失败，任务列表实证）。
+/// 因此 `openai_responses` 也发 `opencode`；`anthropic → claude` 无实证
+/// 冲突，维持文档映射。
 ///
 /// 未知 / 缺失的接口类型回落 `opencode`（与参考 `task-runner.ts` 的兜底一致）
 /// —— 那是「最通用」的一档，不是随意的默认值。
 pub fn cli_name_for(interface_type: &str) -> &'static str {
     match interface_type.trim().to_ascii_lowercase().as_str() {
-        "openai_responses" => "codex",
+        "openai_responses" => "opencode",
         "anthropic" => "claude",
         _ => "opencode",
     }
