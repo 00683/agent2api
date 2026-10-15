@@ -949,8 +949,9 @@ export function UsageCell({ account }: { account: AccountRecord }) {
       {t('待生效 {n} 份', { n: pending.length })}
     </Badge>
   ) : null
-  // 积分明细入口（`creditDetail` 能力位：WorkBuddy 两家与 Trae）。同一档「读数可用」
-  // 的判据：查询失败 / 未配置时连读数本身都没有，挂一个点开是空框的入口更糟。
+  // 积分明细入口（`creditDetail` 能力位：WorkBuddy 两家、Trae 等多家后端出
+  // `credits[]` 的家）。同一档「读数可用」的判据：查询失败 / 未配置时连读数本身
+  // 都没有，挂一个点开是空框的入口更糟。
   // 空数组同样不挂 —— 后端不写 `credits` 键就是「这家这次没有逐份读数」
   // （企业账号、上游没给包），界面不去证明一个空清单。
   const creditRows = summary.kind === 'ok' || summary.kind === 'warn' ? creditRowsOf(entry) : []
