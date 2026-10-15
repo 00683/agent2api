@@ -257,6 +257,19 @@ const TRANSIENT_RETRY_STATUSES: &[u16] = &[408, 500, 502, 503, 504];
 /// 再看一眼有意义；413 没有任何会变的量。
 const PAYLOAD_SIZE_REJECTION_STATUSES: &[u16] = &[413];
 
+/// 按**请求的路由 / 模型名**拒收的状态码：上游在解析请求时就没找到目标
+/// （模型不在这一家的套餐里、路由不存在），结论只由「这份 body 长什么样」决定，
+/// 同一账号重发同一份 body 必然得到同一个 404 ⇒ 不进原地重发，
+/// 换账号才是有意义的动作（别的账号可能有这个模型）。
+///
+/// 实测形状（issue #255）：OfficeAce 对目录里有、套餐里没有的名字回
+/// `404 {"code":null,"message":"Invalid model."}`，旧判据把它当普通 Fatal，
+/// 原地重发 3 次 × 5 秒才换号——客户端白等 15 秒，换来的还是同一个 404。
+///
+/// 与 [`PAYLOAD_SIZE_REJECTION_STATUSES`] 分成两个常量而不是合一：
+/// 一个是「字节」，一个是「名字」，出处与措辞不同，将来各自的排除面也可能变。
+const DETERMINISTIC_NOT_FOUND_STATUSES: &[u16] = &[404];
+
 /// 这次的失败状态码是否命中「指定错误码直接换号」名单（设置页「通用 → 请求重试」）。
 ///
 /// 命中的失败**跳过本账号**：不进 [`send_with_retry`] 的原地重发，也不做同
@@ -345,7 +358,10 @@ fn fallback_retry_advice(
         | UpstreamErrorClass::ContentBlocked { .. } => None,
         // 体积被入口拒收：重发同一份字节只会得到同一个 413（换号也一样，但那是
         // 编排层的事，这里只撤「原地再发一次」这一件事）
-        UpstreamErrorClass::Fatal { .. } if PAYLOAD_SIZE_REJECTION_STATUSES.contains(&status) => {
+        UpstreamErrorClass::Fatal { .. }
+            if PAYLOAD_SIZE_REJECTION_STATUSES.contains(&status)
+                || DETERMINISTIC_NOT_FOUND_STATUSES.contains(&status) =>
+        {
             None
         }
         UpstreamErrorClass::Fatal { .. } => Some(RetryAdvice {
