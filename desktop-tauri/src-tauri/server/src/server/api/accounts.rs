@@ -197,7 +197,7 @@ pub async fn proxies_entry(State(state): State<ServerState>, request: axum::extr
         ("POST", "pool/sync-clash") => super::proxies::pool_sync_clash(&state).await,
         ("GET", "settings") => super::proxies::settings_get().await,
         ("POST", "settings") => super::proxies::settings_save(&body).await,
-        ("POST", "pool/provision") => super::proxies::pool_provision(&state).await,
+        ("POST", "pool/provision") => super::proxies::pool_provision(&state, &body).await,
         // 已注册路径上的其它方法：Node 的 tryHandleProxies 落到它自己的 404 信封
         _ => management_error(
             404,

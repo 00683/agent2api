@@ -29,6 +29,15 @@
 //!           与 clash 同为**只读镜像** —— 名称 / 端口 / 启用跟随订阅与内核，
 //!           本地不可改不可删（要改去「订阅」区块操作，下一次同步会镜像回来）。
 //!
+//! ── `pinned`：测试一个还没被引用的节点 ─────────────────────
+//! 内核的 lazy listeners 只为「账号引用中的节点」开监听器，于是「先测一个
+//! 节点、测通了再决定给哪个账号用」这条最自然的用法一开始是死路：没有引用
+//! 就没有监听器，没有监听器就测不了（详见 `pinned_node_keys` 与
+//! `api::proxies::pool_test`）。订阅条目因此多一个**可选**字段
+//! `pinned: true`：测试入口把它置上，内核据此给这个节点也开监听器。
+//! 它是条目自己的字段（跟着条目走）：节点随订阅消失时条目被同步摘掉，
+//! pinned 一并消失，不会留下需要单独清理的状态。
+//!
 //! ── 同步（`sync_clash`，对标 OmniProxy 的 syncClashVergeListeners）──
 //! 把 Clash 当前的出口集合**整体镜像**进池：新出口插入、已有出口按 uid 更新
 //! （名称 / 启用）、Clash 侧已消失的摘掉。手动条目不受影响。触发点两处：
@@ -270,11 +279,16 @@ pub fn resolve_item(item: &Value) -> Option<ProxyResolution> {
         let Some(port) = valid_port(item.get("port")) else {
             // 两种「没有端口」要分开说：节点还在但 lazy listeners 还没给它开
             // 监听器（未被引用 / 引用刚保存内核还没重建完），与节点已被订阅
-            // 移除 —— 处置动作完全不同
+            // 移除 —— 处置动作完全不同。
+            //
+            // 「点一次『测试』」在这里是**真能解决**的动作：测试入口会先把这个
+            // 节点 pin 住并等内核补建（见 `api::proxies::pool_test`）。曾经这句
+            // 文案指向的动作本身就会失败（测试先解析、解析失败即返回），是个
+            // 死循环 —— 现在两条路都通。
             let node_alive = crate::server::core::subscriptions::ids()
                 .contains(&text_of(item, "providerId"));
             return Some(ProxyResolution::Failed(if node_alive {
-                "该节点还没有分配监听端口（保存引用后等几秒，内核会自动补建；或到「网络代理」页对它点一次「测试」）".to_string()
+                "该节点还没有分配监听端口（点一次「测试」会自动补建并等它就绪；或在账号里引用它，保存后内核自动补建）".to_string()
             } else {
                 "订阅节点已不存在（订阅更新后节点被移除，等下一次同步或重新订阅）".to_string()
             }));
@@ -388,6 +402,10 @@ fn describe_item(item: &Value) -> Value {
         // subscription 的引用信息（前端标注节点属于哪条订阅 + 同步时定位条目）
         "providerId": text_of(item, "providerId"),
         "node": text_of(item, "node"),
+        // 测试钉住（见模块头 pinned 一节）：条目被钉住 = 内核会为它开监听器，
+        // 与「被账号引用」无关。条目未分配端口时，它区分「测试等着补建」与
+        // 「订阅更新后节点没了」两种成因
+        "pinned": is_pinned(item),
         "createdAt": item.get("createdAt").cloned().unwrap_or(Value::from(0)),
         "updatedAt": item.get("updatedAt").cloned().unwrap_or(Value::from(0)),
         "lastTest": item.get("lastTest").cloned().unwrap_or(Value::Null),
@@ -845,6 +863,95 @@ pub fn subscription_node_keys(pool_ids: &std::collections::HashSet<&str>) -> std
             Some(format!("{provider_id}::{node}"))
         })
         .collect()
+}
+
+/// 被「测试」钉住的订阅节点键集合（条目上的 `pinned: true`，见模块头）。
+///
+/// ── 为什么需要它 ────────────────────────────────────────────
+/// lazy listeners 只为被账号引用的节点开监听器，而「先测一个节点、测通了
+/// 再决定给哪个账号用」是不该被挡住的正常用法：池里的「测试」按钮本来打的
+/// 就是这个主意（前端还先调了一次 provision），但**引用之前根本没有监听器**，
+/// 测试连解析都过不去 —— 实测用户点「测试」只会拿到一句「该节点还没有分配
+/// 监听端口……或点一次『测试』」，一个自我循环。
+///
+/// 所以测试入口先把条目 pin 住（`prepare_test`），内核把 pinned 与账号引用
+/// **并集**当作监听器分配集合（见 `core::sub_kernel::runtime::listener_node_keys`）。
+/// 钉住是**有意持久**的：监听器开了就该在下次重建后仍然存在，否则「测试通过」
+/// 的节点会在下一次无关的重启后悄悄失去端口（池里又变回「未分配端口」）。
+/// 代价是被测过的节点会一直占一个端口号 —— 这也是「端口范围」设置项存在
+/// 的意义，且注册表已按现存订阅裁剪（`runtime::prune_ports`），不会无限涨。
+pub fn pinned_node_keys() -> std::collections::HashSet<String> {
+    read_items()
+        .iter()
+        .filter(|item| is_subscription_item(item) && is_pinned(item))
+        .filter_map(|item| {
+            let provider_id = item.get("providerId").and_then(Value::as_str)?;
+            let node = item.get("node").and_then(Value::as_str)?;
+            Some(format!("{provider_id}::{node}"))
+        })
+        .collect()
+}
+
+/// 内核该给哪些节点开监听器：**账号引用 ∪ 测试钉住**。
+///
+/// 两个来源合在一处给（而不是让调用方各拼一次）：内核侧
+/// （`runtime::listener_node_keys`）与补建判定（`api::proxies::provision_missing_listeners`）
+/// 必须用同一口径 —— 口径不一致就会出现「判定说没有缺口、内核却不建」这类
+/// 谁也解释不清的状态。
+pub fn listener_node_keys(pool_ids: &std::collections::HashSet<&str>) -> std::collections::HashSet<String> {
+    let mut keys = subscription_node_keys(pool_ids);
+    keys.extend(pinned_node_keys());
+    keys
+}
+
+/// 条目是否被测试钉住（`pinned: true`；缺键 / null 一律按未钉住）
+pub fn is_pinned(item: &Value) -> bool {
+    matches!(item.get("pinned"), Some(Value::Bool(true)))
+}
+
+/// 测试前对一条订阅条目的处置结果（`api::proxies::pool_test` 读它）
+pub struct TestPrep {
+    /// true = 该条目是「还没有监听器的订阅节点」：已钉住，调用方要请内核补建
+    /// 并等端口落地，然后才谈得上测试
+    pub needs_provision: bool,
+    /// 条目展示名 —— 响应里要标出测的是谁；「补建中」时没有已解析的出口，
+    /// 这个名字是唯一的标识
+    pub name: String,
+}
+
+/// 测试入口的前置动作：一条**还没有监听端口**的订阅节点会被钉住
+/// （`pinned: true`）并回报 `needs_provision = true`，调用方据此请求内核补建。
+///
+/// 幂等：已钉住的条目重复调用只回报 needs_provision（用户在补建期间连点
+/// 「测试」是常见操作，不该重复写库）。manual / clash 条目、已有端口的订阅
+/// 节点一律 `needs_provision = false`（它们不需要补建）。
+pub fn prepare_test(id: &str) -> Result<TestPrep, String> {
+    let mut items = read_items();
+    let Some(index) = items
+        .iter()
+        .position(|item| item.get("id").and_then(Value::as_str) == Some(id))
+    else {
+        return Err(format!("代理「{id}」不存在或已被删除"));
+    };
+    let name = display_name(&items[index], id);
+    let needs_provision = is_subscription_item(&items[index])
+        && valid_port(items[index].get("port")).is_none();
+    if needs_provision && !is_pinned(&items[index]) {
+        let Some(object) = items[index].as_object_mut() else {
+            return Err("代理条目形状异常".to_string());
+        };
+        object.insert("pinned".to_string(), Value::Bool(true));
+        write_items(&items)?;
+    }
+    Ok(TestPrep { needs_provision, name })
+}
+
+/// 一条池条目**当前**的监听端口（None = 还没有 / 非订阅节点）。
+///
+/// 测试前的等待循环读它：补建命令投出去后，端口要等内核重启完才由节点同步
+/// 写回条目（见 `sync_subscription_nodes`）。
+pub fn current_port(id: &str) -> Option<u16> {
+    find_raw(id).and_then(|item| valid_port(item.get("port")))
 }
 
 /// 列出池里**已分配端口**的订阅节点条目（`{id, providerId, node, port}`）。

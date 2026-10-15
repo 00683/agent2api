@@ -888,7 +888,8 @@ pub fn shim_js() -> &'static str {
     testProxyPoolItem: function (id) { return call('POST', '/api/proxies/pool/test', { id: String(id || '') }); },
     syncClashToProxyPool: function () { return call('POST', '/api/proxies/pool/sync-clash', {}); },
     // 补建订阅节点监听器（与桌面壳 bridge.rs 的同名方法成对存在，契约见 api::proxies）
-    provisionProxyPool: function () { return call('POST', '/api/proxies/pool/provision', {}); },
+    // payload 可选 `{ids}`（批量测试把那一批条目一次性补建并等就绪；不带 = 只补已有缺口）
+    provisionProxyPool: function (payload) { return call('POST', '/api/proxies/pool/provision', payload || {}); },
     // 代理设置（「网络代理」页的设置弹窗；与桌面壳 bridge.rs 的同名方法
     // 成对存在，契约见 api::proxies 的模块头 settings 两条）
     getProxySettings: function () { return call('GET', '/api/proxies/settings'); },

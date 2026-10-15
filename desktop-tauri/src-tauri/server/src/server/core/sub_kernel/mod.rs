@@ -56,11 +56,12 @@ pub fn kernel_dir() -> PathBuf {
 
 /// 进程级账号存储句柄（bootstrap 时 install 一次）。
 ///
-/// 内核的 lazy listeners（`runtime::allocate_listeners`）要回答「哪些节点被
-/// 账号引用着」—— 这个答案在账号存储里，而 worker 是独立任务、拿不到
-/// `ServerState`。与 `proxy_pool::install` 同一形态：bootstrap 把句柄装进来，
-/// runtime 用它读引用集合。`None`（库不可用）时读引用一律给空集合 —— 内核
-/// 一个监听器都不开，节点仍镜像进池，可恢复（见 runtime 的说明）。
+/// 内核的 lazy listeners（`runtime::allocate_listeners`）要回答「哪些节点该开
+/// 监听器」—— 其中**账号引用**那一半的答案在账号存储里，而 worker 是独立任务、
+/// 拿不到 `ServerState`。与 `proxy_pool::install` 同一形态：bootstrap 把句柄装
+/// 进来，runtime 用它读引用集合。`None`（库不可用）时引用集合按空处理 —— 账号
+/// 引用的节点一个都不开，但**测试钉住的节点照常开**（那一半在代理池里，与账号
+/// 库无关，见 `runtime::listener_node_keys`），节点仍镜像进池、可恢复。
 static STORE: OnceLock<Option<AccountStore>> = OnceLock::new();
 
 /// 接线（`ServerState::bootstrap` 调用）。重复调用无副作用。

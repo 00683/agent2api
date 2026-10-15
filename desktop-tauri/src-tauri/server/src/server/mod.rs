@@ -492,8 +492,9 @@ impl ServerState {
         // 可用比整体拒绝启动更有用 —— 用户能在界面上看到那条 ❌ 日志并处理磁盘问题。
         let store = AccountStore::with_db(db.clone());
         // 账号存储句柄给订阅内核（lazy listeners：内核 runtime 读「哪些订阅节点
-        // 被账号引用」决定给谁开监听器，见 `sub_kernel::runtime::allocate_listeners`）。
-        // AccountStore 是轻量 Arc 句柄，clone 与 ServerState 里那份同实例。
+        // 需要监听器」决定给谁开 —— 账号引用 ∪ 被「测试」钉住的节点，见
+        // `sub_kernel::runtime::listener_node_keys`）。AccountStore 是轻量 Arc
+        // 句柄，clone 与 ServerState 里那份同实例。
         core::sub_kernel::install_store(Some(store.clone()));
         let context = core::endpoints::default_context();
         let auth = AuthService::new(store.clone(), context);

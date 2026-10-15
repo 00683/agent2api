@@ -82,7 +82,7 @@ import {
   batchRemove, batchTest, clearSelection, durationText, errorMessage,
   formatTime, getSnapshot, isOrphanSubscriptionItem, isPicked, isReadonlyPoolItem,
   isSubscriptionItem, isUnprovisionedItem, items, loadPanel, loadSettings, pickableIds,
-  provisionPool, readonlyHint, removeItem, saveItem, saveSettings, setAllPicked, subscribe,
+  readonlyHint, removeItem, saveItem, saveSettings, setAllPicked, subscribe,
   syncClash, testItem, toggleItem, togglePick, toast, wb,
   type ProxyPoolItem, type ProxySettings,
 } from './proxies-state'
@@ -166,11 +166,11 @@ function ProxiesPage() {
         // accounts-shared 的 poolItemAddress）：resolved.label 对 Clash 条目是
         // 「监听器名（:端口）」、对混合端口是「Clash 混合端口 7892」—— 都不含主机，
         // 形态还随来源变。主机与端口在这里是核对「这条连的是哪儿」的唯一读数。
-        // lazy listeners：未分配端口的节点显示提示（测试它会先补建监听器）
+        // lazy listeners：未分配端口的节点显示提示（点「测试」会自动补建并等就绪）
         return item.resolveError ? (
           <span className='text-destructive' title={item.resolveError}>{t('解析失败')}</span>
         ) : isUnprovisionedItem(item) ? (
-          <span className='text-subtle' title={t('还没有监听端口（引用它的账号保存后自动补建；现在点「测试」也会先补建）')}>
+          <span className='text-subtle' title={t('还没有监听端口（点「测试」会自动补建并等它就绪；或在账号里引用它，保存后自动补建）')}>
             {poolItemAddress(item) || t('未分配端口')}
           </span>
         ) : (
@@ -198,7 +198,7 @@ function ProxiesPage() {
         return (
           <div className='row-actions'>
             <Button size='sm' variant='ghost' disabled={locked || snapshot.testing !== null}
-              onClick={() => void testItem(item, isUnprovisionedItem(item))}>
+              onClick={() => void testItem(item)}>
               {snapshot.testing === item.id ? t('测试中…') : t('测试')}
             </Button>
             <Button size='sm' variant='ghost' disabled={locked || readonly}

@@ -7,17 +7,22 @@
  * ── 与代理池的关系 ─────────────────────────────────────────
  * 订阅节点由内核镜像进代理池（`source: "subscription"` 的只读条目），本区块
  * 只管「订阅与内核」这一层：添加 / 编辑 / 删除订阅、下载 / 重启内核。节点
- * 本身出现在下面的代理池表格里（proxies-page 的表格，不用这里管）。
+ * 本身出现在下面的代理池表格里（proxies-page 的表格）—— 但**那份表格要在
+ * 订阅变动后跟着刷**（见 `refreshPool`）：节点是从内核同步进池的，只刷本区块
+ * 的话下面那张表会停在旧快照上，用户得手点一次「刷新」才看得见刚加/刚删的
+ * 节点（实测就是这个体验）。
  *
  * ── 内核命令是异步的（轮询而不是推送）────────────────────────
  * 写操作（增删改订阅）后端投一条内核命令就立即返回：内核重启 + provider
- * 拉取要几秒到几十秒，同步等会把本地请求挂死。这里在每次写操作后轮询内核
- * 状态几轮（`pollKernelAfterChange`），节点数 / 运行状态随之刷新；下载内核
- * 的进度也靠轮询（`downloadKernel` 自带轮询循环，直到状态离开 downloading）。
- * 不引入第二条推送通道 —— 面板页面的其它区块（余额快照 / 连接数）同样轮询。
+ * 拉取要几秒到几十秒，同步等会把本地请求挂死。这里在每次写操作后轮询订阅与
+ * 内核状态几轮（`pollSectionAfterChange`，顺带刷代理池），节点数 / 运行状态
+ * 随之刷新；下载内核的进度也靠轮询（`downloadKernel` 自带轮询循环，直到状态
+ * 离开 downloading）。不引入第二条推送通道 —— 面板页面的其它区块（余额快照 /
+ * 连接数）同样轮询。
  */
 
 import { t } from '../i18n'
+import { loadPanel } from './proxies-state'
 
 /* ─── 后端形态 ───────────────────────────────── */
 
@@ -148,6 +153,17 @@ function accept(payload: SubscriptionsPayload | null | undefined): void {
   patch({ data: payload, error: '' })
 }
 
+/**
+ * 顺带把代理池表格拉一遍（静默：失败不弹提示）。
+ *
+ * 订阅的每个写操作都会改动池：新增 / 启用会带来新节点条目，删除 / 禁用会把
+ * 条目摘掉，节点端口还要等内核重建后才写回条目 —— 所以不止写操作回来时刷
+ * 一次，`pollSectionAfterChange` 的每一轮也刷（端口 / 节点数在那几秒里变）。
+ */
+function refreshPool(): void {
+  void loadPanel(true)
+}
+
 /* ─── 取数 ───────────────────────────────────── */
 
 export async function loadSection(silent = false): Promise<void> {
@@ -166,27 +182,56 @@ export async function loadSection(silent = false): Promise<void> {
   }
 }
 
+/** 写操作后的轮询上限（20 轮 × 1.5s：够覆盖「内核重启 + 首次拉订阅」的慢路径） */
+const POLL_ROUNDS = 20
+
 /**
- * 写操作后轮询整个区块几轮：内核命令是异步的（重启 + 拉订阅要几秒），
- * **列表与内核必须一起刷** —— 节点数由内核的同步结果注入列表，只刷 kernel
- * 会让「N 个节点」徽标冻在操作瞬间的 0 上不更新（实测踩过这坑）。
- * 最多 6 轮 × 1.5s；内核状态稳定（不在下载中，且已运行或已报错）就提前收手。
+ * 内核是否已经把**每个启用订阅**都同步过一轮。
+ *
+ * 「同步记录存在」= `runtime::run_restart` 的第 ⑥ 步已经跑过 —— 那一步先
+ * 把节点（含端口）镜像进代理池、再记 providerSync，所以看到记录就说明**代理池
+ * 已是最终状态**。这是轮询能不靠碰运气的收手判据；早先只看 `kernel.running`
+ * 会误判：投命令后的头一两秒内核还是旧的那一个（还在跑），旧判据当场收手，
+ * 新节点于是永远等不到刷新的那一刻。
+ *
+ * 空实现（内核没装 / 已报错且没在跑）也算收手：那两种情况不会再产生同步记录。
+ */
+function sectionSettled(payload: SubscriptionsPayload): boolean {
+  const kernel = payload.kernel
+  if (!kernel || kernel.download.state === 'downloading') return false
+  if (!kernel.installed) return true
+  if (kernel.lastError && !kernel.running) return true
+  const synced = kernel.providerSync ?? {}
+  return (payload.items ?? [])
+    .filter(item => item.enabled !== false)
+    .every(item => Boolean(synced[item.id]))
+}
+
+/**
+ * 写操作后轮询整个区块几轮：内核命令是异步的（重启 + 拉订阅要几秒到几十秒），
+ * **订阅列表、内核状态、代理池三者必须一起刷** —— 节点数由内核的同步结果注入
+ * 列表，只刷 kernel 会让「N 个节点」徽标冻在操作瞬间的 0 上不更新（实测踩过这
+ * 坑）；而节点条目本身在下面的代理池表格里，不刷它用户就看不到刚加 / 刚删的
+ * 节点（实测的第二个坑：加完订阅要手点一次「刷新」）。
+ *
+ * 收手条件见 `sectionSettled`（每个启用订阅都有了同步记录），另有 20 轮的
+ * 硬上限兜底 —— 订阅一直拉不到时界面也不能永远轮下去。
  */
 async function pollSectionAfterChange(): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.getSubscriptions !== 'function') return
-  for (let round = 0; round < 6; round += 1) {
+  for (let round = 0; round < POLL_ROUNDS; round += 1) {
     await new Promise(resolve => setTimeout(resolve, 1500))
+    refreshPool()
+    let payload: SubscriptionsPayload | null | undefined
     try {
-      const payload = await bridge.getSubscriptions()
-      if (payload && Array.isArray(payload.items)) accept(payload)
-      const kernel = payload?.kernel
-      if (kernel && kernel.download.state !== 'downloading' && round >= 1) {
-        if (kernel.running || kernel.lastError) return
-      }
+      payload = await bridge.getSubscriptions()
     } catch {
       return
     }
+    accept(payload)
+    // 至少刷过一轮再判收手：让列表与池都至少拿到一次写操作后的快照
+    if (round >= 1 && payload && Array.isArray(payload.items) && sectionSettled(payload)) return
   }
 }
 
@@ -197,6 +242,7 @@ export async function addSubscription(name: string, url: string): Promise<Subscr
   const data = await bridge?.addSubscription?.({ name: name.trim(), url: url.trim(), enabled: true })
   accept(data)
   toast(t('已新增订阅「{name}」，内核正在同步节点…', { name: name.trim() }))
+  refreshPool()
   void pollSectionAfterChange()
   return data ?? null
 }
@@ -209,6 +255,7 @@ export async function saveSubscription(
   const data = await bridge?.saveSubscription?.({ id: item.id, ...payload })
   accept(data)
   toast(t('已保存「{name}」', { name: payload.name.trim() }))
+  refreshPool()
   void pollSectionAfterChange()
 }
 
@@ -221,6 +268,7 @@ export async function toggleSubscription(item: SubscriptionItem, enabled: boolea
     const data = await bridge?.saveSubscription?.({ id: item.id, name: item.name, url: item.url, enabled })
     accept(data)
     toast(enabled ? t('已启用「{name}」', { name: item.name }) : t('已禁用「{name}」', { name: item.name }))
+    refreshPool()
     void pollSectionAfterChange()
   } catch (error) {
     toast(t('保存失败：{reason}', { reason: errorMessage(error) }), 'err')
@@ -238,6 +286,7 @@ export async function refreshSubscription(item: SubscriptionItem): Promise<void>
     const data = await bridge?.refreshSubscription?.(item.id)
     accept(data)
     toast(t('已刷新「{name}」，正在同步节点…', { name: item.name }))
+    refreshPool()
     void pollSectionAfterChange()
   } catch (error) {
     toast(t('刷新失败：{reason}', { reason: errorMessage(error) }), 'err')
@@ -263,6 +312,7 @@ export async function removeSubscription(item: SubscriptionItem): Promise<void> 
     const data = await bridge?.removeSubscription?.(item.id)
     accept(data)
     toast(t('已删除「{name}」', { name: item.name || item.id }))
+    refreshPool()
     void pollSectionAfterChange()
   } catch (error) {
     toast(t('删除失败：{reason}', { reason: errorMessage(error) }), 'err')
@@ -319,6 +369,8 @@ export async function restartKernel(): Promise<void> {
     const kernel = await bridge?.restartKernel?.()
     if (kernel && state.data) patch({ data: { ...state.data, kernel } })
     toast(t('内核正在启动…'))
+    // 重启会重建全部监听器（端口可能换号）→ 池里的地址要跟着刷
+    refreshPool()
     void pollSectionAfterChange()
   } catch (error) {
     toast(t('内核启动失败：{reason}', { reason: errorMessage(error) }), 'err')
