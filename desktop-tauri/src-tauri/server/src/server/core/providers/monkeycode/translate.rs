@@ -376,6 +376,26 @@ pub(super) fn handle_message(translator: &mut Translator, raw: &str) -> Handled 
     }
 }
 
+/// `task-running` / `task-ended` 的 data 载荷解码。
+///
+/// 2026-10 抓帧实证：上游 `acp_event` 的 data 是 **base64(JSON) 字符串**
+/// （如 `eyJzZXNzaW9uSWQi…`），直接 `serde_json::from_str` 必然失败、事件被
+/// 整体丢弃——这是「网页有回复、网关空正文」的直接原因。这里按
+/// 「JSON 串 → base64(JSON)」双形态解析（与 `parse_question` 同款兜底）。
+fn decode_payload(data: &str) -> Option<Value> {
+    let text = data.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
+        return Some(value);
+    }
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(text).ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    serde_json::from_str::<Value>(&text).ok()
+}
+
 /// `task-running`：ACP 事件（转帧）或 Agent 提问（自动回复）。
 fn handle_running(translator: &mut Translator, message: &Value) -> Handled {
     match message.get("kind").and_then(Value::as_str).unwrap_or("") {
@@ -384,8 +404,8 @@ fn handle_running(translator: &mut Translator, message: &Value) -> Handled {
                 logging::verbose("[MonkeyCode]", "acp_event 缺少 data 字符串");
                 return Handled::default();
             };
-            let Ok(acp) = serde_json::from_str::<Value>(data) else {
-                logging::verbose("[MonkeyCode]", "acp_event 的 data 不是 JSON");
+            let Some(acp) = decode_payload(data) else {
+                logging::verbose("[MonkeyCode]", "acp_event 的 data 无法按 JSON / base64(JSON) 解码");
                 return Handled::default();
             };
             handle_acp(translator, &acp)
@@ -707,9 +727,9 @@ fn merge_final_usage(translator: &mut Translator, data: Option<&Value>) {
         return;
     };
     let payload = match data {
-        Value::String(text) => match serde_json::from_str::<Value>(text) {
-            Ok(value) => value,
-            Err(_) => return,
+        Value::String(text) => match decode_payload(text) {
+            Some(value) => value,
+            None => return,
         },
         other => other.clone(),
     };
@@ -725,4 +745,84 @@ fn preview(text: &str, limit: usize) -> String {
     let mut out: String = text.chars().take(limit).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    /// 把 ACP 事件按上游真实形态打包成 WS 下行帧文本（data = base64(JSON)）。
+    fn envelope_frame(acp: Value) -> String {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(acp.to_string());
+        json!({ "type": "task-running", "kind": "acp_event", "data": encoded }).to_string()
+    }
+
+    fn new_translator() -> Translator {
+        let mut translator = Translator::new("chatcmpl-t".into(), "m".into(), false);
+        let _ = translator.role_frame();
+        translator
+    }
+
+    /// 2026-10 抓帧主形态：base64(JSON) 的会话更新信封 + content 对象。
+    #[test]
+    fn envelope_chunk_base64_produces_content() {
+        let acp = json!({
+            "sessionId": "ses_x",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "你好！我是 MonkeyCode。" }
+            }
+        });
+        let mut translator = new_translator();
+        let handled = handle_message(&mut translator, &envelope_frame(acp));
+        assert!(!handled.frames.is_empty(), "信封 + base64 形态必须产出内容帧");
+        let text = String::from_utf8_lossy(&handled.frames[0]).to_string();
+        assert!(text.contains("MonkeyCode"), "内容帧应包含正文，实际：{text}");
+    }
+
+    /// 扁平形态（旧文档）：data 为 JSON 串。
+    #[test]
+    fn flat_chunk_json_still_works() {
+        let data = json!({ "type": "agent_message_chunk", "text": "hi" }).to_string();
+        let frame = json!({ "type": "task-running", "kind": "acp_event", "data": data })
+            .to_string();
+        let mut translator = new_translator();
+        let handled = handle_message(&mut translator, &frame);
+        assert!(!handled.frames.is_empty(), "扁平 JSON 形态仍应产出内容帧");
+    }
+
+    /// task-ended 的 data 同样是 base64(JSON)，必须识别为终态。
+    #[test]
+    fn task_ended_base64_terminates() {
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(json!({ "exit_code": 0, "message": "completed" }).to_string());
+        let frame = json!({ "type": "task-ended", "data": encoded }).to_string();
+        let mut translator = new_translator();
+        let handled = handle_message(&mut translator, &frame);
+        assert!(
+            matches!(handled.terminal, Some(Terminal::Ended)),
+            "base64 data 的 task-ended 必须到达终态"
+        );
+    }
+
+    /// 聚合出口：信封内容最终进 completion_body 的正文（非空）。
+    #[test]
+    fn aggregate_body_carries_text() {
+        let acp = json!({
+            "sessionId": "ses_x",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "正文片段" }
+            }
+        });
+        let mut translator = new_translator();
+        let _ = handle_message(&mut translator, &envelope_frame(acp));
+        let body = translator.completion_body();
+        let text = body
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(text.contains("正文片段"), "聚合正文应包含内容，实际：{text}");
+    }
 }
