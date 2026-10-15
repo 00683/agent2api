@@ -8,8 +8,8 @@
 //!   ② 模型名 → 目录条目（upstreamId / cliName）        models::resolve_task_model
 //!   ③ OpenAI messages → prompt（system 单列）          task::build_prompt
 //!   ④ POST /api/v1/users/tasks 建任务                  task::create_task
-//!   ⑤ 连 wss://…/tasks/stream?id=&mode=new             stream::connect
-//!   ⑥ 发 auto-approve + user-input                     stream::start_task
+//!   ⑤ 连 wss://…/tasks/stream?id=&mode=attach          stream::connect
+//!   ⑥ 发 auto-approve（attach 订阅既有流，不发 user-input）  stream::start_task
 //!   ⑦ 消费 ACP 事件 → 本网关的 OpenAI 兼容流            stream::drive_stream
 //! ```
 //! 四 ~ 六步失败时**还没有给客户端任何字节**，因此按普通网关错误返回（带状态码，
@@ -121,7 +121,7 @@ pub async fn run_chat(
     .await?;
     // ② 连任务流并发出起始交互（同上，失败在返回前）
     let mut connection = stream::connect(region, &credentials, &task_id, proxy.as_ref()).await?;
-    stream::start_task(&mut connection, &prompt.content).await?;
+    stream::start_task(&mut connection).await?;
     let translator = stream::Translator::new(
         format!("chatcmpl-{task_id}"),
         requested,

@@ -23,12 +23,14 @@
 //! `resource.life = 3600` 与任务流 1 小时总超时同一口径（参考注释原文：
 //! "matches resource.life"）。
 //!
-//! ── 起始 user-input 的格式（本家一个容易踩的点）─────────────────
+//! ── 起始 user-input 的格式（保留备查）─────────────────────────
 //! 参考的 TS 实现发**纯文本**；`docs/protocol/llm-protocol-complete.md` §5.1
 //! 把「`{"content": base64, "attachments": []}` 的 JSON 串」列为**推荐**的新
 //! 上行格式、纯文本为「仍兼容」。后端 `parseUserInputData()` 按「存储格式 →
-//! 新格式 → 纯文本」三级解析。这里发推荐的新格式；若上游版本只认纯文本，
-//! 改 `user_input_payload` 一处即可。
+//! 新格式 → 纯文本」三级解析。
+//! **2026-10 起 `user_input_payload` 不再处于发送路径**：提示词随建任务
+//! content 下发、agent 立即执行，任务流改为 `mode=attach` 订阅既有事件
+//! （见 `stream.rs`），不再单独发 user-input。函数保留供回退 / 测试。
 //!
 //! ── 建任务失败怎么变 GatewayError ───────────────────────────────
 //!   - 传输层（连不上 / 超时）→ 502 / 504；

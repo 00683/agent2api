@@ -6,10 +6,13 @@
 //!
 //! ── 上游长什么样（参考 `task-runner.ts` 与 `docs/04-websocket/*`）──────
 //! ```text
-//!   WS   wss://<站点>/api/v1/users/tasks/stream?id=<taskId>&mode=new
-//!   连接成功后客户端**必须先发** auto-approve + user-input，上游才开始跑；
+//!   WS   wss://<站点>/api/v1/users/tasks/stream?id=<taskId>&mode=attach
+//!   连接后客户端发一次 auto-approve（工具调用自动批准）；任务事件随 attach
+//!   订阅推送（含历史回放），不需要再发 user-input —— 提示词在建任务的
+//!   content 里，agent 已在执行（见 `connect` / `start_task` 的实证注释）；
 //!   下行是 {type, kind?, data?, timestamp?} 的 JSON 文本帧：
 //!     ping                      心跳（客户端回一条 {"type":"ping"}）
+//!     cursor / user-input       attach 回放里的分页游标与历史输入事件
 //!     task-started              轮次开始
 //!     task-running kind=acp_event            data 是 ACP 事件的 JSON 串
 //!     task-running kind=acp_ask_user_question data 是提问的 JSON 串
@@ -75,7 +78,6 @@ use super::translate::{handle_message, Handled, Terminal, DONE_FRAME};
 pub use super::translate::Translator;
 use super::endpoints;
 use super::region::Region;
-use super::task;
 
 /// 任务流连接类型（TLS 由 tokio-tungstenite 按 `wss` scheme 自动包装）
 pub type TaskSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -113,7 +115,14 @@ pub async fn connect(
     task_id: &str,
     proxy: Option<&ResolvedProxy>,
 ) -> Result<TaskStream, GatewayError> {
-    let url = endpoints::task_stream_url(region, task_id, "new");
+    // mode=attach：订阅既有任务的完整事件流（含历史回放 + 实时推送）。
+    //
+    // 2026-10 实证（同账号同任务对照实验）：建任务后用 `mode=new` 连接，
+    // 90 秒内只收到 ping，零事件帧——而任务本身已在执行（建任务 content
+    // 自带提示词，上游消耗了 7 万 tokens）；同一任务改 `mode=attach` 连接，
+    // 立即收到全部事件（user-input 回放 / acp_event / task-ended）。
+    // 旧文档把 `mode=new` 描述为「新建轮次并推流」，与上游当前行为不符。
+    let url = endpoints::task_stream_url(region, task_id, "attach");
     let mut request = url.as_str().into_client_request().map_err(|error| {
         GatewayError::with_status(502, format!("MonkeyCode 任务流地址无效（{url}）：{error}"))
     })?;
@@ -173,29 +182,24 @@ fn connect_error(error: tokio_tungstenite::tungstenite::Error) -> GatewayError {
     }
 }
 
-/// 连接建立后的起始交互（参考 `task-runner.ts` 的 `on("open")`）：
-/// 先 `auto-approve`（工具调用自动批准），再 `user-input`（`mode=new` 下
-/// **必须**由客户端先发它，上游才开始执行）。
-pub async fn start_task(stream: &mut TaskStream, prompt: &str) -> Result<(), GatewayError> {
+/// 连接建立后的起始交互：只发 `auto-approve`（工具调用自动批准）。
+///
+/// ── 为什么不再发 `user-input` ────────────────────────────────
+/// 提示词已经随建任务的 `content` 字段下发，agent 在任务创建后立即开始
+/// 执行；本网关以 `mode=attach` 订阅这条既有事件流（见 `connect` 的注释）。
+/// 实证（2026-10）：attach 回放里已包含网关此前发出的 user-input 事件——
+/// 连接后**再**发一次会制造重复轮次，且 `mode=new` 的文档行为（由客户端
+/// user-input 启动推流）与上游现状不符，已弃用。
+pub async fn start_task(stream: &mut TaskStream) -> Result<(), GatewayError> {
     let auto_approve = json!({ "type": "auto-approve" }).to_string();
     stream
         .socket
         .send(Message::text(auto_approve))
         .await
         .map_err(|error| send_error("auto-approve", error))?;
-    let input = json!({
-        "type": "user-input",
-        "data": task::user_input_payload(prompt),
-    })
-    .to_string();
-    stream
-        .socket
-        .send(Message::text(input))
-        .await
-        .map_err(|error| send_error("user-input", error))?;
     logging::verbose(
         "[MonkeyCode]",
-        &format!("任务 {} 已发送 auto-approve + user-input", stream.task_id),
+        &format!("任务 {} 已发送 auto-approve（attach 模式，不发 user-input）", stream.task_id),
     );
     Ok(())
 }
