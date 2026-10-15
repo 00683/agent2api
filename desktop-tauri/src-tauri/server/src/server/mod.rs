@@ -391,7 +391,7 @@ impl ServerState {
         // 弹窗）：与 proxyPool 同一形态的 kv 固定键。内核端口分配与出口
         // 测试在运行期直接读它，位置只要求早于第一次内核启动 / 测试请求。
         core::proxy_settings::install(db.clone());
-        // 订阅存储（「订阅」区块维护的订阅链接）：同一个 `Db`（与 proxyPool
+        // 订阅存储（「订阅管理」维护的订阅链接）：同一个 `Db`（与 proxyPool
         // 同一形态）。位置只要求早于任何一次 `/api/subscriptions*` 请求。
         core::subscriptions::install(db.clone());
         // 订阅内核（mihomo sidecar）的命令 worker：单条队列串行消费内核操作

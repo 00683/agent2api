@@ -460,7 +460,7 @@ fn short_hash(text: &str) -> String {
 /// 重建配置 + 启动（或重启）内核 + 同步节点（详见模块头「启动流程」）。
 pub async fn run_restart(providers: &[ProviderInput]) -> Result<(), String> {
     if !crate::server::core::sub_kernel::installed() {
-        return Err("代理内核未安装（先在「订阅」区块下载内核）".to_string());
+        return Err("代理内核未安装（先在「订阅管理」下载内核）".to_string());
     }
     let dir = crate::server::core::sub_kernel::kernel_dir();
     std::fs::create_dir_all(dir.join("providers"))
@@ -611,7 +611,7 @@ async fn restart_with_config(
 
     let binary = dir.join(crate::server::core::sub_kernel::kernel_binary_name());
     if !binary.exists() {
-        return Err("代理内核未安装（先在「订阅」区块下载内核）".to_string());
+        return Err("代理内核未安装（先在「订阅管理」下载内核）".to_string());
     }
     let log_file = std::fs::OpenOptions::new()
         .create(true)

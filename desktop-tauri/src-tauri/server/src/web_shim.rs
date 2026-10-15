@@ -904,8 +904,13 @@ pub fn shim_js() -> &'static str {
     removeSubscription: function (id) { return call('POST', '/api/subscriptions/remove', { id: String(id || '') }); },
     decodeQrImage: function (payload) { return call('POST', '/api/subscriptions/decode-qr', payload || {}); },
     getKernelStatus: function () { return call('GET', '/api/subscriptions/kernel'); },
-    downloadKernel: function () { return call('POST', '/api/subscriptions/kernel/download', {}); },
+    downloadKernel: function (payload) { return call('POST', '/api/subscriptions/kernel/download', payload || {}); },
+    cancelKernelDownload: function () { return call('POST', '/api/subscriptions/kernel/download/cancel', {}); },
     restartKernel: function () { return call('POST', '/api/subscriptions/kernel/restart', {}); },
+    removeKernel: function () { return call('POST', '/api/subscriptions/kernel/remove', {}); },
+    // 文件夹选择框是**壳的能力**（web 版没有壳）：回 `unsupported`，界面据此提示
+    // 手输路径 —— 只回 `canceled` 的话，点一下按钮什么都不会发生，用户会以为卡了
+    pickFolder: function () { return Promise.resolve({ canceled: true, unsupported: true }); },
 
     // ── 积分 / 签到 ──
     getUsage: function () { return call('GET', '/api/usage'); },

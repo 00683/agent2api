@@ -27,7 +27,7 @@
 //!           条目存 `{providerId, node, port}`，地址是内核起的本地监听器
 //!           （http://127.0.0.1:端口），端口注册表持久在内核目录里、重启不漂移。
 //!           与 clash 同为**只读镜像** —— 名称 / 端口 / 启用跟随订阅与内核，
-//!           本地不可改不可删（要改去「订阅」区块操作，下一次同步会镜像回来）。
+//!           本地不可改不可删（要改去「订阅管理」操作，下一次同步会镜像回来）。
 //!
 //! ── `pinned`：测试一个还没被引用的节点 ─────────────────────
 //! 内核的 lazy listeners 只为「账号引用中的节点」开监听器，于是「先测一个
@@ -463,9 +463,9 @@ fn is_readonly(item: &Value) -> bool {
 const CLASH_READONLY_HINT: &str =
     "该代理来自 Clash Verge 同步（名称 / 端口 / 启用都跟随 Clash），请到 Clash Verge 中修改";
 
-/// 订阅节点的只读提示（与 Clash 那条同一形态；改去「订阅」区块）
+/// 订阅节点的只读提示（与 Clash 那条同一形态；改去「订阅管理」）
 const SUBSCRIPTION_READONLY_HINT: &str =
-    "该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅」区块修改";
+    "该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅管理」修改";
 
 fn readonly_hint(item: &Value) -> String {
     if is_subscription_item(item) {
@@ -836,6 +836,38 @@ pub fn sync_subscription_nodes(targets: &[SubscriptionNodeTarget]) -> Result<usi
     });
     changes += before - items.len();
 
+    if changes > 0 {
+        write_items(&items)?;
+    }
+    Ok(changes)
+}
+
+/// 把**全部订阅镜像条目**的端口清空（删内核时调用，见
+/// `sub_kernel` worker 的 Remove 分支）。
+///
+/// ── 为什么清端口而不是把条目摘掉 ────────────────────────────
+/// `sync_subscription_nodes(&[])` 会把订阅镜像整批摘掉，但重装内核后重新镜像
+/// 出来的是**新 id**（`new_id()`），账号里存的旧 id 就永久悬空了 —— 用户只是
+/// 删了个内核，回头再装上却发现所有引用订阅节点的账号都解析不出来，得逐个重配。
+/// 端口置空的语义反而更准：节点还在（订阅还在），只是**这一轮没有监听器**，
+/// 与 lazy listeners 的「未分配端口」是同一个状态；重装内核后同步按
+/// `providerId + node` 命中同一条，端口原位写回，账号引用自然复活。
+///
+/// 保留 `lastTest`（历史读数，重启换端口后同样会留存）与 `pinned`（用户确实
+/// 想给这个节点留监听器，装回内核后照旧生效）。返回变更条数。
+pub fn unprovision_subscription_nodes() -> Result<usize, String> {
+    let now = logging::now_ms();
+    let mut items = read_items();
+    let mut changes = 0usize;
+    for item in items.iter_mut() {
+        if !is_subscription_item(item) || valid_port(item.get("port")).is_none() {
+            continue;
+        }
+        let Some(object) = item.as_object_mut() else { continue };
+        object.insert("port".to_string(), Value::Null);
+        object.insert("updatedAt".to_string(), Value::from(now));
+        changes += 1;
+    }
     if changes > 0 {
         write_items(&items)?;
     }

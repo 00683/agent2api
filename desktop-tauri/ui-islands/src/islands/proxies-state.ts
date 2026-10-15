@@ -51,6 +51,10 @@ export type ProxyPoolItem = {
   resolveError: string | null
   /** 订阅节点被「测试」钉住（内核据此给它开监听器，见后端 proxy_pool 的 pinned） */
   pinned?: boolean
+  /** 订阅节点的归属订阅（`subscriptions` 里的 id）；手动 / Clash 条目为空串 */
+  providerId?: string
+  /** 订阅节点在机场清单里的原始节点名（池条目的展示名可能被改过） */
+  node?: string
   /** 引用这条的账号（后端在本机账号表里查出来的） */
   usedBy?: Array<{ id?: string; name?: string; enabled?: boolean }>
   /** 孤儿订阅节点：所属订阅已不存在（后端标注），只读镜像的**唯一例外** —— 可手动删除 */
@@ -232,9 +236,9 @@ export const CLASH_READONLY_HINT = t(
   '来自 Clash Verge 同步（名称 / 端口 / 启用都跟随 Clash），请到 Clash Verge 中修改',
 )
 
-/** 订阅节点的只读说明（与后端 SUBSCRIPTION_READONLY_HINT 同口径） */
+/** 订阅节点的只读说明（与后端 SUBSCRIPTION_READONLY_HINT 同口径；入口是「订阅管理」弹窗） */
 export const SUBSCRIPTION_READONLY_HINT = t(
-  '该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅」区块修改',
+  '该节点来自订阅（名称 / 端口 / 启用跟随订阅与内核），请在「订阅管理」里修改',
 )
 
 /** 孤儿订阅节点的提示（可删除；与其它只读条目的说明区分开） */

@@ -343,7 +343,12 @@ pub fn panel_router(state: ServerState) -> Router {
         .route("/api/subscriptions/decode-qr", any(api::subscriptions::entry))
         .route("/api/subscriptions/kernel", any(api::subscriptions::entry))
         .route("/api/subscriptions/kernel/download", any(api::subscriptions::entry))
+        // 停止下载是**独立一条路径**（不是 download 上的查询参数）：它是另一个
+        // 动作，且必须在下载进行中也能到达 —— 与 download 共用一条路径会让
+        // 「按方法区分」的相邻语义（POST=开始）在同一个路径上出现两种含义
+        .route("/api/subscriptions/kernel/download/cancel", any(api::subscriptions::entry))
         .route("/api/subscriptions/kernel/restart", any(api::subscriptions::entry))
+        .route("/api/subscriptions/kernel/remove", any(api::subscriptions::entry))
         // ── 积分 / 签到 / 运营活动（对照 server.mjs 871-911 行）──
         // 六条都挂在 protected（Node 版每条都调了 checkApiKey），
         // 失败时的 body 是 OpenAI 风格（那几条在 server.mjs 的大 try 里）

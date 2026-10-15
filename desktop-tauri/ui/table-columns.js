@@ -111,6 +111,17 @@
       columns: ['name', 'key', 'time', 'state', 'act'].map(key => ({ key })),
       columnsOf: visibleColumnsOf(() => window.wbKeysPanel?.visibleColumns?.()),
     },
+    // 代理池（islands/proxies-page.tsx）：默认列宽写在 <col> 的类上（Tailwind 的
+    // w-[196px] 那组，见 proxies-columns.ts 的 COL_CLASS），所以这里不需要 track。
+    // root 用 .proxies-table 而不是 .models-table —— 那张表骨架被网关 Key / 模型
+    // 管理共用，只按骨架选会一次绑上三张表。
+    {
+      id: 'proxies',
+      mode: 'table',
+      root: 'table.proxies-table',
+      columns: ['pick', 'name', 'addr', 'state', 'test', 'act'].map(key => ({ key })),
+      columnsOf: visibleColumnsOf(() => window.wbProxiesPanel?.visibleColumns?.()),
+    },
     {
       id: 'requests',
       mode: 'grid',

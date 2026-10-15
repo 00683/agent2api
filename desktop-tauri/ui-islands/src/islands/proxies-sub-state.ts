@@ -22,6 +22,7 @@
  */
 
 import { t } from '../i18n'
+import type { PoolItem, ProxyConfig } from './accounts-shared'
 import { loadPanel } from './proxies-state'
 
 /* ─── 后端形态 ───────────────────────────────── */
@@ -46,17 +47,44 @@ export type KernelStatus = {
   running: boolean
   controllerPort?: number
   listenerCount: number
+  /** 当前内核目录（配置里选了别的位置就是它） */
   kernelDir: string
+  /** 默认内核目录（下载弹窗「恢复默认」的目标值，由后端给） */
+  kernelDirDefault?: string
+  /**
+   * 已存的下载出网线路（`describe_account_proxy` 的输出，与 /api/update/proxy
+   * 的 proxy 字段、账号页的代理列**同一个描述形态**；null = 默认链）。
+   * 于是它能直接喂给 `buildProxyPick` 那份下拉选项构造（同一条值域 `pool:<id>`）。
+   */
+  downloadProxy?: ProxyConfig | null
   lastError: string | null
   /** 各订阅最后一次成功同步：`subId → {name, count, at}` */
   providerSync?: Record<string, { name?: string; count?: number; at?: number }>
   download: {
-    state: 'idle' | 'downloading' | 'done' | 'error'
+    /** canceled = 用户按了「停止下载」（不是失败，无 error） */
+    state: 'idle' | 'downloading' | 'done' | 'error' | 'canceled'
     received: number
     total: number
     error: string | null
   }
+  /** 仅下载 / 停止接口有：配置是否落盘（false = 进程内生效，重启会回旧值） */
+  saved?: boolean
+  /** 仅停止接口有：停止请求是否被受理（false = 当前没在下载） */
+  canceled?: boolean
 }
+
+/**
+ * 下载内核的两个选择（下载弹窗）。
+ *
+ * 字段都可省：`proxy` 省略 = 不改已存线路、`dir` 省略 = 不改已存目录；
+ * `dir` 空串 = 恢复默认目录；`proxy` 为 null = 回到默认链（直连失败借 Clash
+ * 兜底）。**后端先落配置再下载**，所以这两个值同时是「本次参数」与「下次默认」。
+ */
+export type KernelDownloadChoice = {
+  proxy?: unknown
+  dir?: string
+}
+
 
 export type SubscriptionsPayload = {
   items?: SubscriptionItem[]
@@ -75,8 +103,21 @@ export type SubscriptionBridge = {
   removeSubscription?: (id: string) => Promise<SubscriptionsPayload | null | undefined>
   decodeQrImage?: (payload: { imageBase64: string }) => Promise<{ url?: string } | null | undefined>
   getKernelStatus?: () => Promise<KernelStatus | null | undefined>
-  downloadKernel?: () => Promise<KernelStatus | null | undefined>
+  downloadKernel?: (choice?: KernelDownloadChoice) => Promise<KernelStatus | null | undefined>
+  cancelKernelDownload?: () => Promise<KernelStatus | null | undefined>
   restartKernel?: () => Promise<KernelStatus | null | undefined>
+  removeKernel?: () => Promise<KernelStatus | null | undefined>
+  /** 桌面壳的文件夹选择框（下载弹窗的「选择目录…」）；web 版没有壳，
+   *  回 `{canceled: true, unsupported: true}` —— 界面据此提示「手填路径」
+   *  而不是点了没反应 */
+  pickFolder?: (defaultDir?: string | null) => Promise<{
+    canceled?: boolean
+    /** 这个环境根本没有文件夹选择框（web 版） */
+    unsupported?: boolean
+    path?: string
+  } | null | undefined>
+  /** 代理池条目（下载弹窗的出口下拉只列它，与账号页 / 更新设置同一条链） */
+  getProxyPool?: () => Promise<{ items?: PoolItem[] } | null | undefined>
 }
 
 type SubSharedWindow = {
@@ -326,8 +367,14 @@ export async function removeSubscription(item: SubscriptionItem): Promise<void> 
 /**
  * 下载内核（带轮询循环：每 1s 读一次状态直到离开 downloading，上限 300s
  * —— 20-40MB 在慢线路上可能要几分钟；期间进度条随 received/total 变）。
+ *
+ * `choice` 是下载弹窗的两个选择（出口线路 / 存放目录），**可省** ——
+ * 省略时后端用已存的设置。参数由后端落配置：这两个值下次打开弹窗还是它们。
+ *
+ * 调用方（弹窗）**不要 await 整个下载**（最长 5 分钟）：进度由这里的轮询
+ * 推进全局快照，界面按快照渲染即可。
  */
-export async function downloadKernel(): Promise<void> {
+export async function downloadKernel(choice?: KernelDownloadChoice): Promise<void> {
   const bridge = wb().workbuddyDesktop
   if (typeof bridge?.downloadKernel !== 'function') {
     toast(t('当前环境不支持订阅（桥接方法缺失）'), 'err')
@@ -336,8 +383,13 @@ export async function downloadKernel(): Promise<void> {
   if (state.pending) return
   patch({ pending: true })
   try {
-    const kernel = await bridge.downloadKernel()
+    const kernel = await bridge.downloadKernel(choice)
     if (kernel && state.data) patch({ data: { ...state.data, kernel } })
+    // 配置没落盘：进程内已经生效（这次下载按新设置走），但重启后会回到旧值 ——
+    // 静默吞掉会让用户下次莫名其妙地「设置自己变回去了」
+    if (kernel?.saved === false) {
+      toast(t('下载线路 / 存放目录没能写进配置（本次下载已按新设置走，重启后会恢复原值）'), 'err')
+    }
     // 轮询直到下载结束（状态离开 downloading）或超时（300 轮）
     for (let round = 0; round < 300; round += 1) {
       await new Promise(resolve => setTimeout(resolve, 1000))
@@ -348,6 +400,10 @@ export async function downloadKernel(): Promise<void> {
     const finalKernel = state.data?.kernel
     if (finalKernel?.download.state === 'error') {
       toast(t('内核下载失败：{reason}', { reason: finalKernel.download.error || t('未知错误') }), 'err')
+    } else if (finalKernel?.download.state === 'canceled') {
+      // 用户自己按的停止：如实报，不带错误语气（正常路径由 cancelKernelDownload
+      // 播报，这里兜的是「点了停止又把弹窗关了」这种没人报的情况）
+      toast(t('已停止下载内核（未下载完的临时文件已删除）'))
     } else if (finalKernel?.download.state === 'done') {
       // 下载完成：后端已自动拉起内核（有启用的订阅时），再轮几轮看运行状态
       toast(t('✅ 内核下载完成，正在启动…'))
@@ -357,6 +413,43 @@ export async function downloadKernel(): Promise<void> {
     toast(t('内核下载失败：{reason}', { reason: errorMessage(error) }), 'err')
   } finally {
     patch({ pending: false })
+  }
+}
+
+/**
+ * 停止正在进行的下载（弹窗的「停止下载」）。
+ *
+ * ── 为什么还要轮询一轮 ──────────────────────────────────────
+ * 停止是**合作式**的：后端只置一个标志，下载循环读到才收手（毫秒级，但确实
+ * 不是同步的）。而且有一种真实竞态：点停止的那一瞬字节流刚好读完，内核正在
+ * sha256 / 解压安装 —— 标志再也没人读，装完之后快照是 `done`。所以成败以
+ * **轮询到的最终状态**为准，界面才能如实说「已经装好了，没停下」而不是把
+ * 「已停止」写在脸上。
+ *
+ * 返回值：`canceled` 停下来了 / `done` 没赶上（已装好）/ `none` 根本没在下载 /
+ * `stalled` 5 秒还没收敛（网络盘上删文件慢等）。
+ */
+export async function cancelKernelDownload(): Promise<'canceled' | 'done' | 'none' | 'stalled'> {
+  const bridge = wb().workbuddyDesktop
+  if (typeof bridge?.cancelKernelDownload !== 'function') return 'none'
+  try {
+    const first = await bridge.cancelKernelDownload()
+    if (first && state.data) patch({ data: { ...state.data, kernel: first } })
+    if (first?.canceled === false) return 'none'
+    // 上限 5 秒（20 轮 × 250ms）：正常一个分片就收手了
+    for (let round = 0; round < 20; round += 1) {
+      const next = await bridge.getKernelStatus?.()
+      if (next && state.data) patch({ data: { ...state.data, kernel: next } })
+      if (next && next.download.state !== 'downloading') break
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+    const finalState = state.data?.kernel?.download.state
+    if (finalState === 'canceled') return 'canceled'
+    if (finalState === 'done') return 'done'
+    return 'stalled'
+  } catch (error) {
+    toast(t('停止下载失败：{reason}', { reason: errorMessage(error) }), 'err')
+    return 'none'
   }
 }
 
@@ -374,6 +467,79 @@ export async function restartKernel(): Promise<void> {
     void pollSectionAfterChange()
   } catch (error) {
     toast(t('内核启动失败：{reason}', { reason: errorMessage(error) }), 'err')
+  } finally {
+    patch({ pending: false })
+  }
+}
+
+/**
+ * 删除已下载的内核（界面上的「删除内核」）。
+ *
+ * ── 这是破坏性动作，但**不删订阅** ─────────────────────────
+ * 内核二进制 / 配置 / 端口映射删掉；订阅节点的端口由后端回收成「未分配」，
+ * 引用它们的账号**暂时回退直连**。订阅本身与账号里的引用都保留 —— 重装内核
+ * 后同步按「订阅 + 节点名」命中同一条池条目，端口原位写回，账号自动复活
+ * （条目的 id 不变，这正是后端回收端口而不摘条目的原因）。确认弹窗必须把
+ * 「会回退直连」和「订阅保留」两件事都说清楚，只说「删除内核」用户没法判断
+ * 代价。
+ *
+ * ── 为什么带一段轮询 ───────────────────────────────────────
+ * 命令是异步的（走内核 worker 的串行队列），投出去那一刻返回的快照还是
+ * 删之前的样子。这里轮询到 `installed` 真的落成 false 再收手，然后刷代理池
+ * —— 池里那一批订阅节点要跟着变成「未分配端口」（只刷内核状态的话，地址列
+ * 会停在旧端口上，看着像还能用）。
+ */
+export async function removeKernel(): Promise<void> {
+  const bridge = wb().workbuddyDesktop
+  if (typeof bridge?.removeKernel !== 'function') {
+    toast(t('当前环境不支持订阅（桥接方法缺失）'), 'err')
+    return
+  }
+  const version = kernel()?.version
+  const ok = await window.wbConfirm?.ask?.({
+    title: t('删除内核'),
+    html: t('确定删除已下载的内核{version}？内核文件与端口映射会被移除，订阅节点会变成「未分配端口」，引用它们的账号会暂时回退直连；订阅本身保留，重新下载内核后会重新分配端口。', {
+      version: version ? `（${version}）` : '',
+    }),
+    okText: t('删除内核'),
+    okClass: 'danger',
+  })
+  if (!ok) return
+  if (state.pending) return
+  patch({ pending: true })
+  // 调用前的 lastError：用来分辨轮询里读到的是「这次删除刚写下的原因」还是
+  // 上一次别的操作留下的陈年记录（后者不该当成这次失败的原因）
+  const errorBefore = kernel()?.lastError || ''
+  try {
+    const first = await bridge.removeKernel()
+    if (first && state.data) patch({ data: { ...state.data, kernel: first } })
+    // 上限 10 秒（20 轮 × 500ms）：删的是几十 MB 的目录，正常一两轮就落地
+    for (let round = 0; round < 20; round += 1) {
+      const next = await bridge.getKernelStatus?.()
+      if (next && state.data) patch({ data: { ...state.data, kernel: next } })
+      if (next && next.installed === false) break
+      // 后端已经把失败原因写进快照了：不必再空等满 10 秒
+      if (next?.lastError && next.lastError !== errorBefore) break
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    // 成败以**轮询到的最终快照**为准：这个接口是异步的（后端投一条内核命令），
+    // 200 只代表命令已受理 —— 真删不掉时快照里仍是 installed=true。只看
+    // 「没抛错」就报成功的话，用户会看到「已删除」而内核还好端端在跑
+    const finalKernel = state.data?.kernel
+    if (finalKernel?.installed === false) {
+      toast(t('已删除内核（订阅与账号引用保留，重新下载后会重新分配端口）'))
+      refreshPool()
+    } else {
+      const reason =
+        finalKernel?.lastError && finalKernel.lastError !== errorBefore
+          ? finalKernel.lastError
+          : t('内核目录没能删掉（可能仍被进程占用），稍后重试一次')
+      toast(t('删除内核失败：{reason}', { reason }), 'err')
+    }
+    void loadSection(true)
+  } catch (error) {
+    toast(t('删除内核失败：{reason}', { reason: errorMessage(error) }), 'err')
+    void loadSection(true)
   } finally {
     patch({ pending: false })
   }

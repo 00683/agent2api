@@ -164,7 +164,7 @@ pub const RESERVED_KV_KEYS: &[&str] = &[
     // 动它（否则用户改一次 API Key 端口范围就退回默认、大订阅又分配不出端口）。
     "proxySettings",
     // 订阅（core::subscriptions）：整份 `{items: [...]}` 一个键 —— 「网络代理」
-    // 页「订阅」区块维护的订阅链接，内核（sub_kernel）拉起时从 api 层拿启用
+    // 页「订阅管理」维护的订阅链接，内核（sub_kernel）拉起时从 api 层拿启用
     // 清单。与 proxyPool 同类零散状态：不是配置项，配置写入绝不能动它。
     "subscriptions",
     // OfficeAce 模型可用性探测的结论（core::providers::officeace::probe）：

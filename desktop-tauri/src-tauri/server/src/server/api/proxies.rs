@@ -374,14 +374,25 @@ pub async fn pool_test(state: &ServerState, body: &Bytes) -> Response {
     // 补建期间的结果：不是测试结论，只说明「内核重建中」。名字带上（此时没有
     // 已解析的出口可描述），前端照常显示 ❌ + 这句话，重测就是补建后的结果
     let mut pending: Option<String> = None;
+    // 内核没装（没下过 / 刚被删）：补建无从谈起 —— 这条是**结论**，重测不会变
+    let mut uninstalled: Option<String> = None;
     if prep.needs_provision {
-        provision_missing_listeners(state);
-        if !wait_for_listeners(&[id.to_string()]).await {
-            pending = Some("监听器正在补建（内核重建中），稍等几秒后重测一次".to_string());
+        if sub_kernel::installed() {
+            provision_missing_listeners(state);
+            if !wait_for_listeners(&[id.to_string()]).await {
+                pending = Some("监听器正在补建（内核重建中），稍等几秒后重测一次".to_string());
+            }
+        } else {
+            // 不装内核时走补建 + 等待只会白等 45 秒（restart 早退在「未安装」上），
+            // 末了还给一句「稍后重测」—— 而重测永远不会成功，是条死路。直接说清楚
+            // 该做什么（去「订阅管理」下载内核），结论照常落进条目。
+            uninstalled =
+                Some("代理内核未安装（在「订阅管理」里下载内核后，节点会自动分配监听端口）"
+                    .to_string());
         }
     }
-    let (result, public) = match pending {
-        Some(error) => (
+    let (result, public) = match (uninstalled, pending) {
+        (Some(error), _) | (None, Some(error)) => (
             egress::ConnectivityResult {
                 success: false,
                 status: None,
@@ -403,7 +414,7 @@ pub async fn pool_test(state: &ServerState, body: &Bytes) -> Response {
             })),
         ),
         // 不需要补建（或已就绪）：照常解析 + 测
-        None => match proxy_pool::resolve_for_test(id) {
+        (None, None) => match proxy_pool::resolve_for_test(id) {
             Ok(proxy) => (
                 egress::test_proxy(Some(&proxy)).await,
                 egress::describe_public(Some(&proxy)),

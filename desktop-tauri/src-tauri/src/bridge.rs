@@ -411,8 +411,15 @@ const BRIDGE_JS: &str = r#"
     //                             重启内核）
     //   · getKernelStatus         单独读内核状态（下载进度的轮询走它）
     //   · downloadKernel          开始下载内核（后台任务，state=downloading →
-    //                             done/error）；下载完有启用的订阅会自动拉起
+    //                             done/error/canceled）；下载完有启用的订阅会自动拉起。
+    //                             参数是下载弹窗的两个选择 `{proxy, dir}`（都可省；
+    //                             dir 空串 = 恢复默认目录），后端**先落配置再下载**
+    //   · cancelKernelDownload    停止正在进行的下载（删掉半截文件；不在下载中时
+    //                             回 `{canceled: false}`，不假装停成功了）
     //   · restartKernel           手动启动 / 重启内核（重建配置）
+    //   · removeKernel            删除已下载的内核（停进程 + 清内核目录；订阅
+    //                             与账号引用保留，订阅节点端口被回收成「未分配」）
+    //   · pickFolder              弹系统文件夹选择框（下载弹窗的「选择目录…」）
     //   · decodeQrImage           从图片解二维码 `{imageBase64}` → `{url}`
     getSubscriptions: () => call('GET', '/api/subscriptions'),
     addSubscription: payload => call('POST', '/api/subscriptions/add', payload || {}),
@@ -421,8 +428,12 @@ const BRIDGE_JS: &str = r#"
     removeSubscription: id => call('POST', '/api/subscriptions/remove', { id: String(id || '') }),
     decodeQrImage: payload => call('POST', '/api/subscriptions/decode-qr', payload || {}),
     getKernelStatus: () => call('GET', '/api/subscriptions/kernel'),
-    downloadKernel: () => call('POST', '/api/subscriptions/kernel/download', {}),
+    downloadKernel: payload => call('POST', '/api/subscriptions/kernel/download', payload || {}),
+    cancelKernelDownload: () => call('POST', '/api/subscriptions/kernel/download/cancel', {}),
     restartKernel: () => call('POST', '/api/subscriptions/kernel/restart', {}),
+    removeKernel: () => call('POST', '/api/subscriptions/kernel/remove', {}),
+    // 桌面壳的文件夹选择框：参数名与命令签名一致（camelCase ← Rust 的 snake_case）
+    pickFolder: defaultDir => invoke('pick_folder', { defaultDir: defaultDir == null ? null : String(defaultDir) }),
 
     // ── 积分 / 签到 ──
     getUsage: () => call('GET', '/api/usage'),
