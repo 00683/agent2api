@@ -224,6 +224,16 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   //   —— 弹层把它与「已用完」一起收进末尾折叠组），另加一条联网搜索（单位「次」，
   //   与文档级的「积分」不同）。
   officeace: { usage: true, creditDetail: true, edition: false, identifier: 'id', expiry: 'expiresAt' },
+  // Antigravity（Google AI IDE）。各位各有出处：
+  // `usage: true` —— 额度是**两个模型组 × 两个窗口**（5 小时 / 每周）的剩余比例，
+  //   见后端 providers::antigravity::balance（retrieveUserQuotaSummary）；
+  //   上游只给比例、没有绝对数，钱包行走纯比例读数（`remainingPercent` +
+  //   `balanceView`），余额列显示「最紧张的窗口」，悬停列出全部窗口与重置时刻。
+  // `edition: false` —— 单一入口（Google OAuth 粘贴 / 网页登录），没有地区概念。
+  // `identifier: 'userId'` —— 身份键存的就是 email（见 account_store::antigravity_accounts 模块头）。
+  // `expiry: ''` —— refresh token 不过期、access token 自动续期，这一列对它没有可显示的事实
+  //   （与 kuku 同一处置：界面不渲染「有效期」）。
+  antigravity: { usage: true, edition: false, identifier: 'userId', expiry: '' },
 }
 
 /**
@@ -244,6 +254,68 @@ export function providerOf(account: AccountRecord | null | undefined): string {
 /** provider id → 能力表（未登记的家走 GENERIC_FEATURES） */
 export function providerFeatures(providerId: string | undefined): ProviderFeatures {
   return (providerId && PROVIDER_FEATURES[providerId]) || GENERIC_FEATURES
+}
+
+/* ─── OpenCode Zen 判定（出网「轮询」档的唯一开放对象）─────────── */
+
+/**
+ * 客户端形态伪装开关的合法值（与后端 `custom_providers::CLIENT_EMULATION_OPENCODE`
+ * 逐字一致）。开着它就说明这一家按 OpenCode 官方 CLI 的形状补齐出站请求 ——
+ * 也就是免费档那一套（预置卡「OpenCode Zen」默认开启）。
+ */
+const CLIENT_EMULATION_OPENCODE = 'opencode'
+
+/** OpenCode **Go**（订阅制）的端点：与免费档同域不同档，见后端 `is_opencode_go_endpoint` */
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
+/**
+ * 这条（提供商, 账号）组合是不是 **OpenCode Zen 免费档** —— 出网「轮询」档在
+ * 界面上唯一出现的对象。判据与后端 `custom_providers::is_opencode_zen_account`
+ * 逐条对应（两处必须同口径，否则会出现「界面给了这个档、保存却被 400 挡下」）：
+ *
+ *   1. 提供商记录开着客户端形态伪装（`clientEmulation === 'opencode'`）——
+ *      免费档按 IP 限流、429 只管这个 IP 的额度，轮换出口才有意义；
+ *   2. 最终 baseUrl 不是 Go 面端点。账号的覆盖项优先于提供商记录（与转发侧
+ *      解析最终地址同序），两层都要过。
+ */
+export function isOpencodeZenProvider(
+  provider: { baseUrl?: string; clientEmulation?: string } | null | undefined,
+  accountBaseUrl?: string,
+): boolean {
+  if (!provider || provider.clientEmulation !== CLIENT_EMULATION_OPENCODE) return false
+  const override = typeof accountBaseUrl === 'string' ? accountBaseUrl.trim() : ''
+  const base = (override || String(provider.baseUrl || '')).trim().replace(/\/+$/, '').toLowerCase()
+  if (!base) return false
+  return base !== OPENCODE_GO_BASE_URL
+}
+
+/**
+ * 按账号查出它所属的**自定义提供商记录**（目录缓存是唯一同步数据源；
+ * 内置家 / 目录里查不到时给 null）。
+ *
+ * 目录（`wbProviders.customList`）由 providers.js 统一拉取与缓存，条目就是
+ * 后端记录本身（含 `clientEmulation` / `baseUrl`）—— 与账号设置弹窗用
+ * `wbCustomProvidersUi.find` 取到的是同一份数据，只是这里同步读缓存。
+ */
+export function customProviderOf(
+  account: AccountRecord | null | undefined,
+): { baseUrl?: string; clientEmulation?: string } | null {
+  const id = account ? providerOf(account) : ''
+  if (!id.startsWith('custom-')) return null
+  const list = shared().wbProviders?.customList?.() || []
+  return list.find(item => item?.id === id) || null
+}
+
+/**
+ * 这条账号能不能用出网「轮询」档（弹窗与批量弹窗共用的唯一判据）。
+ *
+ * 一次读两处：账号自己的 baseUrl 覆盖项 + 目录里那家提供商记录。
+ * 缓存里还没有这一家（首屏还没拉到目录）时判定为 false —— 「档位晚一轮出现」
+ * 比「点开一个保存必然 400 的档」轻。
+ */
+export function supportsProxyRotate(account: AccountRecord | null | undefined): boolean {
+  if (!account) return false
+  return isOpencodeZenProvider(customProviderOf(account), account.baseUrl)
 }
 
 /**
@@ -316,9 +388,22 @@ export function tokenExpiryOf(account: AccountRecord | null | undefined): number
   return expiryMillis(account?.[key])
 }
 
-/** 该账号所属 provider 是否有余额概念（没有就不渲染余额按钮，也不参与批量查询） */
+/**
+ * 该账号所属 provider 是否有余额概念（没有就不渲染余额按钮，也不参与批量查询）。
+ *
+ * 内置家走能力表（`usage` 位）；**自定义家（含「预置 API」卡片建的那些）不走表**
+ * —— 它们的能力来自**提供商记录里的余额方案**，由后端注入成账号公开形态上的
+ * `balanceQuery.scheme`（六种方案见 `providers::custom::balance` 与
+ * `balance-query.tsx`）：有方案 = 能查余额。
+ *
+ * 「有方案但凭证没配」**照样算有**：后端那次查询回的是「未配置」的中性提示
+ * （不是红色失败），按钮与「查询设置」段都得在，用户才有地方去补 —— 与
+ * CatPaw / ZCode 的「未配置也给入口」同一取舍。
+ */
 export function supportsUsage(account: AccountRecord | null | undefined): boolean {
-  return providerFeatures(providerOf(account)).usage
+  const provider = providerOf(account)
+  if (provider.startsWith('custom-')) return Boolean(account?.balanceQuery?.scheme)
+  return providerFeatures(provider).usage
 }
 
 /* ─── 每账号的余额查询设置（账号设置弹窗「查询设置」段共用）─── */
