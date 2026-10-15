@@ -6,16 +6,19 @@
 //! 「要不要回过一条控制消息」（ping / reply-question）与「是不是终态」。
 //! 拆文件只是因为单文件行数约定；两者是同一段时序的两半。
 //!
-//! ── ACP 事件映射（逐条对照 `task-runner.ts::handleACPEvent`）──────
-//! | ACP 事件 | 产出 |
+//! ── ACP 事件映射 ─────────────────────────────────────────────
+//! 上游实际推**会话更新信封**（2026-10 抓帧实证）：data 解 base64 后是
+//! `{"sessionId", "update": {...}}`，`update.sessionUpdate` 取值与处理：
+//! | sessionUpdate / type | 产出 |
 //! |---|---|
-//! | `agent_message_chunk` | `delta.content`（`text` 优先、`content` 兜底）|
-//! | `agent_thought_chunk` | `delta.reasoning_content`（本仓思考通道；参考是 `[Thinking] …` 拼正文）|
-//! | `tool_call` | `delta.tool_calls[{index,id,type:"function",function:{name,arguments}}]`（参考 Responses 分支的 function_call 形态；chat 分支参考拼正文，本仓按工具调用形态下发）|
-//! | `tool_call_update` | 参数增量的 `tool_calls[{index,function:{arguments}}]` 帧（参考只记日志；增量语义见 `06-acp-event-reference`）|
-//! | `usage_update` | 并入 usage 计数（按累计值处理，非零才覆盖）|
-//! | `plan` / `available_commands_update` | 仅 verbose 日志（参考同）|
+//! | `agent_message_chunk` | `delta.content`（content 可为字符串或 `{type:"text",text}` 对象）|
+//! | `agent_thought_chunk` | `delta.reasoning_content`（本仓思考通道）|
+//! | `tool_call` | `delta.tool_calls`（信封形态 name 取 title/toolCallId）|
+//! | `tool_call_update` | 参数增量帧（扁平形态；信封形态字段不齐时仅记日志）|
+//! | `usage_update` | 信封形态给 used/size/cost（上下文水位，非 OpenAI 口径，仅记录）；扁平形态并入 usage |
+//! | `plan` / `available_commands_update` | 仅 verbose 日志 |
 //! | 未知 | 仅 verbose 日志 |
+//! 扁平形态（`{"type": ...}`，旧文档）保留兼容，字段映射不变。
 //!
 //! 下行信封（`ping` / `task-started` / `task-running` / `task-ended` /
 //! `task-error`）的处理与四个终态出口见 `stream.rs` 的模块头。
@@ -410,38 +413,84 @@ fn handle_running(translator: &mut Translator, message: &Value) -> Handled {
     }
 }
 
-/// 一个 ACP 事件 → 帧（映射表见模块头与报告）。
+/// 一个 ACP 事件 → 帧。
+///
+/// 上游实际推送**两种形态**（2026-10 抓帧实证，见模块头）：
+///   - 会话更新信封（主形态）：`{"sessionId", "update": {...}}`，`update`
+///     里带 `sessionUpdate` 字段（`agent_message_chunk` / `usage_update` /
+///     `tool_call` / `available_commands_update` …）；
+///   - 扁平事件（旧文档形态）：`{"type": "agent_message_chunk", ...}`。
+/// 先解开 `update` 信封，再按 `sessionUpdate` → `type` 的顺序分派；两套
+/// 字段都对不上但带 `content` 的，按内容块处理（信封形态的 content 是
+/// `{type:"text", text}` 对象，见 `chunk_text`）。
 fn handle_acp(translator: &mut Translator, acp: &Value) -> Handled {
-    match acp.get("type").and_then(Value::as_str).unwrap_or("") {
-        "agent_message_chunk" => {
-            let text = chunk_text(acp);
-            if text.is_empty() {
-                return Handled::default();
+    let event = match acp.get("update") {
+        Some(update) if update.is_object() => update,
+        _ => acp,
+    };
+    if let Some(kind) = event.get("sessionUpdate").and_then(Value::as_str) {
+        return match kind {
+            "agent_message_chunk" => push_chunk(translator, event, false),
+            "agent_thought_chunk" => push_chunk(translator, event, true),
+            "tool_call" => {
+                let name = tool_name_of(event);
+                let input = text_field(event.get("rawInput"));
+                logging::verbose(
+                    "[MonkeyCode]",
+                    &format!("工具调用 {}（{}）", name, preview(&input, 120)),
+                );
+                Handled {
+                    frames: vec![translator.push_tool_call(&name, &input)],
+                    ..Handled::default()
+                }
             }
-            Handled {
-                frames: vec![translator.push_content(&text)],
-                ..Handled::default()
+            "tool_call_update" => {
+                let delta = text_field(event.get("rawInput"));
+                let name = tool_name_of(event);
+                logging::verbose(
+                    "[MonkeyCode]",
+                    &format!(
+                        "工具调用更新 name={} delta={}",
+                        if name.is_empty() { "-" } else { &name },
+                        preview(&delta, 120),
+                    ),
+                );
+                match translator.append_tool_arguments(&name, &delta) {
+                    Some(frame) => Handled {
+                        frames: vec![frame],
+                        ..Handled::default()
+                    },
+                    None => Handled::default(),
+                }
             }
-        }
-        "agent_thought_chunk" => {
-            let text = chunk_text(acp);
-            if text.is_empty() {
-                return Handled::default();
+            // 上游 usage_update 给的是 used / size / cost（上下文水位），
+            // 不是 OpenAI 三件套口径；不强行映射成假数据，只留痕。
+            "usage_update" => {
+                logging::verbose("[MonkeyCode]", "收到 usage_update（信封形态，仅记录）");
+                Handled::default()
             }
-            Handled {
-                frames: vec![translator.push_reasoning(&text)],
-                ..Handled::default()
+            "available_commands_update" | "plan" => {
+                logging::verbose("[MonkeyCode]", &format!("收到 {kind}（仅记录）"));
+                Handled::default()
             }
-        }
+            other => {
+                logging::verbose("[MonkeyCode]", &format!("忽略会话更新：{other}"));
+                Handled::default()
+            }
+        };
+    }
+    match event.get("type").and_then(Value::as_str).unwrap_or("") {
+        "agent_message_chunk" => push_chunk(translator, event, false),
+        "agent_thought_chunk" => push_chunk(translator, event, true),
         "tool_call" => {
-            let name = acp
+            let name = event
                 .get("tool_name")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .unwrap_or("unknown")
                 .to_string();
-            let input = text_field(acp.get("tool_input"));
+            let input = text_field(event.get("tool_input"));
             logging::verbose(
                 "[MonkeyCode]",
                 &format!("工具调用 {}（{}）", name, preview(&input, 120)),
@@ -453,20 +502,20 @@ fn handle_acp(translator: &mut Translator, acp: &Value) -> Handled {
         }
         "tool_call_update" => {
             let delta = {
-                let text = text_field(acp.get("tool_input"));
+                let text = text_field(event.get("tool_input"));
                 if text.is_empty() {
-                    text_field(acp.get("delta"))
+                    text_field(event.get("delta"))
                 } else {
                     text
                 }
             };
-            let name = acp
+            let name = event
                 .get("tool_name")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            let status = acp.get("status").and_then(Value::as_str).unwrap_or("");
+            let status = event.get("status").and_then(Value::as_str).unwrap_or("");
             logging::verbose(
                 "[MonkeyCode]",
                 &format!(
@@ -488,7 +537,7 @@ fn handle_acp(translator: &mut Translator, acp: &Value) -> Handled {
             }
         }
         "usage_update" => {
-            merge_usage(&mut translator.usage, acp);
+            merge_usage(&mut translator.usage, event);
             Handled::default()
         }
         "plan" => {
@@ -506,14 +555,55 @@ fn handle_acp(translator: &mut Translator, acp: &Value) -> Handled {
     }
 }
 
-/// ACP 文本块：`text` 优先、`content` 兜底（参考 `acp.text || acp.content`）。
-fn chunk_text(acp: &Value) -> String {
-    let text = acp
-        .get("text")
-        .and_then(Value::as_str)
-        .or_else(|| acp.get("content").and_then(Value::as_str))
-        .unwrap_or("");
-    text.to_string()
+/// 内容 / 思考块的公共出口（`reasoning` 选通道；空文本不发帧）。
+fn push_chunk(translator: &mut Translator, event: &Value, reasoning: bool) -> Handled {
+    let text = chunk_text(event);
+    if text.is_empty() {
+        return Handled::default();
+    }
+    let frame = if reasoning {
+        translator.push_reasoning(&text)
+    } else {
+        translator.push_content(&text)
+    };
+    Handled {
+        frames: vec![frame],
+        ..Handled::default()
+    }
+}
+
+/// 工具名：信封形态给 `title`（展示名）+ `toolCallId`；扁平形态给
+/// `tool_name`。三者按序取第一个非空，都没有回落 "unknown"。
+fn tool_name_of(event: &Value) -> String {
+    for key in ["tool_name", "title", "toolCallId"] {
+        let value = event
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+/// ACP 文本块：`text` 优先；`content` 为字符串直接用、为对象取其 `text`
+/// （信封形态的 content 是 `{type:"text", text}`，2026-10 抓帧实证；
+/// 参考 `acp.text || acp.content` 只覆盖字符串形态）。
+fn chunk_text(event: &Value) -> String {
+    if let Some(text) = event.get("text").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    match event.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(content) if content.is_object() => content
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
 }
 
 /// 取一个字段的文本形态（字符串原样；其它 JSON 值取序列化文本）。
