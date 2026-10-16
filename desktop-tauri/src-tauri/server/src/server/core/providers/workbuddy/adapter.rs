@@ -745,16 +745,39 @@ pub(super) fn chat_headers(
 /// 账号记录里带 `endpoint` 时仍然以它为准 —— 那是 staging / 自建反向代理
 /// 用户的落点，也是同一个账号级别的覆盖能力。
 pub(super) fn chat_completions_url(session: &Value, region: Region) -> String {
+    format!("{}/v2/chat/completions", session_endpoint(session, region))
+}
+
+/// 网页通道 agent 会话 URL：`{endpoint}/console/as/conversations/`。
+///
+/// 国际版上游把「当日活跃」（每日 30 积分的判定）记在网页通道的会话上
+/// （issue #277：桌面端 `chat/completions` 调用成功也不计）。网页应用与桌面
+/// 端同源一个站点，端点解析与 `chat_completions_url` 共用同一份规则 ——
+/// 国际版默认端点本来就是 `https://www.workbuddy.ai`（网页应用的域名）。
+pub(super) fn web_conversations_url(session: &Value, region: Region) -> String {
+    format!(
+        "{}/console/as/conversations/",
+        session_endpoint(session, region)
+    )
+}
+
+/// 会话生效端点：账号记录的 `endpoint` 覆盖优先，兜底本地区的端点。
+///
+/// 兜底端点取**本实例的地区**（拆家前取 `endpoints::default_context()`，
+/// 那是「本进程只有一个上游」时代的产物：它读 `WORKBUDDY_EDITION` 环境变量，
+/// 而现在两个地区同时存在，环境变量不该再决定某个 provider 打哪个站）。
+/// 账号记录里带 `endpoint` 时仍然以它为准 —— 那是 staging / 自建反向代理
+/// 用户的落点，也是同一个账号级别的覆盖能力。
+fn session_endpoint(session: &Value, region: Region) -> String {
     let fallback = region
         .env_endpoint_override()
         .unwrap_or_else(|| region.default_endpoint().to_string());
-    let endpoint = session
+    session
         .get("endpoint")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(crate::server::core::endpoints::normalize_endpoint)
-        .unwrap_or_else(|| crate::server::core::endpoints::normalize_endpoint(&fallback));
-    format!("{endpoint}/v2/chat/completions")
+        .unwrap_or_else(|| crate::server::core::endpoints::normalize_endpoint(&fallback))
 }
 
 /// 首条消息不是 system 时，在头部补一条系统消息（不改原数组，返回新 body）。
