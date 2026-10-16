@@ -389,6 +389,49 @@ pub async fn checkin_for(
             .map(welfare_claim_of);
             claim_result(id, name, &display, true, claim)
         }
+        "chatglm" => {
+            // 智谱清言：本家的「签到」是**每日登录积分**
+            // （`POST /chatglm/member-api/member/daily_login_score`，返回
+            // `result.score` 为本次到账数）。访客账号没有积分体系，实现如实
+            // 返回中性未领取（`success:false` + 说明文案），不落失败台账 ——
+            // 见 `chatglm::checkin` 的模块头。
+            let claim =
+                crate::server::core::providers::chatglm::checkin::claim_daily_login_score(store, &id)
+                    .await
+                    .map_err(|error| error.message);
+            // ── 领取类：会员积分活动与季节性活动 ────────────────────
+            // 本家的「领取类」没有独立的界面入口，与 WorkBuddy 的一次性运营
+            // 奖励同一处置：**挂在签到末尾顺带领**（活动期才有得领，非活动期
+            // 实现自己回中性文案，不算失败）。读数细节进 `bonus` 格。
+            // 注意顺序：`claim_result` 会消费 `id`，所以先领再构造结果行。
+            let bonus =
+                crate::server::core::providers::chatglm::checkin::claim_bonus(store, &id)
+                    .await
+                    .map_err(|error| error.message);
+            let bonus_ok = bonus
+                .as_ref()
+                .ok()
+                .and_then(|value| value.get("success").and_then(Value::as_bool))
+                .unwrap_or(false);
+            logging::log(
+                "[Checkin]",
+                &format!(
+                    "智谱清言账号 {display}: 活动领取 {}",
+                    if bonus_ok { "成功" } else { "无可领取" }
+                ),
+            );
+            let mut row = claim_result(id, name, &display, true, claim);
+            if let Some(object) = row.as_object_mut() {
+                object.insert(
+                    "bonus".to_string(),
+                    match &bonus {
+                        Ok(value) => value.clone(),
+                        Err(message) => serde_json::json!({ "success": false, "msg": message }),
+                    },
+                );
+            }
+            row
+        }
         // 兜底只服务默认那家（WorkBuddy 国内版）——**不是**「剩下所有家」。
         // 这里曾经是无所不包的 `_`：一个 provider 只要没在上面列出，就会拿自己的
         // 令牌去打腾讯的签到接口，稳定报错且看不出原因（Qoder 接入前正是这个处境）。

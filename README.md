@@ -10,9 +10,9 @@
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Docker%20%7C%20Linux-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 核心特性](#-核心特性) • [💬 社区与支持](#-社区与支持) • [🤝 支持的提供商](#-支持的提供商) • [🚀 快速开始](#-快速开始) • [🐳 Docker 部署](#-docker-部署) • [🐧 Linux 裸机部署](#-linux-裸机部署) • [📸 界面预览](#-界面预览) • [🔧 开发与构建](#-开发与构建) • [📜 使用声明](#-使用声明)
+[✨ 核心特性](#-核心特性) • [💬 社区与支持](#-社区与支持) • [🤝 支持的提供商](#-支持的提供商) • [🚀 快速开始](#-快速开始) • [🐳 Docker 部署](#-docker-部署) • [📸 界面预览](#-界面预览) • [🔧 开发与构建](#-开发与构建) • [📜 使用声明](#-使用声明)
 
 </div>
 
@@ -31,7 +31,7 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 - 📊 **请求报表** —— 请求量、成功率、Token 消耗一览，还有缓存命中率与 365 天热力图
 - ⏰ **定时任务** —— 自动签到、凭证维护、模型目录刷新，开关与间隔在一页里管理
 - 💰 **余额与用量** —— 账号行内直接看余额与用量，支持跨账号并发查询
-- 🖥️ **四种形态** —— Windows / macOS 桌面端托盘常驻、免装 Node；Docker 与 Linux 裸机跑同一个无界面服务端（自托管网页面板），界面六语
+- 🖥️ **四种形态** —— Windows / macOS / Linux 桌面端托盘常驻、免装 Node；Docker 版面板与网关同端口（amd64 / arm64），界面六语
 
 ## ❤️ 赞助商
 
@@ -73,11 +73,15 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 | KukuAI（百度文库） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
 | MonkeyCode（长亭科技，国内版 / 国际版） | ✓ | ✗ | ✓ | — | — | — |
 | Command Code | ✓ | ✗ | ✓ | — | — | — |
-| Antigravity（Google，Gemini） | ✓ | ✓ | ✓ | — | — | — |
+| Antigravity（Google，Gemini / Claude / GPT-OSS） | ✓ | ✓ | ✓ | — | — | — |
 | OfficeAce（华为云果办 / OfficeClaw） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| OrcaTerm（腾讯云遨驰终端） | ✓ | ✓ | ✓ | ✓ | — | — |
+| 智谱清言 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 自定义提供商 | ✓ | — | ✓ | — | — | — |
 
 > 注：模型列表的 ✓ 表示支持在线自动拉取，部分平台另有内置静态表兜底；ZCode 仅有内置静态表。Token 续期列 ✗ 表示该平台没有可用的续期接口（账号在有效期内不受影响）。Qoder 签到仅中国版可用。
+>
+> **智谱清言**是本项目**唯一支持「访客模式」**的一家：不需要登录，点一下就能换到一份可直接对话的凭证（免费额度由上游按设备发放）。代价是访客账号没有积分体系 —— 上表里的「余额查询 / 签到 / 领取类」只对**登录账号**有效（粘贴令牌或导入客户端登录态），访客会被如实跳过。
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（含 `count_tokens`）与 `/v1/models` 对所有平台一视同仁；模型映射、全局优先级队列、429 降级、出网代理、出站指纹脱敏与请求报表同样全平台通用。
 
@@ -93,10 +97,12 @@ Releases 页提供四种形态的产物，按你的系统选一个：
 | --- | --- | --- | --- |
 | **Windows 桌面端**（推荐） | `Agent2API_<版本>_x64-setup.exe` | 应用窗口 | NSIS 安装包，默认装到 `C:\Program Files\Agent2API`，安装时需要管理员授权 |
 | **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 应用窗口 | 通用二进制（Apple Silicon 与 Intel 各编一遍再合并），最低 macOS 10.15 |
+| **Linux 桌面端** | `Agent2API_<版本>_amd64.deb` 或 `Agent2API_<版本>_amd64.AppImage` | 应用窗口 | deb 装进系统（依赖 webkit2gtk-4.1 / gtk3）；AppImage 免安装单文件，任意发行版可用 |
 | **Docker** | `aimodcc/agent2api:latest` | **浏览器面板** | amd64 / arm64 双架构，见 [Docker 部署](#-docker-部署) |
-| **Linux 裸机** | `agent2api-server-linux-amd64` / `-arm64.tar.gz` | **浏览器面板** | 不用 Docker，直接跑可执行文件，见 [Linux 裸机部署](#-linux-裸机部署) |
 
-**桌面端**（Windows / macOS）安装后启动即可，**无需安装 Node 或任何其它运行时**；网关跑在应用进程内，托盘常驻。
+> 另有两个 `agent2api-server-linux-<arch>.tar.gz` 附件，那是 Docker 版**容器内一键更新**的载荷（面板「下载并更新」时下载的包），不是独立部署形态，普通用户不用管。
+
+**桌面端**（Windows / macOS / Linux）安装后启动即可，**无需安装 Node 或任何其它运行时**；网关跑在应用进程内，托盘常驻。
 
 1. 首次启动即在应用进程内启动本机网关（端口 3065）并打开主窗口；若检测到旧版本的数据目录或数据文件，会弹窗提示迁移，按指引操作即可。
 2. 点「账号」页的「添加账号」，选提供商后按弹窗提示完成登录或填写凭证即可（方式以弹窗为准：网页登录 / 手机验证码 / 粘贴凭证 / 导入本机登录态）。
@@ -106,7 +112,9 @@ Releases 页提供四种形态的产物，按你的系统选一个：
 
 > **macOS 首次打开**：dmg 里的应用未做 Apple 代码签名与公证（签名需要付费的 Apple Developer 账号，见 `.github/workflows/build.yml` 的说明），Gatekeeper 会拦下首次启动 —— 到「系统设置 → 隐私与安全性」里手动放行一次即可。
 >
-> **macOS 桌面端的差异**：AutoClaw 的「导入本机登录态」不可用（它读的是 Windows 的 DPAPI 密文，macOS 上整段收起）；其余家（小浣熊 / CatPaw / Cline）读的是 `HOME` 下的明文文件，照常可用。托盘、开机自启、局域网访问与网页面板托管在 macOS 上同样支持。
+> **Linux 桌面端**：托盘依赖 `libayatana-appindicator3`（多数桌面环境已自带）；若桌面环境下托盘图标不显示，装 `libayatana-appindicator3-1` 后重开即可。AppImage 首次运行前需要可执行位（`chmod +x`，程序在「打开安装包」时会自动补）。更新方式：deb 走系统安装器（装的时候会问一次密码），AppImage 是换文件即升级。
+>
+> **桌面端的差异**：AutoClaw 与智谱清言的「导入本机登录态」只在 Windows 可用（读的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其余家（小浣熊 / CatPaw / Cline）读的是 `HOME` 下的明文文件，三个平台都可用。托盘、开机自启、局域网访问与网页面板托管在 macOS / Linux 上同样支持。
 
 ### 验证
 
@@ -140,7 +148,7 @@ print(resp.choices[0].message.content)
 
 默认只监听 `127.0.0.1`。开启「设置 → 通用 → 局域网访问」后改听所有网卡，局域网设备把 API 地址指向本机 IP 即可共用（界面会给出完整地址）。出于安全，开启前必须注册面板管理员：管理接口要求管理员会话或网关 Key，无可用 Key 时转发接口同样拒绝服务（开启流程会自动补一把「默认」Key）；也可选择同时开放网页面板（默认关闭）。改动重启生效。
 
-桌面端（Windows / macOS）装包里就带着网页面板那一份 `ui/`，打开「同时开放网页管理面板」后局域网设备用浏览器访问同一地址即是管理界面 —— 与 Docker / Linux 裸机形态是同一份界面；**桌面窗口自己不走网页登录**（没有登录页），它以本机第一把网关 Key 作为凭证，打开这个开关不需要你额外登录桌面端。网页登录页只在浏览器访问面板时出现。
+桌面端（Windows / macOS）装包里就带着网页面板那一份 `ui/`，打开「同时开放网页管理面板」后局域网设备用浏览器访问同一地址即是管理界面 —— 与 Docker 版是同一份界面；**桌面窗口自己不走网页登录**（没有登录页），它以本机第一把网关 Key 作为凭证，打开这个开关不需要你额外登录桌面端。网页登录页只在浏览器访问面板时出现。
 
 ## 🐳 Docker 部署
 
@@ -180,30 +188,15 @@ services:
 
 从源码构建：克隆本仓库后 `docker compose up -d --build`（镜像里只有网关与面板，不含 Rust 工具链）。
 
-**网页面板的功能差异**（Docker / Linux 裸机形态都有，源于「没有本机桌面客户端」）：网页登录（WorkBuddy / Qoder / Cline）、手机验证码、粘贴凭证完全可用；需要本机回调的网页登录（AutoClaw / CatPaw / Accio / CodeArts / Trae）与「导入本机登录态」不可用，请改用粘贴凭证。桌面端开着「同时开放网页管理面板」时，用浏览器访问该面板也是这一套差异 —— 同一份界面、同一套判定。
+**网页面板的功能差异**（源于「没有本机桌面客户端」）：网页登录（WorkBuddy / Qoder / Cline）、手机验证码、粘贴凭证完全可用；需要本机回调的网页登录（AutoClaw / CatPaw / Accio / CodeArts / Trae）与「导入本机登录态」不可用，请改用粘贴凭证。桌面端开着「同时开放网页管理面板」时，用浏览器访问该面板也是这一套差异 —— 同一份界面、同一套判定。
 
 ### 容器内更新（可选）
 
 面板的「软件更新」页在容器里能直接「下载并更新」：下载官方 Release 里的 `agent2api-server-linux-<arch>.tar.gz`（校验 `.sha256`）→ 替换可执行文件与 `ui/` → 进程优雅退出、由 `restart` 策略拉起同一个容器。由 `AGENT2API_SELF_UPDATE` 控制（Dockerfile 默认 `1`），置 `0` 则只走手动升级。
 
+那两个 `agent2api-server-linux-<arch>.tar.gz` 就是给这条更新链用的载荷，**用途只此一个**：CI 复用 Dockerfile 的编译路径打包，让包内可执行文件与镜像里的同源同工具链（见 `.github/workflows/build.yml` 的 `linux-server` job）。它没有安装脚本、没有 systemd 单元，也不是另一种部署方式 —— 容器外还会把服务停掉（更新流程是「换文件 → 退出进程」，靠 Docker 的 `restart` 策略把进程拉回来）。
+
 代价要清楚：更新后容器标签与**实际运行的版本会漂移**（`docker inspect` 显示的仍是旧 tag），执行 `docker compose pull && up -d` 重建容器会回到镜像里的版本。想固定版本就别开这个入口。
-
-## 🐧 Linux 裸机部署
-
-不用 Docker，直接在 Linux 主机上跑同一个无界面服务端（发布产物就是上面那个 tar.gz，容器内更新的正是它）：
-
-```bash
-tar -xzf agent2api-server-linux-amd64.tar.gz     # 解出 agent2api-server 与 ui/
-AGENT2API_PROXY_HOME=/var/lib/agent2api ./agent2api-server
-```
-
-浏览器打开 `http://<主机>:3065`，首次进入引导**注册管理员账号**（与 Docker 版完全一致的面板与流程）。
-
-- **包内容与依赖**：`agent2api-server` 可执行文件 + `ui/` 静态目录（界面）；`ui/` 要在可执行文件同级（或用 `AGENT2API_UI_DIR` 指路），缺失时面板 404、API 照常。二进制约 13 MB，动态链接 glibc（构建于 Debian 12 / glibc 2.36，需 **glibc ≥ 2.34**，即 Debian 12+ / Ubuntu 22.04+），除 `ca-certificates` 外无其它运行时依赖。
-- **arch**：`amd64` 与 `arm64` 各一个包，按主机架构选。
-- **默认监听 `0.0.0.0`**（与 Docker 版同款的安全闸门：管理面要管理员或 Key，`/v1/*` 未配 Key 时 fail-closed）。只想本机用就设 `AGENT2API_HOST=127.0.0.1`。
-- **环境变量与 Docker 版同一套**（见上面的表格），只是没有 Dockerfile 里预置的那几个（`AGENT2API_PROXY_HOME` / `AGENT2API_UI_DIR` / `AGENT2API_SELF_UPDATE` 等需要自己指定）。
-- **`AGENT2API_SELF_UPDATE` 不要设**：裸机没有容器那套「退出即拉起」的监管，更新会走「换文件 → 退出进程」，退出就等于把服务停掉。裸机上请用 systemd 等监管并手动换二进制。
 
 ## 📸 界面预览
 
@@ -239,7 +232,7 @@ AGENT2API_PROXY_HOME=/var/lib/agent2api ./agent2api-server
 
 - Rust >= 1.77 与 Tauri 2 工具链（编译桌面端本体；Windows 上还需 WebView2 运行时）
 - Node.js >= 18.17（只用于 `npm run tauri:*` 与前端构建脚本，桌面端运行时不依赖 Node）
-- 目标平台：Windows 与 macOS 桌面端、Linux 与 Docker 服务端（**没有 Linux 桌面端**：Tauri 的 bundle 只配了 Windows 的 NSIS 与 macOS 的 app/dmg，Linux 上跑的是无界面服务端 + 网页面板）
+- 目标平台：Windows 与 macOS 桌面端、Docker 服务端（**没有 Linux 桌面端**：Tauri 的 bundle 只配了 Windows 的 NSIS 与 macOS 的 app/dmg）
 
 ### 常用脚本
 
@@ -251,9 +244,9 @@ npm run tauri:build        # 构建桌面端安装包
 npm run build:icon         # 生成图标源图（改图标设计后执行，再跑 tauri icon）
 ```
 
-打包产物为 `target/release/bundle/nsis/Agent2API_<版本>_x64-setup.exe`（当前约 3.0 MB；`src-tauri/.cargo/config.toml` 把 cargo 的 `target-dir` 指到了项目根的 `target/`）。
+打包产物为 `target/release/bundle/nsis/Agent2API_<版本>_x64-setup.exe`（3.0 版约 8.6 MB；`src-tauri/.cargo/config.toml` 把 cargo 的 `target-dir` 指到了项目根的 `target/`）。
 
-macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与 Linux 服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，产物与镜像同源）。
+macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与容器内更新用的服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。
 
 ## 📜 使用声明
 

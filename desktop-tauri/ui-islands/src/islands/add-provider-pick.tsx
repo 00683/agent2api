@@ -99,6 +99,10 @@ export const PROVIDER_ICONS: Record<string, string> = {
   // （`cloudcache.tencent-cloud.com/qcloud/orcaterm/pwa/icon/orcaterm_192x192.png`，
   // 与客户端 / 官网显示的应用图标为同一形象）
   orcaterm: 'assets/providers/orcaterm.png',
+  // 智谱清言：取自客户端安装包 `resources/app.asar` 内的应用图标
+  // （`assets/icon.png`，512×512，与系统里显示的应用图标为同一形象；
+  // 归一成 256×256 入库 —— 与 officeace 同一处置）
+  chatglm: 'assets/providers/chatglm.png',
 }
 
 /**
