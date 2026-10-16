@@ -365,6 +365,9 @@ impl SseScanner {
 /// 一帧出站内容。
 enum Frame {
     Chunk(Value),
+    /// OpenAI 形态的流内错误帧（`data: {"error":{…}}`）—— 流式请求整程
+    /// 没有正文、只有上游错误时下发，客户端据此显示失败原因而不是空白。
+    Error(String),
     Done,
 }
 
@@ -373,6 +376,10 @@ impl Frame {
     fn wire(&self) -> String {
         match self {
             Frame::Chunk(chunk) => format!("data: {chunk}\n\n"),
+            Frame::Error(message) => format!(
+                "data: {}\n\n",
+                json!({ "error": { "message": message, "type": "upstream_error" } })
+            ),
             Frame::Done => "data: [DONE]\n\n".to_string(),
         }
     }
@@ -401,6 +408,9 @@ struct OrcaStream {
     content: String,
     /// 形态判定结果（第一个正文增量到达时定档）
     buffered: Option<bool>,
+    /// 最后一条流内错误（`data: [ERROR]: …`；正文为空时它就是这次请求的
+    /// 真实结果 —— 下发成显式错误而不是静默空回答，见 `final_content_frames`）
+    last_error: Option<String>,
 }
 
 impl OrcaStream {
@@ -413,6 +423,7 @@ impl OrcaStream {
             saw_end: false,
             content: String::new(),
             buffered: None,
+            last_error: None,
         }
     }
 
@@ -458,6 +469,7 @@ impl OrcaStream {
                         "[OrcaTerm]",
                         &format!("上游 ERROR 事件：{message}"),
                     );
+                    self.last_error = Some(message);
                     self.saw_end = true;
                     frames.extend(self.final_content_frames(None));
                 }
@@ -468,8 +480,13 @@ impl OrcaStream {
 
     /// 收尾帧：信封模式在这里解包并一次性下发正文，直播/空内容直接给结束帧。
     ///
-    /// ERROR 帧不发 finish_reason（与 KukuAI 同一口径：已发内容保留，
-    /// 客户端按 EOF 收尾）；`finish_reason` 由调用方给（正常收尾 = stop）。
+    /// ── 流内错误的两种处置 ──────────────────────────────────
+    /// 上游 HTTP 恒 200，错误在流内（`data: [ERROR]: …`）。正文**为空**时
+    /// 这个错误就是整次请求的结果 —— 下发一帧 OpenAI 形态的 error 对象再收尾，
+    /// 让客户端显示「模型不可用」而不是一个空白答案（面板上的 Hy4-preview
+    /// 上游未挂载，选中它走的就是这条路）；已发出正文后的 ERROR 仍按既有
+    /// 口径保留内容、静默收尾（与 KukuAI 一致）。`finish_reason` 由调用方给
+    /// （正常收尾 = stop；ERROR 路径给 None）。
     fn final_content_frames(&mut self, finish_reason: Option<&str>) -> Vec<Frame> {
         let mut frames = Vec::new();
         if self.buffered == Some(true) {
@@ -492,6 +509,11 @@ impl OrcaStream {
             // 直播模式：内容已实时下发，只补结束帧；信封判定未触发（无正文）
             // 时也一样 —— 空结束帧只表达 finish_reason
             frames.push(self.chunk(String::new(), Some(reason), false));
+        }
+        if self.content.is_empty() {
+            if let Some(message) = &self.last_error {
+                frames.push(Frame::Error(message.clone()));
+            }
         }
         frames.push(Frame::Done);
         frames
@@ -620,6 +642,13 @@ async fn aggregate(response: reqwest::Response, client_model: &str) -> Result<Fo
         let _ = stream.feed(&text);
     }
     let _ = stream.finish();
+    // 整程只有错误、没有正文：上抛成真正的 HTTP 错误（比返回一个空 content
+    // 的 200 诚实 —— 客户端能看到「模型不可用」而不是一次假成功）
+    if stream.content.is_empty() {
+        if let Some(message) = &stream.last_error {
+            return Err(GatewayError::with_status(502, format!("OrcaTerm 上游错误：{message}")));
+        }
+    }
     // 信封解包与非流式同口径：completion/ask/default 信封抽正文，其余原样
     let content = match unwrap_envelope(&stream.content) {
         Some(text) => text,

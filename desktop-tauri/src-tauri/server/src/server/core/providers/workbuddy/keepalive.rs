@@ -61,18 +61,9 @@ pub fn build_daily_activity_request(
     });
     let payload =
         serde_json::to_string(&body).map_err(|error| format!("活跃请求序列化失败: {error}"))?;
-    let request_id = crate::server::core::upstream::request::new_request_id();
-    let mut headers = chat_headers(session, Region::Intl, &request_id, Some("text/event-stream"));
-    // 国际版参考客户端使用 conversation/purpose 头族；保留既有 WorkBuddy
-    // 头集合并补齐这些浏览器/会话字段，国内版请求形态不受影响（国内版不进
-    // 这条链，`workbuddy_daily_activity` 只服务国际版会话）。
-    headers.retain(|(key, _)| key != "X-Agent-Intent");
-    headers.push(("X-Agent-Purpose".to_string(), "conversation".to_string()));
-    headers.push(("X-Conversation-Message-ID".to_string(), request_id.clone()));
-    headers.push(("X-Root-Request-ID".to_string(), request_id.clone()));
-    headers.push(("Origin".to_string(), "https://www.workbuddy.ai".to_string()));
-    headers.push(("Referer".to_string(), "https://www.workbuddy.ai/".to_string()));
-    headers.push(("X-Requested-With".to_string(), "XMLHttpRequest".to_string()));
+    // 头集合与真对话共用一份（chat_headers 已带全会话头族 / 链路头族与
+    // Origin / Referer —— 正是 11-128 渠道校验的对齐项），这里不再补丁。
+    let headers = chat_headers(session, Region::Intl, Some("text/event-stream"));
     let proxy = match ResolvedProxy::from_json(session.get("proxy").unwrap_or(&Value::Null)) {
         Ok(proxy) => proxy,
         Err(reason) => {
