@@ -10,9 +10,9 @@
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Docker%20%7C%20Linux-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 核心特性](#-核心特性) • [💬 社群與支援](#-社群與支援) • [🤝 支援的供應商](#-支援的供應商) • [🚀 快速開始](#-快速開始) • [🐳 Docker 部署](#-docker-部署) • [📸 介面預覽](#-介面預覽) • [🔧 開發與建置](#-開發與建置) • [📜 使用聲明](#-使用聲明)
+[✨ 核心特性](#-核心特性) • [💬 社群與支援](#-社群與支援) • [🤝 支援的供應商](#-支援的供應商) • [🚀 快速開始](#-快速開始) • [🐳 Docker 部署](#-docker-部署) • [🐧 Linux 裸機部署](#-linux-裸機部署) • [📸 介面預覽](#-介面預覽) • [🔧 開發與建置](#-開發與建置) • [📜 使用聲明](#-使用聲明)
 
 </div>
 
@@ -31,7 +31,7 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 - 📊 **請求報表** —— 請求量、成功率、Token 消耗一覽，還有快取命中率與 365 天熱力圖
 - ⏰ **排程任務** —— 自動簽到、憑證維護、模型目錄重新整理，開關與間隔在同一頁管理
 - 💰 **餘額與用量** —— 帳號列內直接看餘額與用量，支援跨帳號並行查詢
-- 🖥️ **兩種部署** —— 桌面端常駐托盤、免裝 Node；Docker 版面板與閘道同連接埠，介面六語
+- 🖥️ **四種形態** —— Windows / macOS 桌面端常駐系統匣、免裝 Node；Docker 與 Linux 裸機跑同一個無介面伺服器（自架網頁面板），介面六語
 
 ## ❤️ 贊助商
 

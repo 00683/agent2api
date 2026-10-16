@@ -10,9 +10,9 @@
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Docker%20%7C%20Linux-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ Key Features](#-key-features) • [💬 Community & Support](#-community--support) • [🤝 Supported Providers](#-supported-providers) • [🚀 Quick Start](#-quick-start) • [🐳 Docker Deployment](#-docker-deployment) • [📸 Screenshots](#-screenshots) • [🔧 Development & Build](#-development--build) • [📜 Usage Notice](#-usage-notice)
+[✨ Key Features](#-key-features) • [💬 Community & Support](#-community--support) • [🤝 Supported Providers](#-supported-providers) • [🚀 Quick Start](#-quick-start) • [🐳 Docker Deployment](#-docker-deployment) • [🐧 Linux Bare Metal](#-linux-bare-metal) • [📸 Screenshots](#-screenshots) • [🔧 Development & Build](#-development--build) • [📜 Usage Notice](#-usage-notice)
 
 </div>
 
@@ -31,7 +31,7 @@ Agent2API brings the signed-in accounts of several AI desktop clients together b
 - 📊 **Request reporting** — request volume, success rate and token usage at a glance, plus cache hit rate and a 365-day heatmap
 - ⏰ **Scheduled tasks** — auto check-in, credential maintenance and model catalog refresh, all managed on one page
 - 💰 **Balance and usage** — balances shown right in the account rows, with concurrent queries across accounts
-- 🖥️ **Two ways to run** — a tray-resident desktop app (no Node needed) or a Docker image with panel and gateway on one port, UI in six languages
+- 🖥️ **Four ways to run** — tray-resident desktop apps for Windows and macOS (no Node needed); Docker and bare-metal Linux run the same headless server with its self-hosted web panel, UI in six languages
 
 ## ❤️ Sponsors
 
@@ -87,13 +87,26 @@ Reverse-proxy capabilities at a glance (✓ supported · ✗ not supported · �
 
 ## 🚀 Quick Start
 
-Download the installer from [Releases](https://github.com/aimod-cc/agent2api/releases/latest) (NSIS, Simplified Chinese, installs to `C:\Program Files\Agent2API` by default, and needs administrator approval during setup), then launch it — **no Node or any other runtime required**.
+Releases ship four forms; pick the one for your system:
+
+| Form | Artifact | Interface | Notes |
+| --- | --- | --- | --- |
+| **Windows desktop** (recommended) | `Agent2API_<version>_x64-setup.exe` | App window | NSIS installer, installs to `C:\Program Files\Agent2API` by default, needs administrator approval |
+| **macOS desktop** | `Agent2API_<version>_universal.dmg` | App window | Universal binary (Apple Silicon and Intel each built, then merged); macOS 10.15+ |
+| **Docker** | `aimodcc/agent2api:latest` | **Browser panel** | amd64 / arm64 images, see [Docker Deployment](#-docker-deployment) |
+| **Linux bare metal** | `agent2api-server-linux-amd64` / `-arm64.tar.gz` | **Browser panel** | Run the executable directly, no Docker — see [Linux Bare Metal](#-linux-bare-metal) |
+
+**Desktop apps** (Windows / macOS) simply launch after installation — **no Node or any other runtime required**; the gateway runs inside the app process and stays in the tray.
 
 1. First launch starts the local gateway (port 3065) inside the app process and opens the main window. If an older version's data directory or data files are found, a dialog walks you through the migration.
 2. Click "Add account" on the Accounts page, pick a provider and follow the dialog: sign in or fill in credentials (web login / SMS code / pasted credentials / importing this machine's desktop login state).
 3. Set your OpenAI client's `base_url` to `http://127.0.0.1:3065/v1` and put anything in `api_key` (for example `sk-local`; the server does not check it while authentication is disabled).
 
 Closing the window minimizes to the tray by default and the gateway keeps forwarding in the background; to quit for real, right-click the tray icon and choose "Exit".
+
+> **First launch on macOS**: the app inside the dmg is neither code-signed nor notarized (signing needs a paid Apple Developer account — see `.github/workflows/build.yml`), so Gatekeeper blocks the first launch. Allow it once under "System Settings → Privacy & Security" and it opens normally afterwards.
+>
+> **macOS desktop differences**: AutoClaw's "import desktop login state" is unavailable (it reads Windows DPAPI ciphertext, so that whole section is hidden on macOS); the others (Raccoon / CatPaw / Cline) read plaintext files under `HOME` and work as usual. Tray, launch-at-login, LAN access and web-panel hosting are all supported on macOS too.
 
 ### Verification
 
@@ -126,6 +139,8 @@ print(resp.choices[0].message.content)
 ### LAN access
 
 By default the gateway only listens on `127.0.0.1`. After turning on "Settings → General → LAN access" it listens on all adapters, and devices on the LAN just point their API base URL at this machine's IP (the UI shows the full address) to share the accounts. For safety, enabling it requires registering a panel administrator first: the management API then demands an admin session or a gateway key, and with no key enabled the forwarding API refuses service too (the enable flow adds a "default" key automatically). The web panel can optionally be exposed to the LAN as well (off by default). Changes take effect after a restart.
+
+The desktop installers (Windows / macOS) already ship the web panel's `ui/` folder: once you turn on "expose the web management panel to the LAN" as well, devices on the LAN can open the same address in a browser to get the management UI — the same interface as the Docker / bare-metal Linux forms. **The desktop window itself never goes through web login** (there is no login page in the app): it authenticates with this machine's first gateway key, so flipping that switch never asks you to sign in from the desktop app. The web login page only appears when a browser opens the panel.
 
 ## 🐳 Docker Deployment
 
@@ -165,7 +180,30 @@ Environment variables (all optional):
 
 Build from source: clone the repo and run `docker compose up -d --build` (the image contains only the gateway and the panel, no Rust toolchain).
 
-**Web panel capability notes** (all stem from having no local desktop client): web login (WorkBuddy / Qoder / Cline), SMS codes and pasted credentials work fully; web logins that need a callback on this machine (AutoClaw / CatPaw / Accio / CodeArts / Trae) and "import desktop login state" are unavailable — use pasted credentials instead.
+**Web panel capability notes** (these apply to the Docker / bare-metal Linux forms, and stem from having no local desktop client): web login (WorkBuddy / Qoder / Cline), SMS codes and pasted credentials work fully; web logins that need a callback on this machine (AutoClaw / CatPaw / Accio / CodeArts / Trae) and "import desktop login state" are unavailable — use pasted credentials instead. A desktop app with "expose the web management panel" turned on shows the same differences in a browser: one interface, one set of rules.
+
+### In-container updates (optional)
+
+The panel's "Software update" page can download and apply updates from inside the container: it fetches `agent2api-server-linux-<arch>.tar.gz` from the official Release (verifying the `.sha256`), replaces the executable and `ui/`, then exits gracefully so the `restart` policy brings the same container back up. Controlled by `AGENT2API_SELF_UPDATE` (set to `1` in the Dockerfile); set it to `0` to upgrade manually only.
+
+Be aware of the trade-off: after an in-container update the image tag and the version actually running **drift apart** (`docker inspect` still reports the old tag), and `docker compose pull && up -d` rebuilds the container back to the version baked into the image. If you want pinned versions, leave this entry point off.
+
+## 🐧 Linux Bare Metal
+
+Skip Docker and run the same headless server directly on a Linux host (the published artifact is that tar.gz — the very same payload containers update from):
+
+```bash
+tar -xzf agent2api-server-linux-amd64.tar.gz     # extracts agent2api-server and ui/
+AGENT2API_PROXY_HOME=/var/lib/agent2api ./agent2api-server
+```
+
+Open `http://<host>:3065` in a browser; the first visit guides you through **registering an administrator account** (identical panel and flow to Docker).
+
+- **Contents and dependencies**: the `agent2api-server` executable plus a `ui/` static folder (the interface). Keep `ui/` next to the executable (or point at it with `AGENT2API_UI_DIR`); if it is missing the panel 404s while the API keeps working. The binary is about 13 MB, dynamically linked against glibc (built on Debian 12 / glibc 2.36, so it needs **glibc ≥ 2.34**, i.e. Debian 12+ / Ubuntu 22.04+), with no other runtime dependency besides `ca-certificates`.
+- **Architecture**: separate `amd64` and `arm64` archives — pick the one matching your host.
+- **Listens on `0.0.0.0` by default** (with the same safety gates as Docker: the management API needs an administrator or a key, and `/v1/*` fails closed without one). Set `AGENT2API_HOST=127.0.0.1` if you only want it on this machine.
+- **The same environment variables as Docker apply** (see the table above), except the ones the Dockerfile pre-sets (`AGENT2API_PROXY_HOME` / `AGENT2API_UI_DIR` / `AGENT2API_SELF_UPDATE` and friends) — set those yourself.
+- **Do not set `AGENT2API_SELF_UPDATE`**: bare metal has no container supervisor to bring the process back up, and the update path is "replace files, then exit". Exiting means the service stops. On bare metal, use systemd (or similar) for supervision and swap the binary manually.
 
 ## 📸 Screenshots
 
@@ -201,6 +239,7 @@ Trends: 24-hour **cache hit rate** (line) and **token consumption** (area) on tw
 
 - Rust >= 1.77 and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
 - Node.js >= 18.17 (only to run `npm run tauri:*` and frontend build scripts; the desktop app does not depend on Node at runtime)
+- Target platforms: Windows and macOS desktops, Linux and Docker servers (**there is no Linux desktop app**: the Tauri bundle only configures Windows NSIS and macOS app/dmg — on Linux you run the headless server plus its web panel)
 
 ### Common scripts
 
@@ -213,6 +252,8 @@ npm run build:icon         # Generate the icon source image (run after changing 
 ```
 
 The build artifact is `target/release/bundle/nsis/Agent2API_<version>_x64-setup.exe` (currently about 3.0 MB; `src-tauri/.cargo/config.toml` points cargo's `target-dir` at the project root's `target/`).
+
+The macOS `.dmg` **can only be built on macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — it cannot be cross-compiled from Windows, so the official artifact comes from the CI `build` workflow (`macos-latest`, two targets merged). Docker images and the Linux server archives come from the same workflow's `linux-server` job, which reuses the Dockerfile's compile path so the archives are built from the same toolchain as the images.
 
 ## 📜 Usage Notice
 

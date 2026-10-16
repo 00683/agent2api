@@ -102,14 +102,6 @@ export const PROVIDER_ICONS: Record<string, string> = {
 }
 
 /**
- * 新接入、尚在观察期的家：添加账号页的卡片名字后跟一枚 `(beta)`（由
- * `ProviderCard` 渲染）。它只是**入口页的提示**，不是家本身的属性 ——
- * 账号表徽章、模型管理页都不跟着变；判据是「转发通道刚上线」，
- * 观察期结束后从这张表里删掉即可。
- */
-const BETA_PROVIDERS = new Set(['monkeycode', 'monkeycode-intl', 'commandcode', 'antigravity'])
-
-/**
  * Agent 段**不露出添加入口**的内置家（精确匹配 provider id）。目前只有
  * `cline-pass`：
  *   ① 它支持 API Key 形态（与 OAuth token 走同一个 Bearer 头），添加入口已迁到
@@ -129,7 +121,6 @@ type CardItem = {
   count: number
   preset?: boolean
   custom?: boolean
-  beta?: boolean
   /** 预置卡专用：该模板已建过的同名自定义家 id（空串 / 缺省 = 还没建过） */
   builtId?: string
 }
@@ -175,7 +166,7 @@ function providerCards(accountType: AccountType): CardItem[] {
       }))
   }
   // Cline Pass 的添加入口不在这一段（判据与缘由见 HIDDEN_AGENT_PROVIDERS）：
-  // 在映射成卡片之前就把摘要里那条剔掉，后面的名字 / beta 处理都不必再想它。
+  // 在映射成卡片之前就把摘要里那条剔掉，后面的名字处理都不必再想它。
   // 过滤只落在**本函数**（PickStep 的列表构造）上：账号页分组带 / 模型管理页
   // 读的是同一份 providers 摘要，但各自有自己的列表构造（accounts-domain 的
   // providerSummaries、models-page 的左栏），不经过这里，所以存量 cline-pass
@@ -202,7 +193,6 @@ function providerCards(accountType: AccountType): CardItem[] {
         id,
         label: labelOf(id, String(item.label || item.id || '')),
         count: Number(item.count) || 0,
-        beta: BETA_PROVIDERS.has(id),
       }
     })
     : [{ id: WORKBUDDY_PROVIDER, label: WORKBUDDY_ENTRY_LABEL, count: accountCountOf(WORKBUDDY_PROVIDER) }]
@@ -267,10 +257,7 @@ function ProviderCard({ item, onPick }: { item: CardItem; onPick: (id: string) =
     >
       <Logo item={item} />
       <span className='add-provider-info'>
-        <span className='add-provider-name'>
-          {item.label}
-          {item.beta ? <span className='add-provider-beta'>(beta)</span> : null}
-        </span>
+        <span className='add-provider-name'>{item.label}</span>
         <span className='add-provider-meta'>{cardMeta(item)}</span>
       </span>
       <span className='add-provider-go'>›</span>
