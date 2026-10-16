@@ -4,33 +4,53 @@
 
 **여러 AI 데스크톱 클라이언트의 로그인 상태를 하나의 로컬 OpenAI 호환 API 게이트웨이로**
 
-[简体中文](./README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | **한국어** | [Português (BR)](./README.pt-BR.md)
+[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | **한국어** | [Português (BR)](./README.pt-BR.md)
 
-[![license](https://img.shields.io/badge/license-MIT%20%2B%20고지-green)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT%20%2B%20고지-green)](../LICENSE)
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 핵심 기능](#-핵심-기능) • [🤝 지원 공급자](#-지원-공급자) • [🚀 빠른 시작](#-빠른-시작) • [🐳 Docker 배포](#-docker-배포) • [📸 화면 미리보기](#-화면-미리보기) • [🔧 개발 및 빌드](#-개발-및-빌드) • [📜 사용 고지](#-사용-고지)
+[✨ 핵심 기능](#-핵심-기능) • [💬 커뮤니티 및 지원](#-커뮤니티-및-지원) • [🤝 지원 공급자](#-지원-공급자) • [🚀 빠른 시작](#-빠른-시작) • [🐳 Docker 배포](#-docker-배포) • [📸 화면 미리보기](#-화면-미리보기) • [🔧 개발 및 빌드](#-개발-및-빌드) • [📜 사용 고지](#-사용-고지)
 
 </div>
 
 ---
 
-하나의 `base_url`로 멀티 프로바이더 계정 관리, 모델 관리, 이그레스 프록시, 요청 리포트를 제공하고 바로 쓸 수 있는 Tauri 데스크톱 앱도 함께 제공합니다. 사용자 지정 `base_url`을 지원하는 OpenAI 클라이언트라면 무엇이든 `http://127.0.0.1:3065/v1`로 이들 각 사의 모델 한도를 호출할 수 있습니다 — **업스트림 API 키도 필요 없고, 클라이언트 수정도 필요 없습니다**.
+Agent2API는 여러 AI 데스크톱 클라이언트에 로그인된 계정을 하나로 모아 OpenAI 호환 엔드포인트로 쓸 수 있게 합니다. 사용자 지정 `base_url`을 지원하는 클라이언트에 `http://127.0.0.1:3065/v1`을 넣으면 이 계정들의 모델 한도를 그대로 호출할 수 있습니다 — **업스트림 API 키도, 클라이언트 수정도 필요 없습니다**.
 
 ## ✨ 핵심 기능
 
-- 🔌 **OpenAI 호환 엔드포인트** — `/v1/chat/completions`, `/v1/responses`, `/v1/messages`(`count_tokens` 포함)와 `/v1/models`를 하나의 게이트웨이로 제공. 어떤 클라이언트든 그대로 연결됩니다
-- 🏪 **내장 공급자 17개 사** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce(일부는 중국판 / 국제판 2종)에 더해 사용자 지정 패스스루 공급자(Chat / Responses / Anthropic)도 지원
-- 🔁 **자격 증명 완전 자동 관리** — 토큰 자동 갱신(싱글플라이트 중복 제거), 만료 임박 자격 증명 일괄 갱신, 모델 카탈로그 원격 갱신 + 정적 폴백
-- 🪂 **안정적인 전달** — 전역 우선순위 계정 큐, 모델별 한도 쿨다운, 429 자동 폴백, 결정적 실패는 빈 대기 없이 즉시 건너뜀
-- 🛡️ **보안과 마스킹** — 이그레스 프록시, 아웃바운드 핑거프린트 마스킹, 다중 게이트웨이 키, fail-closed, 로그인 사람 확인
-- 📊 **요청 리포트** — 요청 수 / 성공률 / 토큰 총량, 24시간 캐시 적중률과 소비 추세, 상위 모델과 계정, 365일 활동 히트맵
-- ⏰ **예약 작업** — 자동 출석, 자격 증명 유지 관리, 모델 카탈로그 갱신 등 백그라운드 작업을 켜기/끄기 · 간격 · 지난 결과로 한 페이지에서 관리
-- 💰 **잔액이 한눈에** — 계정 행 안의 잔액 / 사용량 표시, 계정 횡단 동시 조회와 정기 스냅샷
-- 🖥️ **두 가지 배포 형태** — Tauri 데스크톱 앱(트레이 상주, Node 런타임 불필요) / Docker headless(패널 + 게이트웨이 같은 포트). 패널 UI는 6개 언어 지원
+- 🔌 **OpenAI 호환** —— 클라이언트에 `base_url`만 넣으면 바로 사용. Chat / Responses / Messages 세 가지 프로토콜 모두 지원
+- 🏪 **내장 공급자 17곳** —— WorkBuddy, 小浣熊, CatPaw, Qoder, Trae 등 바로 사용 가능하며 사용자 지정 공급자도 지원
+- 🔁 **자격 증명 자동 갱신** —— 토큰은 만료 전 자동 교체, 만료 임박분은 일괄 갱신, 모델 카탈로그도 함께 최신화
+- 🪂 **다중 계정 로테이션** —— 우선순위대로 큐잉, 429는 다음 계정으로, 한도 쿨다운 중엔 기다리지 않고 건너뜀
+- 🛡️ **아웃바운드 프록시** —— 계정마다 전용 출구 IP 지정, 아웃바운드 핑거프린트는 공식 클라이언트로 위장
+- 🔑 **게이트웨이 보안** —— 권한별 다중 게이트웨이 키, 로그인 사람 확인, 키 미설정 시 기본 거부
+- 📊 **요청 리포트** —— 요청량·성공률·토큰 소비를 한눈에, 캐시 적중률과 365일 히트맵 포함
+- ⏰ **예약 작업** —— 자동 출석, 자격 증명 유지보수, 모델 카탈로그 갱신을 한 페이지에서 관리
+- 💰 **잔액과 사용량** —— 계정 행에서 바로 잔액과 사용량 표시, 계정 간 동시 조회 지원
+- 🖥️ **두 가지 실행 방식** —— 트레이 상주 데스크톱 앱(Node 불필요) 또는 패널·게이트웨이가 같은 포트를 쓰는 Docker. UI 6개 언어
+
+## ❤️ 스폰서
+
+<a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><img src="../assets/sponsor-proxylane.png" alt="ProxyLane(스폰서)" width="100%" /></a>
+
+<table>
+
+<tr>
+<td width="240"><a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/proxylane-logo-for-dark-bg.png" /><img src="../assets/proxylane-logo-for-light-bg.png" alt="ProxyLane" width="220" /></picture></a></td>
+<td><a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme">ProxyLane</a>가 이 프로젝트를 후원합니다! ProxyLane은 AI 계정 전용 네이티브 정적 주거용 IP(Static Residential ISP)를 제공합니다. 실제 가정용 브로드밴드 사업자의 IP를 사용하며 Scamalytics 사기 점수가 낮고, IP는 1개씩 전용, 트래픽 무제한, $3.90부터. "네트워크 프록시" 페이지에서 계정마다 출구 하나를 지정하면 됩니다. 첫 구매 시 코드 <code>AGENT2API25</code>로 25% 할인됩니다.</td>
+</tr>
+
+</table>
+
+## 💬 커뮤니티 및 지원
+
+- **QQ 그룹**: Agent2API 교류 그룹, 그룹 번호 `1127656296`(QQ에서 번호를 검색해 참여하세요). 질문과 피드백은 그룹에서 환영합니다.
+- **💖 후원**: Agent2API가 도움이 되셨다면 [작성자에게 커피 한 잔](./SPONSOR.md)도 환영합니다. 후원은 자발적이며 아무 기능도 해제되지 않습니다.
+- **🤝 스폰서 / 비즈니스**: 프로젝트를 후원하거나 여기에 제품을 소개하고 싶다면 [541675139@qq.com](mailto:541675139@qq.com)으로 메일 주세요.
 
 ## 🤝 지원 공급자
 
@@ -38,28 +58,30 @@
 
 | 플랫폼 | LLM 요청 | 토큰 자동 갱신 | 모델 목록 | 잔액 조회 | 출석 | 수령 항목 |
 | --- | :--: | :--: | :--: | :--: | :--: | :--: |
-| WorkBuddy 중국판 | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ | ✓ 일일 출석 | — |
-| WorkBuddy 국제판 | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ | ✗ 출석 이벤트 없음 | — |
-| 小浣熊 | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ | ✓ 데스크톱 로그인 포인트 | — |
-| CatPaw | ✓ | ✗ 갱신 수단 없음 | ✓ 원격 + 정적 폴백 | ✓ | ✗ | — |
-| AutoClaw(중국판 / 국제판) | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ | ✓ 일일 출석 | — |
-| Qoder | ✓ | ✓ | ✓ 원격(지역별) + 정적 폴백 | ✓ | ✓ 중국판만 | — |
-| Cline(Free / Pass) | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ | — | — |
-| Accio(국제판 / 중국판) | ✓ | ✓ | ✓ 원격 + 정적 폴백 | ✓ 사용률만 | — | — |
-| ZCode(중국판 / 국제판) | ✓ | ✗ | ✗ 정적 목록 | ✓ 플랜 잔액 | — | ✓ 기간 한정 플랜(수동) |
-| CodeArts | ✓ | ✓ 원샷 로테이션 | ✓ 원격(3개 소스 병합) | ✓ 두 개의 장부 | — | ✓ 일일 보너스(수동) |
-| Trae | ✓ | ✓ 매회 교체 | ✓ 원격만 | ✓ 두 개의 장부 | — | — |
-| Loomy(iFlytek) | ✓ | ✗ 갱신 API 없음 | ✓ 원격만 | ✓ 두 개의 포인트 장부 | ✓ 일일 지급 포인트 갱신 | — |
-| KukuAI(Baidu Wenku) | ✓ | ✗ 갱신 API 없음 | ✓ 원격 + 정적 폴백 | ✓ 포인트 잔액 | ✓ 일일 출석(무료 포인트) | — |
-| MonkeyCode(长亭科技, 중국판 / 국제판) | ✓ | ✗ 갱신 API 없음 | ✓ 원격만 | — | — | — |
-| Command Code | ✓ | ✗ 정적 API 키 | ✓ 원격 + 정적 폴백 | — | — | — |
-| Antigravity(Google, Gemini) | ✓ | ✓ | ✓ 원격 + 정적 폴백 | — | — | — |
-| OfficeAce(Huawei Cloud, OfficeClaw) | ✓ | ✓ 제어 영역 자동 갱신 | ✓ 원격만 | ✓ 포인트 잔액 | ✓ 일일 보너스(출석 + 신규 혜택) | — |
-| 사용자 지정 프로바이더 | ✓ Chat 패스스루 / Responses / Anthropic | — | ✓ 수동 등록 + 서버 측 가져오기 | — | — | — |
+| WorkBuddy 중국판 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| WorkBuddy 국제판 | ✓ | ✓ | ✓ | ✓ | ✗ | — |
+| 小浣熊 | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| CatPaw | ✓ | ✗ | ✓ | ✓ | ✗ | — |
+| AutoClaw(중국판 / 국제판) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Qoder | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Cline(Free / Pass) | ✓ | ✓ | ✓ | ✓ | — | — |
+| Accio(국제판 / 중국판) | ✓ | ✓ | ✓ | ✓ | — | — |
+| ZCode(중국판 / 국제판) | ✓ | ✗ | ✗ | ✓ | — | ✓ |
+| CodeArts | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Trae | ✓ | ✓ | ✓ | ✓ | — | — |
+| Loomy(iFlytek) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| KukuAI(Baidu Wenku) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| MonkeyCode(长亭科技, 중국판 / 국제판) | ✓ | ✗ | ✓ | — | — | — |
+| Command Code | ✓ | ✗ | ✓ | — | — | — |
+| Antigravity(Google, Gemini) | ✓ | ✓ | ✓ | — | — | — |
+| OfficeAce(Huawei Cloud, OfficeClaw) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| 사용자 지정 프로바이더 | ✓ | — | ✓ | — | — | — |
+
+> 참고: 모델 목록의 ✓는 온라인 자동 가져오기를 지원한다는 뜻입니다(일부 플랫폼은 내장 정적 목록도 함께 사용). ZCode는 내장 정적 목록만 제공합니다. 토큰 자동 갱신의 ✗는 해당 플랫폼에 사용 가능한 갱신 수단이 없다는 뜻입니다(계정은 자격 증명이 유효한 동안 정상적으로 사용 가능). Qoder 출석은 중국판에서만 지원됩니다.
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages`(`count_tokens` 포함)와 `/v1/models`는 모든 플랫폼에 동일하게 적용됩니다. 모델 매핑, 전역 우선순위 큐, 429 폴백, 이그레스 프록시, 아웃바운드 핑거프린트 마스킹, 요청 리포트 역시 전 플랫폼 공통입니다.
 
-> **이 프로젝트는 학습과 교류 목적으로만 제공됩니다.** 비공식 클라이언트 형태로 자신의 계정 로그인 상태를 재사용하므로 업스트림 서비스 약관에 부합하지 않을 수 있습니다. 위험(계정 정지 등 포함)은 사용자가 부담하며, 상업적 사용과 과금 우회는 금지됩니다. 자세한 내용은 [사용 고지](#-사용-고지)와 [LICENSE](./LICENSE)를 참고하세요.
+> **이 프로젝트는 학습과 교류 목적으로만 제공됩니다.** 비공식 클라이언트 형태로 자신의 계정 로그인 상태를 재사용하므로 업스트림 서비스 약관에 부합하지 않을 수 있습니다. 위험(계정 정지 등 포함)은 사용자가 부담하며, 상업적 사용과 과금 우회는 금지됩니다. 자세한 내용은 [사용 고지](#-사용-고지)와 [LICENSE](../LICENSE)를 참고하세요.
 >
 > 이 프로젝트는 개인용 로컬 프록시 도구로, 각 업스트림 벤더 및 공식 제품과 아무런 관련이 없습니다(목록은 [사용 고지](#-사용-고지) 참고). 인터페이스 형태는 각 사 클라이언트 통신을 관찰한 것이며 업스트림은 언제든 바뀔 수 있습니다.
 
@@ -143,211 +165,35 @@ services:
 
 소스에서 빌드하려면: 이 저장소를 클론한 뒤 `docker compose up -d --build`(이미지에는 게이트웨이와 패널만 들어가며 Rust 도구 체인은 포함되지 않습니다).
 
-<details>
-<summary><b>업그레이드와 롤백</b> (펼치기)</summary>
-
-**패널에서 바로 업그레이드**: 설정 → 소프트웨어 업데이트 → 업데이트 확인 후 새 버전이 보이면 "다운로드 후 업데이트"를, 패키지 내려받기가 끝나면 "설치 후 재시작"을 누릅니다. 서버는 sha256을 검증하고 컨테이너 안의 실행 파일과 UI 파일을 교체한 뒤 프로세스를 재시작합니다 — 컨테이너는 `restart: unless-stopped`에 의해 다시 뜨고(같은 컨테이너, 데이터 볼륨은 그대로) 페이지는 몇 초 뒤 자동으로 새로고침됩니다. 이전 버전으로 돌아가려면 같은 패널의 "이전 버전으로 롤백"을 사용하세요(업데이트 때 남긴 백업을 복원합니다).
-
-알아둘 세 가지:
-
-- **업데이트되는 것은 컨테이너 안의 파일이지 로컬 이미지가 아닙니다**: compose의 `image:` 태그는 그대로이고 `docker inspect`는 여전히 이전 태그를 표시합니다. 이후 `docker compose pull && docker compose up -d`(컨테이너 재생성)를 하면 이미지의 버전으로 돌아갑니다. 양쪽을 맞추려면 업그레이드 후 compose의 태그를 새 버전 번호로 바꾸고 `docker compose pull && up -d`를 한 번 더 실행하세요.
-- 업데이트 창구는 컨테이너 안에서만 나타납니다(`AGENT2API_SELF_UPDATE=1`, 이미지에 기본 설정됨). `0`으로 두면 아래의 수동 방식으로 돌아갑니다.
-- 패키지는 GitHub Release에서 가져옵니다(`agent2api-server-linux-<arch>.tar.gz` + 같은 이름의 `.sha256`). 다운로드는 "업데이트 설정"에서 구성한 이그레스 경로(업데이트 확인과 공유)를 사용합니다. 국내에서 직접 접속이 원활하지 않으면 거기서 프록시를 지정하거나 GitHub 토큰을 채우세요.
-
-**수동 업그레이드**(어떤 배포 형태에도 적용):
-
-```bash
-# compose(이 저장소의 compose를 쓰는 경우)
-docker compose pull && docker compose up -d
-
-# docker run: 새 이미지를 받아 컨테이너를 다시 만들기(데이터는 ./data 볼륨에 그대로)
-docker pull aimodcc/agent2api:latest
-docker rm -f agent2api
-# 위의 "docker run" 명령을 다시 실행
-```
-
-소스에서 빌드한 경우: `git pull && docker compose up -d --build`.
-
-</details>
-
 **웹 패널 기능 차이**(이 PC에 데스크톱 클라이언트가 없음에서 비롯됩니다): 웹 로그인(WorkBuddy / Qoder / Cline), SMS 인증 코드, 자격 증명 붙여넣기는 완전히 사용 가능합니다. 이 PC 콜백이 필요한 웹 로그인(AutoClaw / CatPaw / Accio / CodeArts / Trae)과 "이 PC 로그인 상태 가져오기"는 사용할 수 없으니 자격 증명 붙여넣기를 쓰세요.
 
 ## 📸 화면 미리보기
 
 ### 계정
 
-모든 계정이 하나의 큐에 있고(왼쪽에서 두 번째 열이 우선순위) 개별로 켜고 끌 수 있습니다. 한도 쿨다운·유효기간·잔액은 행 안에 표시되고, 잔액 부족은 기본적으로 임계값 미만이면 건너뜁니다.
+![계정 관리 페이지: 전역 큐, 모델별 한도 쿨다운, 유효기간과 잔액](../assets/screenshots/accounts.png)
 
-![계정 관리 페이지: 전역 큐, 모델별 한도 쿨다운, 유효기간과 잔액](./assets/screenshots/accounts.png)
+계정 추가:
 
-프로바이더를 고르고 로그인하면 끝. 같은 프로바이더의 여러 버전 계정을 보관할 수 있습니다(예: WorkBuddy 중국판 / 국제판):
+![계정 추가: 프로바이더와 버전을 고른 뒤 웹 로그인](../assets/screenshots/add-account.png)
 
-![계정 추가: 프로바이더와 버전을 고른 뒤 웹 로그인](./assets/screenshots/add-account.png)
+### 모델 관리
+
+![모델 관리 페이지: 공급자별 모델 목록, 배율, 컨텍스트 및 모델 매핑](../assets/screenshots/models.png)
 
 ### 리포트
 
 개요: 요청 수 / 성공률 / 토큰 / 상위 모델과 계정·프로바이더 순위, 사용량 도넛과 365일 활동 히트맵:
 
-![리포트 개요: 통계 카드, 상위 계정 / 프로바이더, 모델별·프로바이더별 도넛](./assets/screenshots/report-overview.png)
+![리포트 개요: 통계 카드, 상위 계정 / 프로바이더, 모델별·프로바이더별 도넛](../assets/screenshots/report-overview.png)
 
 추세: 24시간 **캐시 적중률**(선)과 **토큰 소비**(면)를 이중 축으로 겹쳐 표시, 아래에 일별 토큰 막대 차트:
 
-![리포트 추세: 캐시 적중률과 토큰 소비 이중 축 추세, 일별 토큰 막대 차트](./assets/screenshots/report-trends.png)
+![리포트 추세: 캐시 적중률과 토큰 소비 이중 축 추세, 일별 토큰 막대 차트](../assets/screenshots/report-trends.png)
 
-### 예약 작업
+### 출석 체크 센터
 
-백그라운드 작업은 이 페이지에 모여 있습니다(켜기/끄기 · 간격 / 지난 결과 / 지금 실행). 목록은 `~/.agent2api/config.json`의 `scheduledTasks`에 저장되고 변경은 즉시 반영됩니다.
-
-![예약 작업 페이지: 자동 출석, 자격 증명 유지 관리, 모델 카탈로그 갱신 등 백그라운드 작업의 켜기/끄기와 간격](./assets/screenshots/scheduled-tasks.png)
-
-## 🧱 프로젝트 구조
-
-백엔드는 `src-tauri/` 아래의 Rust 인프로세스 HTTP 서버이고, 프런트엔드는 `ui/` 아래의 순수 HTML/CSS/JS입니다.
-
-<details>
-<summary>전체 디렉터리 트리 (펼치기)</summary>
-
-```
-agent2api/
-├─ desktop-tauri/
-│  ├─ src-tauri/
-│  │  ├─ server/                 게이트웨이 본체 crate(agent2api-server, 단독 빌드 가능:
-│  │  │                          데스크톱판과 headless 바이너리가 공유. src/server/ 의
-│  │  │                          구현과 bin/agent2api-server.rs 에 GUI 의존 없음)
-│  │  │  ├─ mod.rs               서비스 조립: ServerState, 시작, 종료, 시작 시 마이그레이션
-│  │  │  ├─ http.rs              라우트 테이블, CORS, API 키 미들웨어, body 제한, headless 정적 호스팅
-│  │  │  ├─ config.rs / logging.rs / logs_store.rs / errors.rs
-│  │  │  ├─ config_migration.rs  1.x 설정 디렉터리 마이그레이션(~/.workbuddy-proxy → ~/.agent2api, 시작 첫 단계)
-│  │  │  ├─ request_stats.rs + request_stats/   통계의 시간 창, 기록, 집계, 정리
-│  │  │  ├─ core/
-│  │  │  │  ├─ providers/        ★ 멀티 프로바이더 계층(이번 개편의 핵심)
-│  │  │  │  │  ├─ mod.rs        ProviderKind(내장 각 사. Cline은 할당량 풀로 2개, Accio와
-│  │  │  │  │  │                ZCode는 지역으로 2개로 분리) + PROVIDERS 레지스트리 + id 상호 조회
-│  │  │  │  │  ├─ adapter.rs    ProviderAdapter trait + adapter_for + implemented_kinds
-│  │  │  │  │  ├─ router.rs     모델 이름 → 후보 프로바이더 집합(집계 카탈로그)
-│  │  │  │  │  ├─ catalog.rs    집계 모델 카탈로그(목록 병합 / 동명 중복 제거 / 가용성 판정)
-│  │  │  │  │  ├─ catalog_cache.rs  각 사 원격 목록의 영속 캐시(재시작 후 읽어오며 내장 목록으로 되돌아가지 않음)
-│  │  │  │  │  ├─ refresh_flight.rs  자격 증명 갱신의 싱글플라이트 중복 제거
-│  │  │  │  │  ├─ workbuddy.rs  WorkBuddy 어댑터(헤더 집합 / system 주입 / 6004 / 11-128)
-│  │  │  │  │  ├─ raccoon/      小浣熊: mod / models / credentials / jwt / oauth / balance
-│  │  │  │  │  ├─ catpaw/       CatPaw: adapter(is_stateful) / conversation(턴 상태 기계) /
-│  │  │  │  │  │                turn_executor / prepare / decision(턴 판정) / fingerprint /
-│  │  │  │  │  │                registry/(세션 레지스트리: 테이블과 핸들 / 계정 동일성 / 무효화) /
-│  │  │  │  │  │                messages / blocks / tools / openai(번역 계층) /
-│  │  │  │  │  │                upstream_http / image_compress / models / credentials / balance
-│  │  │  │  │  ├─ autoclaw/     Zhipu autoglm(중국판 + 국제판 2개 사): region(양 지역 도메인과 동일성) /
-│  │  │  │  │  │                adapter / credentials / refresh / crypto / models /
-│  │  │  │  │  │                balance / login(SMS 인증 코드, 중국판만) /
-│  │  │  │  │  │                oauth(Zai / Google 웹 로그인, 국제판만) / checkin(일일 출석 작업)
-│  │  │  │  │  ├─ qoder/        Qoder: adapter / endpoints(두 사이트 주소) / oauth(기기 인증) /
-│  │  │  │  │  │                auth / cosy(COSY 서명과 body 인코딩) / protocol(엔벨로프 디코딩) /
-│  │  │  │  │  │                chat(세션 방식 전달) / stream / machine(PKCE와 기기 식별) /
-│  │  │  │  │  │                credentials / refresh / models / balance / risk(UMID 리스크 관리 구성요소)
-│  │  │  │  │  ├─ cline/        Cline: adapter(Bearer + 제품면 헤더) / credentials(workos: 접두사
-│  │  │  │  │  │                + 데스크톱 로그인 상태 + 이름 파싱) / login(WorkOS 기기 인증) /
-│  │  │  │  │  │                refresh(싱글플라이트 갱신) / models(두 할당량 풀 + 기본 매핑 시드) /
-│  │  │  │  │  │                balance(credit 잔액, 마이크로 credit ÷1e6)
-│  │  │  │  │  ├─ accio/        Accio(국제판 + 중국판 2개 사): endpoints(두 지역과 엔드포인트) /
-│  │  │  │  │  │                credentials / auth / refresh(싱글플라이트 갱신) /
-│  │  │  │  │  │                oauth(PKCE 웹 로그인 + loopback 콜백) /
-│  │  │  │  │  │                models(정적 폴백 + /api/llm/config/v2) /
-│  │  │  │  │  │                protocol(OpenAI ↔ ADK의 Gemini 스타일 엔벨로프) /
-│  │  │  │  │  │                chat(세션 방식 전달) / stream(ADK SSE 풀기) / balance
-│  │  │  │  │  ├─ zcode/        ZCode(Zhipu Z.AI, 중국판 + 국제판 2개 사): region(두 지역 도메인과 동일성) /
-│  │  │  │  │  │                adapter(무상태, 지역별 파라미터화) / credentials(토큰 + 플랜 JWT) /
-│  │  │  │  │  │                oauth(CLI 폴링 로그인) / coding_key(추론용 API 키 교환) / models(정적 테이블) /
-│  │  │  │  │  │                balance(플랜 잔액) / plan + claim(플랜 채널과 기간 한정 수령) /
-│  │  │  │  │  │                captcha(사람 확인 토큰 풀) / reasoning(GLM-5.3 사고 예산) /
-│  │  │  │  │  │                zcode_system.json(시스템 프롬프트)
-│  │  │  │  │  ├─ codearts/     CodeArts(Huawei Cloud): signer(Huawei Cloud SDK-HMAC-SHA256,
-│  │  │  │  │  │                참조 구현과 바이트 단위 대조) / credentials / dpop(ES256 DPoP proof) /
-│  │  │  │  │  │                oauth(PKCE 웹 로그인 + loopback 콜백) / refresh(싱글플라이트 갱신) /
-│  │  │  │  │  │                session(chat-session 하트비트와 계정별 동시 입장 제어) / chat(세션 방식 전달) /
-│  │  │  │  │  │                stream_fault(HTTP 200 내부의 스트림 오류 엔벨로프) / redact(오류 본문 마스킹) /
-│  │  │  │  │  │                models(agent / builtin / 복지 게이트웨이 3소스 병합) /
-│  │  │  │  │  │                balance(구독 통계 + 복지 게이트웨이 두 장부) /
-│  │  │  │  │  │                welfare(일일 보너스 수령: 멱등 키를 먼저 저장하고 재조회로 이중 확인)
-│  │  │  │  │  ├─ trae/         Trae(ByteDance AI IDE SOLO 채널): credentials / device(기기 키 쌍) /
-│  │  │  │  │  │                login + oauth(PKCE 웹 로그인 + 토큰 교환 후보) / callback_server
-│  │  │  │  │  │                (이 PC의 임의 포트 콜백과 노이즈 필터) / refresh(싱글플라이트 갱신) /
-│  │  │  │  │  │                payload(SOLO 엔벨로프를 화이트리스트로 재구성) / headers(SOLO 헤더 집합) /
-│  │  │  │  │  │                stream(SSE→chunk 번역) / forward(상태 기반 전달) /
-│  │  │  │  │  │                errors(오류 분류와 죽은 설정 목록) / models(get_detail_param 카탈로그) /
-│  │  │  │  │  │                usage(혜택 팩 + 플랜 quota 두 장부) / profile(동일성 파싱)
-│  │  │  │  │  ├─ loomy/        Loomy(iFlytek): login(SMS 인증 코드) / credentials(session 14일, 갱신 API 없음) /
-│  │  │  │  │  │                sign(클라이언트의 HMAC-SHA1 서명 헤더 복제) / endpoints / client(통합 게이트웨이) /
-│  │  │  │  │  │                models(/api/v1/models 원격 카탈로그만, 업스트림에 내장 폴백 목록 없음) /
-│  │  │  │  │  │                balance(영구 포인트 + 일일 지급 두 장부) / checkin(그날 첫 로그인 시 지급 포인트 갱신)
-│  │  │  │  │  ├─ kuku/         KukuAI(Baidu Wenku "Kuku AI / GenFlowPro", kuku.baidu.com):
-│  │  │  │  │  │                adapter(is_stateful) / session(bdstoken/uinfo/uk 3종 캐시) /
-│  │  │  │  │  │                engine(STOKEN 교환) / http / login(본사이트 웹 로그인 + 셸 측 Cookie 수집) /
-│  │  │  │  │  │                credentials(BDUSS Cookie) / models(정적 폴백 + 원격 갱신) /
-│  │  │  │  │  │                chat(세션 생성 → 연산 할당 → SSE) / balance(포인트 잔액) /
-│  │  │  │  │  │                checkin(일일 무료 포인트)
-│  │  │  │  │  ├─ monkeycode/   MonkeyCode(长亭科技, 중국판 + 국제판 2개 사): region(두 사이트 도메인과 동일성) /
-│  │  │  │  │  │                adapter / endpoints(경로 / cookie 이름 / interface_type→CLI 매핑) /
-│  │  │  │  │  │                client / credentials(session + imageId) / login(session 붙여넣기와 자동 탐색) /
-│  │  │  │  │  │                models(두 사이트 각 한 칸 목록, 원격만) / task(작업 생성) / stream(WS 작업 스트림) /
-│  │  │  │  │  │                translate(ACP 이벤트 → chat 프레임. 도구 자동 승인과 질문 자동 응답 포함)
-│  │  │  │  │  ├─ commandcode/  Command Code: adapter / endpoints / credentials / login /
-│  │  │  │  │  │                fingerprint(결정적 기기 핑거프린트와 8h 보고) / models /
-│  │  │  │  │  │                plan(8키 엔벨로프와 params 재작성, session id 파생)
-│  │  │  │  │  ├─ antigravity/  Antigravity(Google, Gemini): oauth(refresh token 갱신 + 싱글플라이트) /
-│  │  │  │  │  │                project(loadCodeAssist → onboardUser 탐색) / credentials /
-│  │  │  │  │  │                endpoints(3개 환경 베이스와 헤더 집합) / login /
-│  │  │  │  │  │                models(fetchAvailableModels + 내장 폴백 + 업스트림 실제 이름 매핑) / adapter
-│  │  │  │  │  └─ officeace/    OfficeAce(Huawei Cloud, OfficeClaw): oauth(PKCE + P-256 DPoP 셀프 서비스 로그인)/
-│  │  │  │  │                   signer(SDK-HMAC 과 V11-HMAC 두 가지 서명 + 벡터 픽스처)/
-│  │  │  │  │                   credentials(게이트웨이 Basic + 제어 영역 임시 AK/SK)/
-│  │  │  │  │                   chat(무상태 OpenAI 호환)/ models(원격 목록 + 모델별 배율)/
-│  │  │  │  │                   probe(사용 가능성 프로브. 연결되지 않는 모델은 기본 숨김)/
-│  │  │  │  │                   subscription(구독 / 할당량 / 보상)/ onboarding / checkin / balance
-│  │  │  │  ├─ protocol/        프로토콜 변환 계층(각 사 wire ↔ 표준 chat SSE 요청/응답 번역:
-│  │  │  │  │                    Anthropic Messages / Responses / NDJSON(Command Code) /
-│  │  │  │  │                    Gemini 엔벨로프(Antigravity), 그리고 도구 plan 과 기록 복구)
-│  │  │  │  ├─ upstream/        전달 오케스트레이션: 전역 계정 큐 루프(provider_loop) + 전송 본문 처리
-│  │  │  │  │                    (payload) + SSE 패스스루/집계 + usage 바이패스 추출 + 비 chat 프로토콜의
-│  │  │  │  │                    번역 스트림 연결(translate: Anthropic / NDJSON / Gemini 3계통)
-│  │  │  │  ├─ account_store/   계정 저장(전역 우선순위, 한도 쿨다운, 각 사 추가와 가져오기)
-│  │  │  │  ├─ models/          모델 카탈로그 기반(workbuddy 내장 목록 + /v3/config 갱신)
-│  │  │  │  ├─ model_rules.rs   모델 관리 규칙(비활성화 / 숨김 / 매핑 alias)
-│  │  │  │  ├─ api_keys.rs      게이트웨이 키 목록(여러 키, 활성화된 것이 하나라도 있으면 통과)
-│  │  │  │  ├─ auth.rs / auth_http.rs / login.rs   세션, 이그레스 전송, 헤드리스 로그인
-│  │  │  │  │                    (login/ 아래는 각 사 고유 로그인 흐름: catpaw 의
-│  │  │  │  │                    loopback 콜백, qoder 의 기기 인증)
-│  │  │  │  ├─ routing.rs / billing/   계정 경로 선택(전역 우선순위 + 한도 쿨다운) / 포인트 출석 운영
-│  │  │  │  ├─ proxies.rs / clash.rs / egress.rs   이그레스 프록시와 출구별 캐시 Client
-│  │  │  │  ├─ sanitize.rs      아웃바운드 핑거프린트 마스킹(하드코딩 규칙 집합: 헤더 제거 + 템플릿 문장 최소 재작성)
-│  │  │  │  ├─ prompt.rs        게이트웨이 자체 시스템 프롬프트(패스스루 / 교체 / 추가 3모드)
-│  │  │  │  ├─ degrade.rs       콘텐츠 차단 열화 상태 기계(심사 오탐에 걸리면 다음 날 00:00까지 중립 프롬프트)
-│  │  │  │  ├─ credential_maintenance.rs  만료 / 만료 임박 자격 증명의 일괄 갱신
-│  │  │  │  ├─ usage_query.rs     잔액 / 포인트 조회(계정 횡단 동시 실행 + 정기 실행 회차의 스냅샷)
-│  │  │  │  ├─ scheduled_tasks.rs  간격형 예약 작업 레지스트리와 디스패치 루프(켜기 / 끄기 / 간격 /
-│  │  │  │  │                      지난 결과. 설정은 config.json 의 scheduledTasks)
-│  │  │  │  └─ account_transfer.rs + account_transfer/ / auto_checkin.rs / update/
-│  │  │  │                       가져오기/내보내기(동일성 정규화 포함) / 정기 출석 / 소프트웨어 업데이트
-│  │  │  └─ api/                 라우트별 핸들러(health/session/accounts/accounts_usage/
-│  │  │                          chat/models/keys/model_manage/stats/logs/billing/
-│  │  │                          sanitize/prompt/auto-checkin/scheduled-tasks/update/…)
-│  │  ├─ lib.rs                 앱 진입점(설정 디렉터리 마이그레이션 → 설정 → 트레이 → 메인 창 → 백엔드 시작)
-│  │  ├─ backend.rs              인프로세스 서버 수명 주기
-│  │  ├─ legacy_install.rs       구 "현재 사용자" 설치 정리(디렉터리 / 바로 가기 / 제거 항목 / 자동 시작. release 전용)
-│  │  ├─ gateway.rs              셸 측에서 관리 API 를 호출하는 HTTP 클라이언트
-│  │  ├─ login.rs / commands.rs  로그인 창과 폴링, 프런트엔드에 노출하는 invoke 명령
-│  │  ├─ login_profile.rs        웹 로그인마다 전용 임시 WebView2 데이터 디렉터리(끝나면 삭제)
-│  │  ├─ bridge.rs               window.workbuddyDesktop 을 주입하는 브리지 스크립트
-│  │  └─ update.rs / settings.rs / state.rs / tray.rs
-│  ├─ ui/                        프런트엔드(순수 HTML/CSS/JS, 프레임워크 없음)
-│  ├─ i18n/                      UI 사전 소스와 빌드 스크립트(6개 언어)
-│  └─ src-tauri/tauri.conf.json  패키징 설정(NSIS)
-├─ build/make-icon.mjs           앱 아이콘 소스 이미지 생성
-├─ assets/screenshots/           README 용 이미지(UI 스크린샷)
-├─ Dockerfile / .dockerignore    headless 이미지(멀티 스테이지 빌드, 게이트웨이와 패널만 포함)
-├─ docker-compose.yml / .env.example   배포(단일 컨테이너: 패널 + 게이트웨이 같은 포트)
-└─ package.json                  빌드 스크립트 진입점(tauri:dev / tauri:build / build:icon)
-```
-
-</details>
+![출석 체크 센터: 출석 요약과 공급자별 일일 출석](../assets/screenshots/checkin-center.png)
 
 ## 🔧 개발 및 빌드
 
@@ -388,11 +234,11 @@ npm run build:icon         # 아이콘 소스 이미지 생성(아이콘 디자�
 
 ### 무보증 및 권리 고지
 
-이 프로젝트는 "있는 그대로" 제공되며, 작성자는 가용성, 안정성, 보안성, 특정 목적 적합성에 대해 어떤 보증도 하지 않습니다. 업스트림 인터페이스는 언제든 바뀔 수 있고 이 프로젝트는 예고 없이 동작하지 않게 되어 유지 보수가 중단될 수 있습니다. 전체 조건은 [LICENSE](./LICENSE)를 참고하세요. 이 프로젝트의 인터페이스 형태와 프로토콜 필드 등의 정보는 각 공식 클라이언트의 공개된 네트워크 통신을 관찰·정리한 것이며, 관련 상표와 서비스의 권리는 각 소유자에게 있습니다. 권리자가 이 프로젝트가 부적절하다고 판단하면 작성자에게 연락해 주세요. 즉시 조정하거나 삭제하겠습니다.
+이 프로젝트는 "있는 그대로" 제공되며, 작성자는 가용성, 안정성, 보안성, 특정 목적 적합성에 대해 어떤 보증도 하지 않습니다. 업스트림 인터페이스는 언제든 바뀔 수 있고 이 프로젝트는 예고 없이 동작하지 않게 되어 유지 보수가 중단될 수 있습니다. 전체 조건은 [LICENSE](../LICENSE)를 참고하세요. 이 프로젝트의 인터페이스 형태와 프로토콜 필드 등의 정보는 각 공식 클라이언트의 공개된 네트워크 통신을 관찰·정리한 것이며, 관련 상표와 서비스의 권리는 각 소유자에게 있습니다. 권리자가 이 프로젝트가 부적절하다고 판단하면 작성자에게 연락해 주세요. 즉시 조정하거나 삭제하겠습니다.
 
 ## 📄 라이선스
 
-이 프로젝트는 [MIT License](./LICENSE)로 배포되며, 저작권 표시를 유지하는 한 자유롭게 사용·수정·배포할 수 있습니다.
+이 프로젝트는 [MIT License](../LICENSE)로 배포되며, 저작권 표시를 유지하는 한 자유롭게 사용·수정·배포할 수 있습니다.
 
 유의할 점은 LICENSE 본문 뒤에 **사용 고지**가 붙어 있고, 그 제3조가 MIT 위에 **제한을 추가**한다는 것입니다(상업적 사용 금지, 이익을 위한 재배포 금지, 대량 계정 운영 금지). 따라서 이 프로젝트는 **순수한 MIT가 아닙니다** — **MIT 조건과 사용 고지가 함께 완전한 라이선스와 사용 조건을 이루며**, 같은 행위에 대해 둘이 다른 결론을 내면 더 엄격한 쪽이 우선합니다. 이 때문에 `Cargo.toml` 이 SPDX `"MIT"` 를 선언하지 않고 `license-file` 로 LICENSE 를 가리킵니다.
 

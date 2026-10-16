@@ -4,33 +4,53 @@
 
 **複数の AI デスクトップクライアントのログイン状態を、ローカルの OpenAI 互換 API ゲートウェイに**
 
-[简体中文](./README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | **日本語** | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
+[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | **日本語** | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
 
-[![license](https://img.shields.io/badge/license-MIT%20%2B%20告知-green)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT%20%2B%20告知-green)](../LICENSE)
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 主な機能](#-主な機能) • [🤝 対応プロバイダー](#-対応プロバイダー) • [🚀 クイックスタート](#-クイックスタート) • [🐳 Docker デプロイ](#-docker-デプロイ) • [📸 画面プレビュー](#-画面プレビュー) • [🔧 開発とビルド](#-開発とビルド) • [📜 使用に関する告知](#-使用に関する告知)
+[✨ 主な機能](#-主な機能) • [💬 コミュニティとサポート](#-コミュニティとサポート) • [🤝 対応プロバイダー](#-対応プロバイダー) • [🚀 クイックスタート](#-クイックスタート) • [🐳 Docker デプロイ](#-docker-デプロイ) • [📸 画面プレビュー](#-画面プレビュー) • [🔧 開発とビルド](#-開発とビルド) • [📜 使用に関する告知](#-使用に関する告知)
 
 </div>
 
 ---
 
-単一の `base_url` を公開し、マルチプロバイダーのアカウント管理、モデル管理、外向きプロキシ、リクエストレポートを備え、すぐに使える Tauri デスクトップアプリも同梱しています。カスタム `base_url` に対応した OpenAI クライアントならどれでも、`http://127.0.0.1:3065/v1` からこれら各社のモデル枠を呼び出せます —— **上流の API キーは不要、クライアントの変更も不要**です。
+Agent2API は、複数の AI デスクトップクライアントでログイン済みのアカウントを 1 つにまとめ、OpenAI 互換のエンドポイントとして使えるようにします。カスタム `base_url` に対応したクライアントに `http://127.0.0.1:3065/v1` を設定すれば、これらのアカウントのモデル枠をそのまま呼び出せます —— **上流の API キーも、クライアントの変更も不要**です。
 
 ## ✨ 主な機能
 
-- 🔌 **OpenAI 互換エンドポイント** —— `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（`count_tokens` を含む）と `/v1/models` を 1 つのゲートウェイで公開。どのクライアントでもそのまま接続できます
-- 🏪 **内蔵 17 社のプロバイダー** —— WorkBuddy、小浣熊、CatPaw、AutoClaw、Qoder、Cline、Accio、ZCode、CodeArts、Trae、Loomy、KukuAI、MonkeyCode、Command Code、Antigravity、OfficeAce（一部は中国版 / 国際版の 2 種類）に加え、カスタムのパススループロバイダー（Chat / Responses / Anthropic）にも対応
-- 🔁 **認証情報の全自動メンテナンス** —— トークン自動更新（シングルフライト重複排除）、期限が近い認証情報の一括更新、モデルカタログのリモート更新 + 静的フォールバック
-- 🪂 **安定した転送** —— グローバル優先度アカウントキュー、モデル別レート制限クールダウン、429 自動フォールバック、決定論的な失敗は空待ちせず即スキップ
-- 🛡️ **セキュリティと秘匿化** —— 外向きプロキシ、送信フィンガープリントの秘匿化、複数のゲートウェイキー、fail-closed、ログイン時の人間確認
-- 📊 **リクエストレポート** —— リクエスト数 / 成功率 / トークン量、24 時間のキャッシュヒット率と消費トレンド、トップモデルとアカウント、365 日のアクティビティヒートマップ
-- ⏰ **スケジュールタスク** —— 自動チェックイン、認証情報メンテナンス、モデルカタログ更新などのバックグラウンドタスクを、有効 / 無効・間隔・前回結果を 1 ページで管理
-- 💰 **残高がひと目でわかる** —— アカウント行内の残高 / 使用量表示、アカウント横断の並行照会と定期スナップショット
-- 🖥️ **2 つのデプロイ形態** —— Tauri デスクトップアプリ（トレイ常駐、Node ランタイム不要）/ Docker headless（パネル + ゲートウェイを同一ポートで）。パネル UI は 6 言語対応
+- 🔌 **OpenAI 互換** —— クライアントに `base_url` を設定するだけ。Chat / Responses / Messages の 3 プロトコルに対応
+- 🏪 **17 社の組み込みプロバイダー** —— WorkBuddy、小浣熊、CatPaw、Qoder、Trae などがすぐ使え、カスタムプロバイダーにも対応
+- 🔁 **認証情報の自動更新** —— トークンは期限前に自動更新、期限切れ間近のものは一括更新、モデルカタログも追従
+- 🪂 **マルチアカウントのローテーション** —— 優先度順にキューイングし、429 は次のアカウントへ。レート制限中は待たずにスキップ
+- 🛡️ **外向きプロキシ** —— アカウントごとに出口 IP を割り当て、送信フィンガープリントは公式クライアントを装う
+- 🔑 **ゲートウェイのセキュリティ** —— 権限を分けた複数のゲートウェイキー、ログイン時の人間確認、キー未設定なら既定で拒否
+- 📊 **リクエストレポート** —— リクエスト数・成功率・トークン消費を一覧、キャッシュヒット率と 365 日ヒートマップ付き
+- ⏰ **スケジュールタスク** —— 自動チェックイン、認証情報メンテナンス、モデルカタログ更新を 1 ページで管理
+- 💰 **残高と使用量** —— アカウント行に残高と使用量を表示、複数アカウントの一括照会にも対応
+- 🖥️ **2 つの動かし方** —— トレイ常駐のデスクトップアプリ（Node 不要）と、パネルとゲートウェイが同一ポートの Docker 版。UI は 6 言語
+
+## ❤️ スポンサー
+
+<a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><img src="../assets/sponsor-proxylane.png" alt="ProxyLane（スポンサー）" width="100%" /></a>
+
+<table>
+
+<tr>
+<td width="240"><a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/proxylane-logo-for-dark-bg.png" /><img src="../assets/proxylane-logo-for-light-bg.png" alt="ProxyLane" width="220" /></picture></a></td>
+<td><a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme">ProxyLane</a> が本プロジェクトをスポンサーしています！ProxyLane は AI アカウント専用のネイティブ静的住宅用 IP（Static Residential ISP）を提供しています。実在の家庭向けブロードバンド事業者の IP を使い、Scamalytics の不正スコアが低く、IP は 1 つずつ専有、通信量は無制限、$3.90 から。「ネットワークプロキシ」ページでアカウントごとに出口を 1 つ割り当てるだけです。初回購入はコード <code>AGENT2API25</code> で 25% オフ。</td>
+</tr>
+
+</table>
+
+## 💬 コミュニティとサポート
+
+- **QQ グループ**: Agent2API の交流グループ、グループ番号 `1127656296`（QQ で番号を検索して参加できます）。質問やフィードバックはグループへどうぞ。
+- **💖 支援**: Agent2API がお役に立ったら、[作者にコーヒーをおごる](./SPONSOR.md)のも歓迎です。支援は任意で、機能の解放などはありません。
+- **🤝 スポンサー / ビジネス**: スポンサーになりたい、またはここに製品を掲載したい場合は [541675139@qq.com](mailto:541675139@qq.com) までメールでご連絡ください。
 
 ## 🤝 対応プロバイダー
 
@@ -38,28 +58,30 @@
 
 | プラットフォーム | LLM リクエスト | トークン自動更新 | モデル一覧 | 残高照会 | チェックイン | 受け取り系 |
 | --- | :--: | :--: | :--: | :--: | :--: | :--: |
-| WorkBuddy 中国版 | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ | ✓ デイリーチェックイン | — |
-| WorkBuddy 国際版 | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ | ✗ チェックインなし | — |
-| 小浣熊 | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ | ✓ デスクトップログインのポイント | — |
-| CatPaw | ✓ | ✗ 更新の仕組みなし | ✓ リモート + 静的フォールバック | ✓ | ✗ | — |
-| AutoClaw（中国版 / 国際版） | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ | ✓ デイリーチェックイン | — |
-| Qoder | ✓ | ✓ | ✓ リモート（地域別）+ 静的フォールバック | ✓ | ✓ 中国版のみ | — |
-| Cline（Free / Pass） | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ | — | — |
-| Accio（国際版 / 中国版） | ✓ | ✓ | ✓ リモート + 静的フォールバック | ✓ 使用率のみ | — | — |
-| ZCode（中国版 / 国際版） | ✓ | ✗ | ✗ 静的テーブル | ✓ プラン残高 | — | ✓ 期間限定プラン（手動） |
-| CodeArts | ✓ | ✓ ワンショットローテーション | ✓ リモート（3 ソース統合） | ✓ 2 つの台帳 | — | ✓ デイリーボーナス（手動） |
-| Trae | ✓ | ✓ 1 回ごとに更新 | ✓ リモートのみ | ✓ 2 つの台帳 | — | — |
-| Loomy（iFlytek） | ✓ | ✗ 更新 API なし | ✓ リモートのみ | ✓ 2 つのポイント台帳 | ✓ デイリー付与ポイントの更新 | — |
-| KukuAI（Baidu Wenku） | ✓ | ✗ 更新 API なし | ✓ リモート + 静的フォールバック | ✓ ポイント残高 | ✓ デイリーチェックイン（無料ポイント） | — |
-| MonkeyCode（長亭科技、中国版 / 国際版） | ✓ | ✗ 更新 API なし | ✓ リモートのみ | — | — | — |
-| Command Code | ✓ | ✗ 静的な API キー | ✓ リモート + 静的フォールバック | — | — | — |
-| Antigravity（Google、Gemini） | ✓ | ✓ | ✓ リモート + 静的フォールバック | — | — | — |
-| OfficeAce（Huawei Cloud、OfficeClaw） | ✓ | ✓ コントロールプレーンの自動更新 | ✓ リモートのみ | ✓ ポイント残高 | ✓ デイリーボーナス（チェックイン + 新規特典） | — |
-| カスタムプロバイダー | ✓ Chat パススルー / Responses / Anthropic | — | ✓ 手動登録 + サーバー側取得 | — | — | — |
+| WorkBuddy 中国版 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| WorkBuddy 国際版 | ✓ | ✓ | ✓ | ✓ | ✗ | — |
+| 小浣熊 | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| CatPaw | ✓ | ✗ | ✓ | ✓ | ✗ | — |
+| AutoClaw（中国版 / 国際版） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Qoder | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Cline（Free / Pass） | ✓ | ✓ | ✓ | ✓ | — | — |
+| Accio（国際版 / 中国版） | ✓ | ✓ | ✓ | ✓ | — | — |
+| ZCode（中国版 / 国際版） | ✓ | ✗ | ✗ | ✓ | — | ✓ |
+| CodeArts | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Trae | ✓ | ✓ | ✓ | ✓ | — | — |
+| Loomy（iFlytek） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| KukuAI（Baidu Wenku） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| MonkeyCode（長亭科技、中国版 / 国際版） | ✓ | ✗ | ✓ | — | — | — |
+| Command Code | ✓ | ✗ | ✓ | — | — | — |
+| Antigravity（Google、Gemini） | ✓ | ✓ | ✓ | — | — | — |
+| OfficeAce（Huawei Cloud、OfficeClaw） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| カスタムプロバイダー | ✓ | — | ✓ | — | — | — |
+
+> 注：モデル一覧の ✓ はオンラインでの自動取得に対応することを意味します（一部のプラットフォームは内蔵の静的テーブルも併用）。ZCode は内蔵の静的テーブルのみです。トークン自動更新の ✗ は、そのプラットフォームに利用可能な更新の仕組みがないことを意味します（アカウントは有効期間内はそのまま利用できます）。Qoder のチェックインは中国版のみです。
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（`count_tokens` を含む）と `/v1/models` はすべてのプラットフォームで同じように扱われます。モデルマッピング、グローバル優先度キュー、429 フォールバック、外向きプロキシ、送信フィンガープリントの秘匿化、リクエストレポートも全プラットフォーム共通です。
 
-> **本プロジェクトは学習・交流目的のみです。** 非公式クライアントの形態で自分のアカウントのログイン状態を再利用するため、上流サービスの規約に適合しない可能性があります。リスク（アカウントの凍結などを含む）は利用者自身が負担し、商用利用・課金の回避は禁止です。詳しくは[使用に関する告知](#-使用に関する告知)と [LICENSE](./LICENSE) をご覧ください。
+> **本プロジェクトは学習・交流目的のみです。** 非公式クライアントの形態で自分のアカウントのログイン状態を再利用するため、上流サービスの規約に適合しない可能性があります。リスク（アカウントの凍結などを含む）は利用者自身が負担し、商用利用・課金の回避は禁止です。詳しくは[使用に関する告知](#-使用に関する告知)と [LICENSE](../LICENSE) をご覧ください。
 >
 > 本プロジェクトは個人用途のローカルプロキシツールであり、各上流ベンダーおよびその公式製品とは一切関係ありません（一覧は[使用に関する告知](#-使用に関する告知)）。インターフェース仕様は各社クライアントの通信の観察によるもので、上流はいつでも変更される可能性があります。
 
@@ -143,211 +165,35 @@ services:
 
 ソースからビルドする場合: 本リポジトリをクローンして `docker compose up -d --build`（イメージにはゲートウェイとパネルのみが入り、Rust ツールチェーンは含まれません）。
 
-<details>
-<summary><b>更新とロールバック</b>（クリックで展開）</summary>
-
-**パネルから直接更新**: 設定 → ソフトウェア更新 → 更新を確認し、新しいバージョンが見つかったら「ダウンロードして更新」を、パッケージのダウンロード後は「インストールして再起動」をクリックします。サーバーは sha256 を検証し、コンテナ内の実行ファイルと UI ファイルを置き換えてからプロセスを再起動します —— コンテナは `restart: unless-stopped` によって再び立ち上がり（同じコンテナ、データボリュームはそのまま）、ページは数秒後に自動で再読み込みされます。前のバージョンに戻したいときは、同じパネルの「前のバージョンへロールバック」を使ってください（更新時に残されたバックアップから復元します）。
-
-知っておくべき 3 点:
-
-- **更新されるのはコンテナ内のファイルで、ローカルのイメージではありません**: compose の `image:` タグは変わらず、`docker inspect` は古いタグを表示したままです。後から `docker compose pull && docker compose up -d`（コンテナ再作成）を実行するとイメージのバージョンに戻ります。両者を揃えたい場合は、更新後に compose のタグを新しいバージョン番号に書き換えてから `docker compose pull && up -d` をもう一度実行してください。
-- 更新入口はコンテナ内でのみ現れます（`AGENT2API_SELF_UPDATE=1`。イメージでは既定で設定済み）。`0` にすれば下記の手動方法に戻ります。
-- パッケージは GitHub Release から取得します（`agent2api-server-linux-<arch>.tar.gz` + 同名の `.sha256`）。ダウンロードは「更新設定」で設定した外向き経路（更新確認と共通）を使います。国内からの直接接続が不安定な場合は、そこでプロキシを指定するか GitHub トークンを設定してください。
-
-**手動更新**（どのデプロイ形態でも使えます）:
-
-```bash
-# compose（本リポジトリの compose を使っている場合）
-docker compose pull && docker compose up -d
-
-# docker run: 新しいイメージを取得してコンテナを作り直す（データは ./data ボリュームにあり失われません）
-docker pull aimodcc/agent2api:latest
-docker rm -f agent2api
-# 上の「docker run」のコマンドをもう一度実行
-```
-
-ソースからビルドしている場合: `git pull && docker compose up -d --build`。
-
-</details>
-
 **Web パネルでの機能差**（「本機デスクトップクライアントが無い」ことに起因）: Web ログイン（WorkBuddy / Qoder / Cline）、SMS 認証コード、認証情報の貼り付けは完全に利用できます。本機へのコールバックが必要な Web ログイン（AutoClaw / CatPaw / Accio / CodeArts / Trae）と「本機ログイン状態の取り込み」は利用できないため、認証情報の貼り付けをお使いください。
 
 ## 📸 画面プレビュー
 
 ### アカウント
 
-すべてのアカウントが 1 本のキューに並び（左から 2 列目が優先度）、1 件ずつ有効化 / 無効化できます。レート制限のクールダウン、有効期限、残高は行内に表示され、残高不足は既定でしきい値を下回るとスキップされます。
+![アカウント管理ページ: グローバルキュー、モデル別レート制限クールダウン、有効期限と残高](../assets/screenshots/accounts.png)
 
-![アカウント管理ページ: グローバルキュー、モデル別レート制限クールダウン、有効期限と残高](./assets/screenshots/accounts.png)
+アカウントを追加:
 
-アカウント追加はプロバイダーを選んでログインするだけ。同じプロバイダーで複数バージョンのアカウントを保持できます（例: WorkBuddy 中国版 / 国際版）:
+![アカウント追加: プロバイダーとバージョンを選び、Web ログインへ](../assets/screenshots/add-account.png)
 
-![アカウント追加: プロバイダーとバージョンを選び、Web ログインへ](./assets/screenshots/add-account.png)
+### モデル管理
+
+![モデル管理ページ: プロバイダーごとのモデル一覧、倍率、コンテキスト、モデルマッピング](../assets/screenshots/models.png)
 
 ### レポート
 
 概要: リクエスト数 / 成功率 / トークン量 / トップモデルとアカウント・プロバイダー別ランキング、用量ドーナツと 365 日のアクティビティヒートマップ:
 
-![レポート概要: 統計カード、トップアカウント / プロバイダー、モデル別・プロバイダー別ドーナツ](./assets/screenshots/report-overview.png)
+![レポート概要: 統計カード、トップアカウント / プロバイダー、モデル別・プロバイダー別ドーナツ](../assets/screenshots/report-overview.png)
 
 トレンド: 24 時間の**キャッシュヒット率**（折れ線）と**トークン消費**（面）を二軸で重ね、下部に日別トークン棒グラフ:
 
-![レポートトレンド: キャッシュヒット率とトークン消費の二軸トレンド、日別トークン棒グラフ](./assets/screenshots/report-trends.png)
+![レポートトレンド: キャッシュヒット率とトークン消費の二軸トレンド、日別トークン棒グラフ](../assets/screenshots/report-trends.png)
 
-### スケジュールタスク
+### チェックインセンター
 
-バックグラウンドタスクはこのページに集約（有効 / 無効・間隔 / 前回結果 / 今すぐ実行）。一覧は `~/.agent2api/config.json` の `scheduledTasks` に保存され、変更は即時反映されます。
-
-![スケジュールタスクページ: 自動チェックイン、認証情報メンテナンス、モデルカタログ更新などの有効 / 無効と間隔](./assets/screenshots/scheduled-tasks.png)
-
-## 🧱 プロジェクト構成
-
-バックエンドは `src-tauri/` 配下の Rust 製インプロセス HTTP サーバー、フロントエンドは `ui/` 配下の素の HTML/CSS/JS です。
-
-<details>
-<summary>ディレクトリツリー全体（クリックで展開）</summary>
-
-```
-agent2api/
-├─ desktop-tauri/
-│  ├─ src-tauri/
-│  │  ├─ server/                 ゲートウェイ本体 crate（agent2api-server、単独でビルド可能:
-│  │  │                          デスクトップ版と headless バイナリで共用。src/server/ の
-│  │  │                          実装と bin/agent2api-server.rs に GUI 依存はない）
-│  │  │  ├─ mod.rs               サービス組み立て: ServerState、起動、停止、起動時移行
-│  │  │  ├─ http.rs              ルートテーブル、CORS、API キーミドルウェア、body 制限、headless 静的配信
-│  │  │  ├─ config.rs / logging.rs / logs_store.rs / errors.rs
-│  │  │  ├─ config_migration.rs  1.x 設定ディレクトリの移行（~/.workbuddy-proxy → ~/.agent2api、起動時の最初のステップ）
-│  │  │  ├─ request_stats.rs + request_stats/   統計の時間窓、書き込み、集計、トリミング
-│  │  │  ├─ core/
-│  │  │  │  ├─ providers/        ★ マルチプロバイダー層（本改造の核心）
-│  │  │  │  │  ├─ mod.rs        ProviderKind（内蔵各社。Cline はクォータプールで 2 つ、Accio と
-│  │  │  │  │  │                ZCode は地域で 2 つに分割）+ PROVIDERS レジストリ + id 相互参照
-│  │  │  │  │  ├─ adapter.rs    ProviderAdapter trait + adapter_for + implemented_kinds
-│  │  │  │  │  ├─ router.rs     モデル名 → 候補プロバイダー集合（集約カタログ）
-│  │  │  │  │  ├─ catalog.rs    集約モデルカタログ（一覧のマージ / 同名の重複排除 / 可用性判定）
-│  │  │  │  │  ├─ catalog_cache.rs  各社リモート一覧の永続キャッシュ（再起動後は読み戻し、内蔵一覧へは戻らない）
-│  │  │  │  │  ├─ refresh_flight.rs  認証情報更新のシングルフライト重複排除
-│  │  │  │  │  ├─ workbuddy.rs  WorkBuddy アダプター（ヘッダー集合 / system 注入 / 6004 / 11-128）
-│  │  │  │  │  ├─ raccoon/      小浣熊: mod / models / credentials / jwt / oauth / balance
-│  │  │  │  │  ├─ catpaw/       CatPaw: adapter（is_stateful）/ conversation（ターン状態機械）/
-│  │  │  │  │  │                turn_executor / prepare / decision（ターン判定）/ fingerprint /
-│  │  │  │  │  │                registry/（セッションレジストリ: テーブルとハンドル / アカウント同一性 / 失効）/
-│  │  │  │  │  │                messages / blocks / tools / openai（翻訳層）/
-│  │  │  │  │  │                upstream_http / image_compress / models / credentials / balance
-│  │  │  │  │  ├─ autoclaw/     Zhipu autoglm（中国版 + 国際版の 2 社）: region（両地域のドメインと同一性）/
-│  │  │  │  │  │                adapter / credentials / refresh / crypto / models /
-│  │  │  │  │  │                balance / login（SMS 認証コード、中国版のみ）/
-│  │  │  │  │  │                oauth（Zai / Google の Web ログイン、国際版のみ）/ checkin（デイリーチェックインタスク）
-│  │  │  │  │  ├─ qoder/        Qoder: adapter / endpoints（両サイトのアドレス）/ oauth（デバイス認証）/
-│  │  │  │  │  │                auth / cosy（COSY 署名と body エンコード）/ protocol（エンベロープ復号）/
-│  │  │  │  │  │                chat（セッション方式の転送）/ stream / machine（PKCE とマシン識別）/
-│  │  │  │  │  │                credentials / refresh / models / balance / risk（UMID リスク管理コンポーネント）
-│  │  │  │  │  ├─ cline/        Cline: adapter（Bearer + プロダクト面ヘッダー）/ credentials（workos: 接頭辞
-│  │  │  │  │  │                + デスクトップログイン状態 + 氏名解析）/ login（WorkOS デバイス認証）/
-│  │  │  │  │  │                refresh（シングルフライト更新）/ models（2 つのクォータプール + 既定マッピング種）/
-│  │  │  │  │  │                balance（credit 残高、マイクロ credit ÷1e6）
-│  │  │  │  │  ├─ accio/        Accio（国際版 + 中国版の 2 社）: endpoints（両地域とエンドポイント）/
-│  │  │  │  │  │                credentials / auth / refresh（シングルフライト更新）/
-│  │  │  │  │  │                oauth（PKCE Web ログイン + ループバックコールバック）/
-│  │  │  │  │  │                models（静的フォールバック + /api/llm/config/v2）/
-│  │  │  │  │  │                protocol（OpenAI ↔ ADK の Gemini 風エンベロープ）/
-│  │  │  │  │  │                chat（セッション方式の転送）/ stream（ADK SSE 展開）/ balance
-│  │  │  │  │  ├─ zcode/        ZCode（Zhipu Z.AI、中国版 + 国際版の 2 社）: region（両地域のドメインと同一性）/
-│  │  │  │  │  │                adapter（ステートレス、地域でパラメータ化）/ credentials（トークン + プラン JWT）/
-│  │  │  │  │  │                oauth（CLI ポーリングログイン）/ coding_key（推論用 API キーへの交換）/ models（静的テーブル）/
-│  │  │  │  │  │                balance（プラン残高）/ plan + claim（プランチャネルと期間限定受け取り）/
-│  │  │  │  │  │                captcha（人間確認トークンプール）/ reasoning（GLM-5.3 思考予算）/
-│  │  │  │  │  │                zcode_system.json（システムプロンプト）
-│  │  │  │  │  ├─ codearts/     CodeArts（Huawei Cloud）: signer（Huawei Cloud SDK-HMAC-SHA256、
-│  │  │  │  │  │                参照実装とバイト単位で突き合わせ）/ credentials / dpop（ES256 DPoP proof）/
-│  │  │  │  │  │                oauth（PKCE Web ログイン + ループバックコールバック）/ refresh（シングルフライト更新）/
-│  │  │  │  │  │                session（chat-session ハートビートとアカウント単位の並行入場制御）/ chat（セッション方式の転送）/
-│  │  │  │  │  │                stream_fault（HTTP 200 内のストリームエラーエンベロープ）/ redact（エラー本文の秘匿化）/
-│  │  │  │  │  │                models（agent / builtin / 福利ゲートウェイの 3 ソース統合）/
-│  │  │  │  │  │                balance（サブスクリプション統計 + 福利ゲートウェイの 2 台帳）/
-│  │  │  │  │  │                welfare（デイリーボーナスの受け取り: 冪等キーを先に永続化し、読み戻しで二重確認）
-│  │  │  │  │  ├─ trae/         Trae（ByteDance AI IDE の SOLO チャネル）: credentials / device（デバイス鍵ペア）/
-│  │  │  │  │  │                login + oauth（PKCE Web ログイン + トークン交換候補）/ callback_server
-│  │  │  │  │  │                （本機のランダムポートでのコールバックとノイズ除去）/ refresh（シングルフライト更新）/
-│  │  │  │  │  │                payload（SOLO エンベロープをホワイトリストで再構築）/ headers（SOLO ヘッダー集合）/
-│  │  │  │  │  │                stream（SSE→chunk 翻訳）/ forward（ステートフル転送）/
-│  │  │  │  │  │                errors（エラー分類と死んだ設定のリスト）/ models（get_detail_param カタログ）/
-│  │  │  │  │  │                usage（特典パック + プランクォータの 2 台帳）/ profile（同一性解析）
-│  │  │  │  │  ├─ loomy/        Loomy（iFlytek）: login（SMS 認証コード）/ credentials（session 14 日、更新 API なし）/
-│  │  │  │  │  │                sign（クライアントの HMAC-SHA1 署名ヘッダーを再現）/ endpoints / client（統合ゲートウェイ）/
-│  │  │  │  │  │                models（/api/v1/models のリモートカタログのみ、上流に内蔵フォールバック一覧なし）/
-│  │  │  │  │  │                balance（永久ポイント + デイリー付与の 2 台帳）/ checkin（その日の初回ログインで付与ポイントを更新）
-│  │  │  │  │  ├─ kuku/         KukuAI（Baidu Wenku「Kuku AI / GenFlowPro」、kuku.baidu.com）:
-│  │  │  │  │  │                adapter（is_stateful）/ session（bdstoken/uinfo/uk の 3 点セットキャッシュ）/
-│  │  │  │  │  │                engine（STOKEN 交換）/ http / login（本体サイトの Web ログイン + シェル側での Cookie 取得）/
-│  │  │  │  │  │                credentials（BDUSS Cookie）/ models（静的フォールバック + リモート更新）/
-│  │  │  │  │  │                chat（セッション作成 → 計算資源割当 → SSE）/ balance（ポイント残高）/
-│  │  │  │  │  │                checkin（デイリー無料ポイント）
-│  │  │  │  │  ├─ monkeycode/   MonkeyCode（長亭科技、中国版 + 国際版の 2 社）: region（両サイトのドメインと同一性）/
-│  │  │  │  │  │                adapter / endpoints（パス / cookie 名 / interface_type→CLI 対応）/
-│  │  │  │  │  │                client / credentials（session + imageId）/ login（session の貼り付けと自動検出）/
-│  │  │  │  │  │                models（両サイト各 1 枠の一覧、リモートのみ）/ task（タスク作成）/ stream（WS タスクストリーム）/
-│  │  │  │  │  │                translate（ACP イベント → chat フレーム。ツールの自動承認と質問への自動応答を含む）
-│  │  │  │  │  ├─ commandcode/  Command Code: adapter / endpoints / credentials / login /
-│  │  │  │  │  │                fingerprint（決定論的デバイスフィンガープリントと 8h レポート）/ models /
-│  │  │  │  │  │                plan（8 キーのエンベロープと params 書き換え、session id の派生）
-│  │  │  │  │  ├─ antigravity/  Antigravity（Google、Gemini）: oauth（refresh token 更新 + シングルフライト）/
-│  │  │  │  │  │                project（loadCodeAssist → onboardUser の検出）/ credentials /
-│  │  │  │  │  │                endpoints（3 環境のベース URL とヘッダー集合）/ login /
-│  │  │  │  │  │                models（fetchAvailableModels + 内蔵フォールバック + 上流の実名マッピング）/ adapter
-│  │  │  │  │  └─ officeace/    OfficeAce（Huawei Cloud、OfficeClaw）: oauth（PKCE + P-256 DPoP セルフサービスログイン）/
-│  │  │  │  │                   signer（SDK-HMAC と V11-HMAC の 2 種類の署名 + ベクター fixtures）/
-│  │  │  │  │                   credentials（ゲートウェイ Basic + コントロールプレーンの一時 AK/SK）/
-│  │  │  │  │                   chat（ステートレスな OpenAI 互換）/ models（リモート目録 + モデル別倍率）/
-│  │  │  │  │                   probe（可用性プローブ。疎通できないモデルは既定で非表示）/
-│  │  │  │  │                   subscription（サブスクリプション / クォータ / 報酬）/ onboarding / checkin / balance
-│  │  │  │  ├─ protocol/        プロトコル変換層（各社 wire ↔ 標準 chat SSE のリクエスト / レスポンス翻訳:
-│  │  │  │  │                    Anthropic Messages / Responses / NDJSON（Command Code）/
-│  │  │  │  │                    Gemini エンベロープ（Antigravity）、およびツール plan と履歴修復）
-│  │  │  │  ├─ upstream/        転送オーケストレーション: グローバルアカウントキューのループ（provider_loop）+
-│  │  │  │  │                    送信 body の処理（payload）+ SSE パススルー / 集約 + usage のバイパス抽出 +
-│  │  │  │  │                    chat 以外のプロトコルの翻訳ストリーム接続（translate: Anthropic / NDJSON / Gemini の 3 系統）
-│  │  │  │  ├─ account_store/   アカウント保存（グローバル優先度、レート制限クールダウン、各社の追加と取り込み）
-│  │  │  │  ├─ models/          モデルカタログの基盤（workbuddy 内蔵一覧 + /v3/config 更新）
-│  │  │  │  ├─ model_rules.rs   モデル管理ルール（無効化 / 非表示 / マッピング alias）
-│  │  │  │  ├─ api_keys.rs      ゲートウェイキー一覧（複数キー、有効なものが 1 つあれば通過）
-│  │  │  │  ├─ auth.rs / auth_http.rs / login.rs   セッション、外向き転送、ヘッドレスログイン
-│  │  │  │  │                    （login/ 配下は各社固有のフロー: catpaw の
-│  │  │  │  │                    ループバックコールバック、qoder のデバイス認証）
-│  │  │  │  ├─ routing.rs / billing/   アカウント経路選択（グローバル優先度 + レート制限クールダウン）/ ポイントチェックイン運用
-│  │  │  │  ├─ proxies.rs / clash.rs / egress.rs   外向きプロキシと出口ごとのキャッシュ済み Client
-│  │  │  │  ├─ sanitize.rs      送信フィンガープリントの秘匿化（ハードコードされたルール集: ヘッダー除去 + 定型文の最小書き換え）
-│  │  │  │  ├─ prompt.rs        ゲートウェイ独自のシステムプロンプト（パススルー / 置換 / 追記の 3 モード）
-│  │  │  │  ├─ degrade.rs       コンテンツ遮断の劣化状態機械（審査の誤検知に当たったら翌日 00:00 まで中立プロンプト）
-│  │  │  │  ├─ credential_maintenance.rs  期限切れ / 期限間近の認証情報の一括更新
-│  │  │  │  ├─ usage_query.rs     残高 / ポイント照会（アカウント横断の並行実行 + 定期実行時のスナップショット）
-│  │  │  │  ├─ scheduled_tasks.rs  間隔ベースのスケジュールタスク登録簿とディスパッチループ（有効 / 無効 / 間隔 /
-│  │  │  │  │                      前回結果。設定は config.json の scheduledTasks）
-│  │  │  │  └─ account_transfer.rs + account_transfer/ / auto_checkin.rs / update/
-│  │  │  │                       インポート / エクスポート（同一性の正規化を含む）/ 定時チェックイン / ソフトウェア更新
-│  │  │  └─ api/                 各ルートのハンドラー（health/session/accounts/accounts_usage/
-│  │  │                          chat/models/keys/model_manage/stats/logs/billing/
-│  │  │                          sanitize/prompt/auto-checkin/scheduled-tasks/update/…）
-│  │  ├─ lib.rs                 アプリのエントリーポイント（設定ディレクトリ移行 → 設定 → トレイ → メインウィンドウ → バックエンド起動）
-│  │  ├─ backend.rs              インプロセスサーバーのライフサイクル
-│  │  ├─ legacy_install.rs       旧「現在のユーザー」インストールのクリーンアップ（ディレクトリ / ショートカット / アンインストール項目 / 自動起動。release のみ）
-│  │  ├─ gateway.rs              シェル側から管理 API を叩く HTTP クライアント
-│  │  ├─ login.rs / commands.rs  ログインウィンドウとポーリング、フロントエンドに公開する invoke コマンド
-│  │  ├─ login_profile.rs        Web ログインごとに専用の一時 WebView2 データディレクトリ（完了後に削除）
-│  │  ├─ bridge.rs               window.workbuddyDesktop を注入するブリッジスクリプト
-│  │  └─ update.rs / settings.rs / state.rs / tray.rs
-│  ├─ ui/                        フロントエンド（素の HTML/CSS/JS、フレームワークなし）
-│  ├─ i18n/                      UI 辞書のソースとビルドスクリプト（6 言語）
-│  └─ src-tauri/tauri.conf.json  パッケージ設定（NSIS）
-├─ build/make-icon.mjs           アプリアイコンのソース画像を生成
-├─ assets/screenshots/           README 用の画像（UI スクリーンショット）
-├─ Dockerfile / .dockerignore    headless イメージ（マルチステージビルド、ゲートウェイとパネルのみ）
-├─ docker-compose.yml / .env.example   デプロイ（単一コンテナ: パネル + ゲートウェイを同一ポートで）
-└─ package.json                  ビルドスクリプトの入口（tauri:dev / tauri:build / build:icon）
-```
-
-</details>
+![チェックインセンター: チェックイン概要とプロバイダー別デイリーチェックイン](../assets/screenshots/checkin-center.png)
 
 ## 🔧 開発とビルド
 
@@ -388,11 +234,11 @@ npm run build:icon         # アイコンのソース画像を生成（アイコ
 
 ### 無保証および権利表示
 
-本プロジェクトは「現状のまま」提供され、作者はその可用性、安定性、安全性、特定目的への適合性について一切保証しません。上流のインターフェースはいつでも変更される可能性があり、本プロジェクトは予告なく動作しなくなり、メンテナンスが終了する場合があります。完全な条件は [LICENSE](./LICENSE) を参照してください。本プロジェクトにおけるインターフェース仕様やプロトコルフィールドなどの情報は、各公式クライアントの公開されたネットワーク通信を観察・整理したものであり、関連する商標とサービスの権利はそれぞれの所有者に帰属します。権利者が必要以上のものであるとお考えの場合は作者までご連絡ください。速やかに調整または削除します。
+本プロジェクトは「現状のまま」提供され、作者はその可用性、安定性、安全性、特定目的への適合性について一切保証しません。上流のインターフェースはいつでも変更される可能性があり、本プロジェクトは予告なく動作しなくなり、メンテナンスが終了する場合があります。完全な条件は [LICENSE](../LICENSE) を参照してください。本プロジェクトにおけるインターフェース仕様やプロトコルフィールドなどの情報は、各公式クライアントの公開されたネットワーク通信を観察・整理したものであり、関連する商標とサービスの権利はそれぞれの所有者に帰属します。権利者が必要以上のものであるとお考えの場合は作者までご連絡ください。速やかに調整または削除します。
 
 ## 📄 ライセンス
 
-本プロジェクトは [MIT License](./LICENSE) に基づき公開されており、著作権表示を保持する限り、自由に使用・改変・配布できます。
+本プロジェクトは [MIT License](../LICENSE) に基づき公開されており、著作権表示を保持する限り、自由に使用・改変・配布できます。
 
 注意すべき点として、LICENSE の本文の後に**使用に関する告知**が付されており、その第 3 条が MIT に対して**制限を追加**しています（商用利用の禁止、利益目的の再配布の禁止、大量アカウント運用の禁止）。したがって本プロジェクトは**純粋な MIT ではありません** —— **MIT の条件と使用に関する告知が合わせて完全なライセンスと使用条件を構成し**、同一の行為について両者が異なる結論を出す場合は、より厳しい側が優先されます。これが `Cargo.toml` で SPDX の `"MIT"` を宣言せず、`license-file` で LICENSE を指している理由でもあります。
 

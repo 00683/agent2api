@@ -4,33 +4,53 @@
 
 **Transforme o estado de login de vários clientes de desktop de IA em um gateway de API compatível com OpenAI local**
 
-[简体中文](./README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | **Português (BR)**
+[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | **Português (BR)**
 
-[![license](https://img.shields.io/badge/license-MIT%20%2B%20Aviso-green)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT%20%2B%20Aviso-green)](../LICENSE)
 [![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ Principais recursos](#-principais-recursos) • [🤝 Provedores compatíveis](#-provedores-compatíveis) • [🚀 Início rápido](#-início-rápido) • [🐳 Implantação com Docker](#-implantação-com-docker) • [📸 Capturas de tela](#-capturas-de-tela) • [🔧 Desenvolvimento e build](#-desenvolvimento-e-build) • [📜 Aviso de uso](#-aviso-de-uso)
+[✨ Principais recursos](#-principais-recursos) • [💬 Comunidade e suporte](#-comunidade-e-suporte) • [🤝 Provedores compatíveis](#-provedores-compatíveis) • [🚀 Início rápido](#-início-rápido) • [🐳 Implantação com Docker](#-implantação-com-docker) • [📸 Capturas de tela](#-capturas-de-tela) • [🔧 Desenvolvimento e build](#-desenvolvimento-e-build) • [📜 Aviso de uso](#-aviso-de-uso)
 
 </div>
 
 ---
 
-Expõe um único `base_url` com gerenciamento de contas multi-provedor, gerenciamento de modelos, proxy de saída e relatórios de requisições, além de um aplicativo desktop Tauri pronto para usar. Qualquer cliente OpenAI que aceite um `base_url` personalizado pode chamar a cota de modelos desses provedores por `http://127.0.0.1:3065/v1` — **sem API key do upstream, sem alterar o cliente**.
+O Agent2API reúne as contas já conectadas de vários clientes de IA em um único endpoint compatível com OpenAI. Informe `http://127.0.0.1:3065/v1` em qualquer cliente que aceite um `base_url` personalizado para chamar a cota de modelos dessas contas diretamente — **sem API key do upstream e sem alterar o cliente**.
 
 ## ✨ Principais recursos
 
-- 🔌 **Endpoints compatíveis com OpenAI** — um único gateway expondo `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) e `/v1/models`; qualquer cliente conecta sem ajustes
-- 🏪 **17 provedores integrados** — WorkBuddy, 小浣熊, CatPaw, AutoClaw, Qoder, Cline, Accio, ZCode, CodeArts, Trae, Loomy, KukuAI, MonkeyCode, Command Code, Antigravity, OfficeAce (alguns nas edições China / global), além de provedores personalizados em passthrough (Chat / Responses / Anthropic)
-- 🔁 **Credenciais com manutenção totalmente automática** — renovação automática de token com deduplicação single-flight, renovação em lote de credenciais prestes a vencer, catálogos de modelos atualizados remotamente com fallback estático
-- 🪂 **Encaminhamento estável** — fila global de contas por prioridade, cooldown de limite por modelo, fallback automático em 429, falhas determinísticas são puladas rápido em vez de esperar à toa
-- 🛡️ **Segurança e mascaramento** — proxies de saída, mascaramento de impressão digital de saída, várias chaves de gateway, fail-closed, verificação humana no login
-- 📊 **Relatórios de requisições** — requisições / taxa de sucesso / tokens, tendências de 24 horas de taxa de acerto de cache e consumo, top modelos e contas, mapa de calor de atividade de 365 dias
-- ⏰ **Tarefas agendadas** — check-in automático, manutenção de credenciais, atualização do catálogo de modelos e mais; ativação / intervalo / último resultado gerenciados em uma página
-- 💰 **Saldos à vista** — saldo / uso exibido na linha de cada conta, consultas concorrentes entre contas com snapshots agendados
-- 🖥️ **Duas formas de implantação** — aplicativo desktop Tauri (residente na bandeja, sem runtime de Node) / Docker headless (painel + gateway na mesma porta); interface do painel em seis idiomas
+- 🔌 **Compatível com OpenAI** — aponte o `base_url` do seu cliente para o gateway: Chat, Responses e Messages são todos suportados
+- 🏪 **17 provedores integrados** — WorkBuddy, Raccoon, CatPaw, Qoder, Trae e outros funcionam de imediato, além de provedores personalizados via passthrough
+- 🔁 **Credenciais que se renovam sozinhas** — tokens são renovados antes de expirar, os próximos do vencimento podem ser atualizados em lote e o catálogo de modelos se mantém atual
+- 🪂 **Rotação de várias contas** — contas entram na fila por prioridade, um 429 passa para a próxima e contas em cooldown são puladas sem espera
+- 🛡️ **Proxies de saída** — cada conta pode ter seu próprio IP de saída; o fingerprint enviado imita o cliente oficial
+- 🔑 **Segurança do gateway** — chaves de gateway com escopo, verificação humana no login e recusa por padrão enquanto nenhuma chave estiver configurada
+- 📊 **Relatórios de requisições** — volume, taxa de sucesso e consumo de tokens num relance, com taxa de acerto de cache e mapa de calor de 365 dias
+- ⏰ **Tarefas agendadas** — check-in automático, manutenção de credenciais e atualização do catálogo, tudo gerenciado numa página
+- 💰 **Saldo e uso** — saldos e uso exibidos direto nas linhas das contas, com consulta concorrente entre elas
+- 🖥️ **Duas formas de rodar** — app de desktop na bandeja (sem Node) ou imagem Docker com painel e gateway na mesma porta; interface em seis idiomas
+
+## ❤️ Patrocinadores
+
+<a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><img src="../assets/sponsor-proxylane.png" alt="ProxyLane (patrocinador)" width="100%" /></a>
+
+<table>
+
+<tr>
+<td width="240"><a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/proxylane-logo-for-dark-bg.png" /><img src="../assets/proxylane-logo-for-light-bg.png" alt="ProxyLane" width="220" /></picture></a></td>
+<td>A <a href="https://proxylane.dev/zh-cn/isp-proxies?utm_source=agent2api&utm_medium=partnership&utm_campaign=agent2api_202610&utm_content=github_readme">ProxyLane</a> patrocina este projeto! A ProxyLane oferece proxies de IP residencial estático nativos para contas de IA (Static Residential ISP): os IPs vêm de operadoras de banda larga residenciais reais, com pontuação de fraude baixa no Scamalytics, cada IP é dedicado a você, com tráfego ilimitado, a partir de $3.90. Adicione uma saída por conta na página "Proxy de rede". Use o código <code>AGENT2API25</code> para 25% de desconto na primeira compra.</td>
+</tr>
+
+</table>
+
+## 💬 Comunidade e suporte
+
+- **Grupo QQ**: grupo de chat do Agent2API, número `1127656296` (pesquise o número no QQ para entrar); dúvidas e feedback são bem-vindos.
+- **💖 Doação**: se o Agent2API ajuda você, fique à vontade para [pagar um café ao autor](./SPONSOR.md); doações são voluntárias e não desbloqueiam nada.
+- **🤝 Patrocínio / negócios**: quer patrocinar o projeto ou divulgar seu produto aqui? Envie um e-mail para [541675139@qq.com](mailto:541675139@qq.com).
 
 ## 🤝 Provedores compatíveis
 
@@ -38,28 +58,30 @@ Panorama dos recursos de proxy reverso por plataforma (✓ suportado · ✗ não
 
 | Plataforma | Requisições LLM | Renovação automática do token | Lista de modelos | Consulta de saldo | Check-in | Resgates |
 | --- | :--: | :--: | :--: | :--: | :--: | :--: |
-| WorkBuddy (China) | ✓ | ✓ | ✓ remota + fallback estático | ✓ | ✓ check-in diário | — |
-| WorkBuddy (global) | ✓ | ✓ | ✓ remota + fallback estático | ✓ | ✗ sem evento de check-in | — |
-| 小浣熊 | ✓ | ✓ | ✓ remota + fallback estático | ✓ | ✓ pontos por login no desktop | — |
-| CatPaw | ✓ | ✗ sem mecanismo de renovação | ✓ remota + fallback estático | ✓ | ✗ | — |
-| AutoClaw (China / global) | ✓ | ✓ | ✓ remota + fallback estático | ✓ | ✓ check-in diário | — |
-| Qoder | ✓ | ✓ | ✓ remota (por região) + fallback estático | ✓ | ✓ somente China | — |
-| Cline (Free / Pass) | ✓ | ✓ | ✓ remota + fallback estático | ✓ | — | — |
-| Accio (global / China) | ✓ | ✓ | ✓ remota + fallback estático | ✓ apenas percentual de uso | — | — |
-| ZCode (China / global) | ✓ | ✗ | ✗ tabela estática | ✓ saldo do plano | — | ✓ plano por tempo limitado (manual) |
-| CodeArts | ✓ | ✓ rotação única | ✓ remota (três fontes mescladas) | ✓ dois balanços | — | ✓ bônus diário (manual) |
-| Trae | ✓ | ✓ troca a cada uso | ✓ somente remota | ✓ dois balanços | — | — |
-| Loomy (iFlytek) | ✓ | ✗ sem API de renovação | ✓ somente remota | ✓ dois balanços de pontos | ✓ atualização dos pontos diários | — |
-| KukuAI (Baidu Wenku) | ✓ | ✗ sem API de renovação | ✓ remota + fallback estático | ✓ saldo de pontos | ✓ check-in diário (pontos grátis) | — |
-| MonkeyCode (长亭科技, China / global) | ✓ | ✗ sem API de renovação | ✓ somente remota | — | — | — |
-| Command Code | ✓ | ✗ API key estática | ✓ remota + fallback estático | — | — | — |
-| Antigravity (Google, Gemini) | ✓ | ✓ | ✓ remota + fallback estático | — | — | — |
-| OfficeAce (Huawei Cloud, OfficeClaw) | ✓ | ✓ renovação automática do plano de controle | ✓ somente remota | ✓ saldo de pontos | ✓ bônus diário (check-in + presente de boas-vindas) | — |
-| Provedores personalizados | ✓ passthrough de chat / Responses / Anthropic | — | ✓ registro manual + busca no servidor | — | — | — |
+| WorkBuddy (China) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| WorkBuddy (global) | ✓ | ✓ | ✓ | ✓ | ✗ | — |
+| 小浣熊 | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| CatPaw | ✓ | ✗ | ✓ | ✓ | ✗ | — |
+| AutoClaw (China / global) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Qoder | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Cline (Free / Pass) | ✓ | ✓ | ✓ | ✓ | — | — |
+| Accio (global / China) | ✓ | ✓ | ✓ | ✓ | — | — |
+| ZCode (China / global) | ✓ | ✗ | ✗ | ✓ | — | ✓ |
+| CodeArts | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Trae | ✓ | ✓ | ✓ | ✓ | — | — |
+| Loomy (iFlytek) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| KukuAI (Baidu Wenku) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| MonkeyCode (长亭科技, China / global) | ✓ | ✗ | ✓ | — | — | — |
+| Command Code | ✓ | ✗ | ✓ | — | — | — |
+| Antigravity (Google, Gemini) | ✓ | ✓ | ✓ | — | — | — |
+| OfficeAce (Huawei Cloud, OfficeClaw) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Provedores personalizados | ✓ | — | ✓ | — | — | — |
+
+> Nota: em Lista de modelos, ✓ significa busca automática online (algumas plataformas também mantêm uma tabela estática interna como fallback); o ZCode tem apenas a tabela estática interna. ✗ em Renovação automática do token significa que a plataforma não tem um fluxo de renovação disponível (a conta continua funcionando enquanto as credenciais forem válidas). O check-in do Qoder é somente na versão da China.
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) e `/v1/models` funcionam igual para todas as plataformas; mapeamento de modelos, fila global de prioridade, fallback em 429, proxy de saída, mascaramento de impressão digital de saída e relatórios de requisições valem para todas as plataformas.
 
-> **Este projeto é apenas para aprendizado e troca de conhecimento.** Ele reutiliza o estado de login das suas contas na forma de um cliente não oficial, o que pode violar os termos dos serviços upstream; os riscos (inclusive banimento da conta) são seus. Uso comercial e contorno de cobrança são proibidos. Veja o [Aviso de uso](#-aviso-de-uso) e a [LICENSE](./LICENSE).
+> **Este projeto é apenas para aprendizado e troca de conhecimento.** Ele reutiliza o estado de login das suas contas na forma de um cliente não oficial, o que pode violar os termos dos serviços upstream; os riscos (inclusive banimento da conta) são seus. Uso comercial e contorno de cobrança são proibidos. Veja o [Aviso de uso](#-aviso-de-uso) e a [LICENSE](../LICENSE).
 >
 > Este é um projeto pessoal de ferramenta de proxy local, sem vínculo com qualquer fornecedor upstream ou seus produtos oficiais (a lista está no [Aviso de uso](#-aviso-de-uso)); os formatos de interface vêm da observação do tráfego dos clientes, e o upstream pode mudar a qualquer momento.
 
@@ -143,211 +165,35 @@ Variáveis de ambiente (todas opcionais):
 
 Compilar a partir do código: clone o repositório e rode `docker compose up -d --build` (a imagem contém apenas o gateway e o painel, sem toolchain Rust).
 
-<details>
-<summary><b>Atualização e reversão</b> (clique para expandir)</summary>
-
-**Pelo painel**: Configurações → Atualização do software → Verificar atualizações; se houver versão nova, clique em "Baixar e atualizar" e, quando o pacote estiver pronto, em "Instalar e reiniciar". O servidor verifica o sha256, substitui o executável e os arquivos de interface dentro do contêiner e reinicia o processo — o contêiner volta a subir pelo `restart: unless-stopped` (o mesmo contêiner, seu volume de dados intacto) e a página se atualiza sozinha alguns segundos depois. Para voltar, use "Reverter para a versão anterior" no mesmo painel (ele restaura o backup deixado pela atualização).
-
-Três coisas que vale saber:
-
-- **Ela atualiza os arquivos dentro do contêiner, não a sua imagem local**: a tag `image:` no seu compose continua a mesma e o `docker inspect` ainda mostra a tag antiga; um `docker compose pull && docker compose up -d` posterior (que recria o contêiner) volta para a versão da imagem. Para manter os dois alinhados, atualize a tag no seu compose após atualizar e rode `docker compose pull && up -d` mais uma vez.
-- O ponto de atualização só aparece em contêineres (`AGENT2API_SELF_UPDATE=1`, já definido na imagem); com `0` você volta ao caminho manual abaixo.
-- Os pacotes vêm do GitHub Releases (`agent2api-server-linux-<arch>.tar.gz` mais um `.sha256` irmão). O download usa a rota de saída configurada em "Configurações de atualização" (compartilhada com a verificação de atualizações) — escolha um proxy ali ou adicione um token do GitHub se o acesso direto estiver instável.
-
-**Atualização manual** (vale para qualquer forma de implantação):
-
-```bash
-# compose (usando o compose deste repositório)
-docker compose pull && docker compose up -d
-
-# docker run: baixe a imagem nova e recrie o contêiner (seus dados ficam em ./data)
-docker pull aimodcc/agent2api:latest
-docker rm -f agent2api
-# depois rode de novo o comando original "docker run" de cima
-```
-
-Compilado a partir do código: `git pull && docker compose up -d --build`.
-
-</details>
-
 **Diferenças de recursos no painel web** (todas decorrem de "não haver cliente de desktop local"): login pela web (WorkBuddy / Qoder / Cline), código por SMS e credenciais coladas funcionam plenamente; logins pela web que exigem callback nesta máquina (AutoClaw / CatPaw / Accio / CodeArts / Trae) e a "importação do estado de login local" não estão disponíveis — use credenciais coladas.
 
 ## 📸 Capturas de tela
 
 ### Contas
 
-Todas as contas ficam em uma fila única (a segunda coluna é a prioridade) e podem ser ativadas individualmente; cooldown por modelo, validade e saldo aparecem na linha, e saldo baixo é pulado abaixo do limiar por padrão.
+![Página de contas: fila global, cooldown de limite por modelo, validade e saldo](../assets/screenshots/accounts.png)
 
-![Página de contas: fila global, cooldown de limite por modelo, validade e saldo](./assets/screenshots/accounts.png)
+Adicionar conta:
 
-Escolha o provedor e entre; o mesmo fornecedor pode manter várias versões de conta (ex.: WorkBuddy China / global):
+![Adicionar conta: escolha o provedor e a versão, depois faça login pela web](../assets/screenshots/add-account.png)
 
-![Adicionar conta: escolha o provedor e a versão, depois faça login pela web](./assets/screenshots/add-account.png)
+### Gerenciamento de modelos
+
+![Gerenciamento de modelos: catálogo por provedor com taxa, contexto e mapeamentos](../assets/screenshots/models.png)
 
 ### Relatório
 
 Visão geral: requisições / taxa de sucesso / tokens / modelo mais usado, com rankings por conta e provedor, roscas de uso e mapa de calor de 365 dias:
 
-![Visão geral do relatório: cartões de estatística, top contas / provedores, roscas de uso por modelo e por provedor](./assets/screenshots/report-overview.png)
+![Visão geral do relatório: cartões de estatística, top contas / provedores, roscas de uso por modelo e por provedor](../assets/screenshots/report-overview.png)
 
 Tendências: **taxa de acerto de cache** (linha) e **consumo de tokens** (área) em dois eixos, com barras de tokens por dia abaixo:
 
-![Tendências do relatório: taxa de acerto de cache e consumo de tokens em dois eixos, barras de tokens por dia](./assets/screenshots/report-trends.png)
+![Tendências do relatório: taxa de acerto de cache e consumo de tokens em dois eixos, barras de tokens por dia](../assets/screenshots/report-trends.png)
 
-### Tarefas agendadas
+### Central de check-in
 
-As tarefas de segundo plano ficam todas nesta página (ativar / intervalo / último resultado / executar agora); a lista fica em `scheduledTasks` no `~/.agent2api/config.json` e as alterações valem na hora.
-
-![Página de tarefas agendadas: ativação e intervalos de check-in, manutenção de credenciais, atualização do catálogo de modelos e mais](./assets/screenshots/scheduled-tasks.png)
-
-## 🧱 Estrutura do projeto
-
-O backend é um servidor HTTP Rust em processo dentro de `src-tauri/`, e o frontend é HTML/CSS/JS puro em `ui/`.
-
-<details>
-<summary>Árvore completa de diretórios (clique para expandir)</summary>
-
-```
-agent2api/
-├─ desktop-tauri/
-│  ├─ src-tauri/
-│  │  ├─ server/                 Crate do gateway (agent2api-server, compilado de forma independente:
-│  │  │                          compartilhado pelo app desktop e pelo binário headless; a implementação
-│  │  │                          em src/server/ e o bin/agent2api-server.rs não têm dependência de GUI)
-│  │  │  ├─ mod.rs               Montagem do serviço: ServerState, inicialização, parada, migração de inicialização
-│  │  │  ├─ http.rs              Tabela de rotas, CORS, middleware de API Key, limite de body, hospedagem estática headless
-│  │  │  ├─ config.rs / logging.rs / logs_store.rs / errors.rs
-│  │  │  ├─ config_migration.rs  Migração do diretório de configuração 1.x (~/.workbuddy-proxy → ~/.agent2api, primeiro passo na inicialização)
-│  │  │  ├─ request_stats.rs + request_stats/   Janelas de tempo, gravação, agregação e poda das estatísticas
-│  │  │  ├─ core/
-│  │  │  │  ├─ providers/        ★ Camada multi-provedor (o coração desta reformulação)
-│  │  │  │  │  ├─ mod.rs        ProviderKind (fornecedores internos; Cline dividido em dois pools de cota, Accio e
-│  │  │  │  │  │                ZCode cada um em duas regiões) + registro PROVIDERS + consultas de id
-│  │  │  │  │  ├─ adapter.rs    Trait ProviderAdapter + adapter_for + implemented_kinds
-│  │  │  │  │  ├─ router.rs     Nome do modelo → conjunto de provedores candidatos (catálogo agregado)
-│  │  │  │  │  ├─ catalog.rs    Catálogo de modelos agregado (mesclagem de listas / deduplicação por nome / disponibilidade)
-│  │  │  │  │  ├─ catalog_cache.rs  Cache persistente da lista remota de cada provedor (lida de volta ao reiniciar, sem cair na lista interna)
-│  │  │  │  │  ├─ refresh_flight.rs  Deduplicação single-flight da renovação de credenciais
-│  │  │  │  │  ├─ workbuddy.rs  Adaptador WorkBuddy (conjunto de cabeçalhos / injeção de system / 6004 / 11-128)
-│  │  │  │  │  ├─ raccoon/      小浣熊: mod / models / credentials / jwt / oauth / balance
-│  │  │  │  │  ├─ catpaw/       CatPaw: adapter (is_stateful) / conversation (máquina de estados de turno) /
-│  │  │  │  │  │                turn_executor / prepare / decision (decisão de turno) / fingerprint /
-│  │  │  │  │  │                registry/ (registro de sessões: tabela e handles / identidade da conta / invalidação) /
-│  │  │  │  │  │                messages / blocks / tools / openai (camada de tradução) /
-│  │  │  │  │  │                upstream_http / image_compress / models / credentials / balance
-│  │  │  │  │  ├─ autoclaw/     Zhipu autoglm (China + global, dois provedores): region (domínios e identidade por região) /
-│  │  │  │  │  │                adapter / credentials / refresh / crypto / models /
-│  │  │  │  │  │                balance / login (código por SMS, só China) /
-│  │  │  │  │  │                oauth (login pela web Zai / Google, só global) / checkin (tarefa de check-in diário)
-│  │  │  │  │  ├─ qoder/        Qoder: adapter / endpoints (endereços dos dois sites) / oauth (autorização por dispositivo) /
-│  │  │  │  │  │                auth / cosy (assinatura COSY e codificação do body) / protocol (decodificação do envelope) /
-│  │  │  │  │  │                chat (encaminhamento em estilo sessão) / stream / machine (PKCE e identificação da máquina) /
-│  │  │  │  │  │                credentials / refresh / models / balance / risk (componentes de controle de risco UMID)
-│  │  │  │  │  ├─ cline/        Cline: adapter (Bearer + cabeçalhos de produto) / credentials (prefixo workos:
-│  │  │  │  │  │                + estado de login do desktop + parsing do nome) / login (autorização de dispositivo WorkOS) /
-│  │  │  │  │  │                refresh (renovação single-flight) / models (dois pools de cota + sementes de mapeamento padrão) /
-│  │  │  │  │  │                balance (saldo de credit, micro credit ÷1e6)
-│  │  │  │  │  ├─ accio/        Accio (global + China, dois provedores): endpoints (duas regiões e caminhos) /
-│  │  │  │  │  │                credentials / auth / refresh (renovação single-flight) /
-│  │  │  │  │  │                oauth (login pela web PKCE + callback loopback) /
-│  │  │  │  │  │                models (fallback estático + /api/llm/config/v2) /
-│  │  │  │  │  │                protocol (envelope estilo Gemini do OpenAI ↔ ADK) /
-│  │  │  │  │  │                chat (encaminhamento em estilo sessão) / stream (desempacote do SSE do ADK) / balance
-│  │  │  │  │  ├─ zcode/        ZCode (Zhipu Z.AI, China + global): region (dois domínios e identidades) /
-│  │  │  │  │  │                adapter (stateless, parametrizado por região) / credentials (token + JWT do plano) /
-│  │  │  │  │  │                oauth (login por polling da CLI) / coding_key (troca por API key de inferência) / models (tabela estática) /
-│  │  │  │  │  │                balance (saldo do plano) / plan + claim (canal do plano e resgate por tempo limitado) /
-│  │  │  │  │  │                captcha (pool de tokens de verificação humana) / reasoning (orçamento de pensamento GLM-5.3) /
-│  │  │  │  │  │                zcode_system.json (prompt de sistema)
-│  │  │  │  │  ├─ codearts/     CodeArts (Huawei Cloud): signer (SDK-HMAC-SHA256 da Huawei Cloud,
-│  │  │  │  │  │                conferido byte a byte com a implementação de referência) / credentials / dpop (proof DPoP ES256) /
-│  │  │  │  │  │                oauth (login pela web PKCE + callback loopback) / refresh (renovação single-flight) /
-│  │  │  │  │  │                session (heartbeat de chat-session e admissão simultânea por conta) / chat (encaminhamento em estilo sessão) /
-│  │  │  │  │  │                stream_fault (envelopes de erro dentro de um HTTP 200) / redact (mascaramento do corpo de erro) /
-│  │  │  │  │  │                models (mesclagem das três fontes agent / builtin / gateway de benefícios) /
-│  │  │  │  │  │                balance (estatísticas de assinatura + dois balanços do gateway de benefícios) /
-│  │  │  │  │  │                welfare (resgate diário: chave de idempotência persistida antes, releitura para confirmação dupla)
-│  │  │  │  │  ├─ trae/         Trae (IDE de IA da ByteDance, canal SOLO): credentials / device (par de chaves do dispositivo) /
-│  │  │  │  │  │                login + oauth (login pela web PKCE + candidatos de troca de token) / callback_server
-│  │  │  │  │  │                (callback em porta aleatória local com filtragem de ruído) / refresh (renovação single-flight) /
-│  │  │  │  │  │                payload (reconstrução do envelope SOLO por lista branca) / headers (conjunto de cabeçalhos SOLO) /
-│  │  │  │  │  │                stream (tradução SSE→chunk) / forward (encaminhamento com estado) /
-│  │  │  │  │  │                errors (classificação de erros e lista de configurações mortas) / models (catálogo get_detail_param) /
-│  │  │  │  │  │                usage (pacotes de benefício + cota do plano, dois balanços) / profile (parsing de identidade)
-│  │  │  │  │  ├─ loomy/        Loomy (iFlytek): login (código por SMS) / credentials (session de 14 dias, sem API de renovação) /
-│  │  │  │  │  │                sign (reproduz os cabeçalhos de assinatura HMAC-SHA1 do cliente) / endpoints / client (gateway de integração) /
-│  │  │  │  │  │                models (catálogo remoto /api/v1/models, sem lista de fallback embutida no upstream) /
-│  │  │  │  │  │                balance (pontos permanentes + pontos diários, dois balanços) / checkin (o primeiro login do dia atualiza os pontos dados)
-│  │  │  │  │  ├─ kuku/         KukuAI (Baidu Wenku "Kuku AI / GenFlowPro", kuku.baidu.com):
-│  │  │  │  │  │                adapter (is_stateful) / session (cache do trio bdstoken/uinfo/uk) /
-│  │  │  │  │  │                engine (troca de STOKEN) / http / login (login pela web no site + captura de cookie no shell) /
-│  │  │  │  │  │                credentials (cookies BDUSS) / models (fallback estático + atualização remota) /
-│  │  │  │  │  │                chat (criar sessão → alocar computação → SSE) / balance (pontos) /
-│  │  │  │  │  │                checkin (pontos grátis diários)
-│  │  │  │  │  ├─ monkeycode/   MonkeyCode (长亭科技, China + global, dois provedores): region (domínios e identidade dos dois sites) /
-│  │  │  │  │  │                adapter / endpoints (caminhos / nome do cookie / mapa interface_type→CLI) /
-│  │  │  │  │  │                client / credentials (session + imageId) / login (colar session e descoberta automática) /
-│  │  │  │  │  │                models (uma lista por site, somente remota) / task (criar tarefa) / stream (stream de tarefas via WS) /
-│  │  │  │  │  │                translate (eventos ACP → quadros de chat, com aprovação automática de ferramentas e resposta automática a perguntas)
-│  │  │  │  │  ├─ commandcode/  Command Code: adapter / endpoints / credentials / login /
-│  │  │  │  │  │                fingerprint (impressão digital determinística do dispositivo + relatório a cada 8h) / models /
-│  │  │  │  │  │                plan (envelope de 8 chaves e reescrita de params, derivação do session id)
-│  │  │  │  │  ├─ antigravity/  Antigravity (Google, Gemini): oauth (renovação por refresh token + single-flight) /
-│  │  │  │  │  │                project (descoberta loadCodeAssist → onboardUser) / credentials /
-│  │  │  │  │  │                endpoints (bases dos três ambientes e conjunto de cabeçalhos) / login /
-│  │  │  │  │  │                models (fetchAvailableModels + fallback interno + mapeamento do nome real no upstream) / adapter
-│  │  │  │  │  └─ officeace/    OfficeAce (Huawei Cloud, OfficeClaw): oauth (login self-service PKCE + P-256 DPoP) /
-│  │  │  │  │                   signer (assinaturas SDK-HMAC e V11-HMAC + fixtures de vetores) /
-│  │  │  │  │                   credentials (Basic do gateway + AK/SK temporárias do plano de controle) /
-│  │  │  │  │                   chat (OpenAI compatível sem estado) / models (catálogo remoto + multiplicadores por modelo) /
-│  │  │  │  │                   probe (sondagem de disponibilidade; modelos inacessíveis ficam ocultos por padrão) /
-│  │  │  │  │                   subscription (assinatura / cota / recompensas) / onboarding / checkin / balance
-│  │  │  │  ├─ protocol/        Camada de conversão de protocolo (wire de cada fornecedor ↔ chat SSE padrão:
-│  │  │  │  │                    Anthropic Messages / Responses / NDJSON (Command Code) /
-│  │  │  │  │                    envelope Gemini (Antigravity), além de planos de ferramentas e reparo de histórico)
-│  │  │  │  ├─ upstream/        Orquestração do encaminhamento: laço da fila global de contas (provider_loop) +
-│  │  │  │  │                    tratamento do corpo enviado (payload) + passthrough/agregação de SSE + extração de usage
-│  │  │  │  │                    em via lateral + ligação dos fluxos de tradução para protocolos não chat (translate: Anthropic / NDJSON / Gemini)
-│  │  │  │  ├─ account_store/   Armazenamento de contas (prioridade global, cooldown de limite, inclusão e importação por fornecedor)
-│  │  │  │  ├─ models/          Base do catálogo de modelos (lista interna do workbuddy + atualização /v3/config)
-│  │  │  │  ├─ model_rules.rs   Regras de gerenciamento de modelos (desativar / ocultar / alias de mapeamento)
-│  │  │  │  ├─ api_keys.rs      Lista de chaves do gateway (várias chaves; qualquer uma ativa já passa)
-│  │  │  │  ├─ auth.rs / auth_http.rs / login.rs   Sessões, transporte de saída, login headless
-│  │  │  │  │                    (login/ guarda os fluxos específicos: o callback loopback
-│  │  │  │  │                    do catpaw, a autorização por dispositivo do qoder)
-│  │  │  │  ├─ routing.rs / billing/   Roteamento de contas (prioridade global + cooldown de limite) / operação de check-in de pontos
-│  │  │  │  ├─ proxies.rs / clash.rs / egress.rs   Proxies de saída e Client com cache por saída
-│  │  │  │  ├─ sanitize.rs      Mascaramento de impressão digital de saída (conjunto de regras fixas: remoção de cabeçalhos + reescrita mínima de frases-modelo)
-│  │  │  │  ├─ prompt.rs        Prompt de sistema próprio do gateway (passthrough / substituir / anexar)
-│  │  │  │  ├─ degrade.rs       Máquina de estados de degradação por bloqueio de conteúdo (prompt neutro até as 00:00 do dia seguinte)
-│  │  │  │  ├─ credential_maintenance.rs  Renovação em lote de credenciais vencidas / perto de vencer
-│  │  │  │  ├─ usage_query.rs     Consultas de saldo / pontos (concorrência entre contas + snapshot da rodada agendada)
-│  │  │  │  ├─ scheduled_tasks.rs  Registro e laço de despacho das tarefas agendadas por intervalo (ativar / intervalo /
-│  │  │  │  │                      último resultado; configuração em scheduledTasks no config.json)
-│  │  │  │  └─ account_transfer.rs + account_transfer/ / auto_checkin.rs / update/
-│  │  │  │                       Importação/exportação (com normalização de identidade) / check-in agendado / atualização do software
-│  │  │  └─ api/                 Handlers de cada rota (health/session/accounts/accounts_usage/
-│  │  │                          chat/models/keys/model_manage/stats/logs/billing/
-│  │  │                          sanitize/prompt/auto-checkin/scheduled-tasks/update/…)
-│  │  ├─ lib.rs                 Entrada do app (migração do diretório de config → configurações → bandeja → janela principal → start do backend)
-│  │  ├─ backend.rs              Ciclo de vida do servidor em processo
-│  │  ├─ legacy_install.rs       Limpeza da instalação antiga "usuário atual" (diretório / atalhos / entrada de desinstalação / inicialização automática; só release)
-│  │  ├─ gateway.rs              Cliente HTTP do shell para a API de gerenciamento
-│  │  ├─ login.rs / commands.rs  Janela de login e polling, comandos invoke expostos ao frontend
-│  │  ├─ login_profile.rs        Cada login pela web ganha um diretório temporário de WebView2 exclusivo (apagado ao terminar)
-│  │  ├─ bridge.rs               Script de ponte injetado como window.workbuddyDesktop
-│  │  └─ update.rs / settings.rs / state.rs / tray.rs
-│  ├─ ui/                        Frontend (HTML/CSS/JS puro, sem framework)
-│  ├─ i18n/                      Fonte dos dicionários da interface e scripts de build (seis idiomas)
-│  └─ src-tauri/tauri.conf.json  Configuração de empacotamento (NSIS)
-├─ build/make-icon.mjs           Gera a imagem-fonte do ícone do aplicativo
-├─ assets/screenshots/           Imagens usadas nos READMEs (capturas da interface)
-├─ Dockerfile / .dockerignore    Imagem headless (build multi-stage, só gateway e painel)
-├─ docker-compose.yml / .env.example   Implantação (contêiner único: painel + gateway na mesma porta)
-└─ package.json                  Entradas dos scripts de build (tauri:dev / tauri:build / build:icon)
-```
-
-</details>
+![Central de check-in: visão geral e grupos de check-in diário por provedor](../assets/screenshots/checkin-center.png)
 
 ## 🔧 Desenvolvimento e build
 
@@ -388,11 +234,11 @@ Este projeto armazena as credenciais das contas (`accessToken` / `refreshToken` 
 
 ### Sem garantias e aviso de direitos
 
-Este projeto é fornecido "como está"; o autor não faz qualquer promessa sobre disponibilidade, estabilidade, segurança ou adequação a um propósito específico. As interfaces do upstream podem mudar a qualquer momento, e o projeto pode parar de funcionar e ficar sem manutenção a qualquer momento. Os termos completos estão na [LICENSE](./LICENSE). As formas de interface, campos de protocolo e outras informações deste projeto vêm da observação e organização do tráfego de rede publicamente visível dos clientes oficiais; as marcas e serviços relacionados pertencem aos seus respectivos donos. Se um detentor de direitos considerar este projeto inadequado, entre em contato com o autor, e ele será ajustado ou removido prontamente.
+Este projeto é fornecido "como está"; o autor não faz qualquer promessa sobre disponibilidade, estabilidade, segurança ou adequação a um propósito específico. As interfaces do upstream podem mudar a qualquer momento, e o projeto pode parar de funcionar e ficar sem manutenção a qualquer momento. Os termos completos estão na [LICENSE](../LICENSE). As formas de interface, campos de protocolo e outras informações deste projeto vêm da observação e organização do tráfego de rede publicamente visível dos clientes oficiais; as marcas e serviços relacionados pertencem aos seus respectivos donos. Se um detentor de direitos considerar este projeto inadequado, entre em contato com o autor, e ele será ajustado ou removido prontamente.
 
 ## 📄 Licença
 
-Este projeto é distribuído sob a [MIT License](./LICENSE); você pode usá-lo, modificá-lo e distribuí-lo livremente desde que mantenha o aviso de copyright.
+Este projeto é distribuído sob a [MIT License](../LICENSE); você pode usá-lo, modificá-lo e distribuí-lo livremente desde que mantenha o aviso de copyright.
 
 Uma ressalva: a LICENSE traz um **Aviso de uso** após o texto da MIT, cujo item 3 **adiciona restrições** à MIT (proibição de uso comercial, proibição de redistribuição com fins lucrativos, proibição de operação de contas em massa). Portanto este projeto **não** é MIT puro — **os termos da MIT e o Aviso de uso juntos formam a licença completa**, e onde os dois chegam a conclusões diferentes sobre o mesmo ato, prevalece o mais restritivo. É também por isso que o `Cargo.toml` aponta `license-file` para a LICENSE em vez de declarar o identificador SPDX `"MIT"`.
 
