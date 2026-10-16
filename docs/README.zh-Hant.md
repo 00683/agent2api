@@ -87,13 +87,26 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 
 ## 🚀 快速開始
 
-從 [Releases](https://github.com/aimod-cc/agent2api/releases/latest) 下載安裝包（NSIS，簡體中文，預設裝到 `C:\Program Files\Agent2API`，安裝時需要管理員授權），安裝後啟動即可，**無需安裝 Node 或任何其它執行環境**。
+Releases 頁提供四種形態的產物，依你的系統挑一個：
+
+| 形態 | 產物 | 介面 | 說明 |
+| --- | --- | --- | --- |
+| **Windows 桌面端**（推薦） | `Agent2API_<版本>_x64-setup.exe` | 應用程式視窗 | NSIS 安裝包，預設裝到 `C:\Program Files\Agent2API`，安裝時需要管理員授權 |
+| **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 應用程式視窗 | 通用二進位（Apple Silicon 與 Intel 各編一遍再合併），最低 macOS 10.15 |
+| **Docker** | `aimodcc/agent2api:latest` | **瀏覽器面板** | amd64 / arm64 雙架構，見 [Docker 部署](#-docker-部署) |
+| **Linux 裸機** | `agent2api-server-linux-amd64` / `-arm64.tar.gz` | **瀏覽器面板** | 不用 Docker，直接跑執行檔，見 [Linux 裸機部署](#-linux-裸機部署) |
+
+**桌面端**（Windows / macOS）安裝後啟動即可，**無需安裝 Node 或任何其它執行環境**；閘道跑在應用程式行程內，常駐系統匣。
 
 1. 首次啟動即在應用程式行程內啟動本機閘道（連接埠 3065）並開啟主視窗；若偵測到舊版本的資料目錄或資料檔案，會彈窗提示遷移，依指引操作即可。
 2. 點「帳號」頁的「新增帳號」，選供應商後依彈窗提示完成登入或填寫憑證即可（方式以彈窗為準：網頁登入 / 手機驗證碼 / 貼上憑證 / 匯入本機登入狀態）。
 3. 把 OpenAI 客戶端的 `base_url` 填成 `http://127.0.0.1:3065/v1`，`api_key` 隨便填（例如 `sk-local`，未啟用鑑權時伺服器端不校驗）。
 
 關閉視窗預設最小化到系統匣，閘道繼續在背景轉發；徹底結束請在系統匣圖示按右鍵選「結束」。
+
+> **macOS 首次開啟**：dmg 裡的應用程式未做 Apple 程式碼簽章與公證（簽章需要付費的 Apple Developer 帳號，見 `.github/workflows/build.yml` 的說明），Gatekeeper 會攔下首次啟動 —— 到「系統設定 → 隱私權與安全性」手動放行一次即可。
+>
+> **macOS 桌面端的差異**：AutoClaw 的「匯入本機登入狀態」不可用（它讀的是 Windows 的 DPAPI 密文，macOS 上整段收起）；其餘家（小浣熊 / CatPaw / Cline）讀的是 `HOME` 下的明文檔案，照常可用。系統匣、開機自動啟動、區域網路存取與網頁面板代管在 macOS 上同樣支援。
 
 ### 驗證
 
