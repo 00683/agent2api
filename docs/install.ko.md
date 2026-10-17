@@ -88,7 +88,7 @@ Stop-Service Agent2API
 > 서비스 프로세스의 작업 디렉터리는 exe 가 있는 폴더가 아니라 `C:\Windows\system32` 입니다 —— UI 디렉터리는 exe 경로로 찾으므로 영향이 없습니다. 데이터 디렉터리는 서비스 레지스트리의 `AGENT2API_PROXY_HOME` 에 명시적으로 기록합니다(설정하지 않으면 LocalSystem 의 `C:\Windows\system32\config\systemprofile` 아래로 떨어져 찾기 어렵습니다).
 > 서비스에는 콘솔이 없으므로 로그는 파일 `C:\ProgramData\Agent2API\logs\server.log` 에도 남습니다.
 
-### Linux（systemd）
+### Linux (systemd)
 
 ```bash
 tar -xzf agent2api-server-linux-amd64.tar.gz
@@ -192,7 +192,7 @@ services:
 
 패널의 "소프트웨어 업데이트" 페이지에서 컨테이너 안에서 바로 "다운로드 후 업데이트"를 실행할 수 있습니다. 공식 Release의 `agent2api-server-linux-<arch>.tar.gz`를 받아(`.sha256` 검증) 실행 파일과 `ui/`를 교체한 뒤 프로세스가 정상 종료되면 `restart` 정책이 같은 컨테이너를 다시 띄웁니다. `AGENT2API_SELF_UPDATE`로 제어하며(Dockerfile에서 기본 `1`), `0`으로 두면 수동 업그레이드만 사용합니다.
 
-같은 `agent2api-server-linux-<arch>.tar.gz` 는 [Linux 서버](#linuxsystemd) 의 설치 패키지이기도 합니다: 안의 `agent2api-server` 와 `ui/` 가 이 업데이트 경로가 이름으로 가져가는 항목이고, `install.sh` / `agent2api.service` / `agent2api.env.example` 도 함께 들어 있습니다. 업데이트 경로는 앞의 두 항목만 읽고 나머지는 버리므로(`selfupdate::extract_bundle` 참고), 하나의 산출물이 두 용도를 겸합니다 —— 컨테이너에서는 풀어서 교체, 베어메탈에서는 풀어서 `install.sh` 실행.
+같은 `agent2api-server-linux-<arch>.tar.gz` 는 [Linux 서버](#linux-systemd) 의 설치 패키지이기도 합니다: 안의 `agent2api-server` 와 `ui/` 가 이 업데이트 경로가 이름으로 가져가는 항목이고, `install.sh` / `agent2api.service` / `agent2api.env.example` 도 함께 들어 있습니다. 업데이트 경로는 앞의 두 항목만 읽고 나머지는 버리므로(`selfupdate::extract_bundle` 참고), 하나의 산출물이 두 용도를 겸합니다 —— 컨테이너에서는 풀어서 교체, 베어메탈에서는 풀어서 `install.sh` 실행.
 
 주의할 점: 컨테이너 내 업데이트 후에는 이미지 태그와 **실제 실행 중인 버전이 어긋납니다**(`docker inspect`에는 여전히 이전 태그가 표시됩니다). `docker compose pull && up -d`로 컨테이너를 재생성하면 이미지에 포함된 버전으로 되돌아갑니다. 버전을 고정하려면 이 진입점을 켜지 마세요.
 
