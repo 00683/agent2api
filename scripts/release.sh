@@ -95,13 +95,18 @@ ASSETS=("$EXE" "$DMG")
 # Linux 桌面端：deb 与 AppImage（build 工作流的 linux-desktop job 上传）。
 # 这一对是本功能上线后才有的 artifact —— 老 tag 的 run 里没有，提醒一句继续走
 # （与下面 linux-server 同一口径：历史 tag 仍可重跑收尾）。
+#
+# ⚠️ 用 find -maxdepth 2 而不是 `dist/linux-desktop/*` 直扫一层：上传侧的
+# path 写的是 `target/release/bundle/deb/*.deb` 与 `.../appimage/*.AppImage`，
+# upload-artifact 以两者的**最近公共祖先**（`target/release/bundle`）为包根，
+# 于是解出来的布局是 `linux-desktop/deb/…` 与 `linux-desktop/appimage/…` ——
+# 直扫一层什么也扫不到（2026-10-17 实测：Release 建出来了，却没有 deb/AppImage
+# 两个附件）。其余 artifact 的 path 都是 `dist/*`，包根即 dist，仍是平的。
 if [ -d dist/linux-desktop ]; then
   LINUX_PKGS=()
-  for file in dist/linux-desktop/*; do
-    case "$file" in
-      *.deb|*.AppImage) LINUX_PKGS+=("$file") ;;
-    esac
-  done
+  while IFS= read -r file; do
+    LINUX_PKGS+=("$file")
+  done < <(find dist/linux-desktop -maxdepth 2 -type f \( -name '*.deb' -o -name '*.AppImage' \) | sort)
   if [ ${#LINUX_PKGS[@]} -gt 0 ]; then
     ASSETS+=("${LINUX_PKGS[@]}")
     echo "→ 已下载 Linux 桌面端包: $(basename "${LINUX_PKGS[@]}")"
@@ -148,15 +153,22 @@ git log -1 --format=%B "$TAG" > "$NOTES_FILE"
 
 echo "→ GitHub Release"
 if gh release view "$TAG" >/dev/null 2>&1; then
-  gh release upload "$TAG" --clobber "${ASSETS[@]}"
   # 已存在时也把预发布标记纠正一遍（重跑收尾 / 当初漏标的情形都靠这一行自愈）
   gh release edit "$TAG" --prerelease="$PRERELEASE"
-  echo "  ↳ 已存在，附件覆盖上传（pre-release=$PRERELEASE）"
+  echo "  ↳ 已存在，附件逐个覆盖上传（pre-release=$PRERELEASE）"
 else
   gh release create "$TAG" --prerelease="$PRERELEASE" --title "$TAG" \
-    --notes-file "$NOTES_FILE" "${ASSETS[@]}"
+    --notes-file "$NOTES_FILE"
   echo "  ↳ 已创建（pre-release=$PRERELEASE）"
 fi
+
+# 附件**逐个**上传，不一次传一批。实测（2026-10-17，v3.0.9-beta.1）：一批 10 个
+# 附件时 gh 会在某个「已经存在」的附件上报 HTTP 422 ReleaseAsset.name already
+# exists（--clobber 没能先把它删掉），整批就此中断 —— 症状是 Release 建好了、
+# 附件却少了一半。逐个 + --clobber 稳定，且天然幂等（重跑只补缺的那几个）。
+for asset in "${ASSETS[@]}"; do
+  gh release upload "$TAG" "$asset" --clobber
+done
 
 # ── 3. 验收提示 ───────────────────────────────────────────────
 echo
