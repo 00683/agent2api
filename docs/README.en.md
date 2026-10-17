@@ -12,7 +12,7 @@
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ Key Features](#-key-features) • [💬 Community & Support](#-community--support) • [🤝 Supported Providers](#-supported-providers) • [🚀 Quick Start](#-quick-start) • [🐳 Docker Deployment](#-docker-deployment) • [📸 Screenshots](#-screenshots) • [🔧 Development & Build](#-development--build) • [📜 Usage Notice](#-usage-notice)
+[✨ Key Features](#-key-features) • [💬 Community & Support](#-community--support) • [🤝 Supported Providers](#-supported-providers) • [🚀 Quick Start](#-quick-start) • [📦 Installation & deployment](./install.en.md) • [📸 Screenshots](#-screenshots) • [🔧 Development & Build](#-development--build) • [📜 Usage Notice](#-usage-notice)
 
 </div>
 
@@ -89,114 +89,38 @@ Reverse-proxy capabilities at a glance (✓ supported · ✗ not supported · �
 >
 > This is a personal, local-purpose proxy tool, unaffiliated with any upstream vendor or their official products (the list is in the [Usage Notice](#-usage-notice)); interface shapes come from observing the clients' traffic, and upstream may change at any time.
 
-## 🚀 Quick Start
+## 🚀 Quick start
 
-Releases ship four forms; pick the one for your system:
+Three forms — pick the one that matches your setup; **the complete install, upgrade, uninstall and troubleshooting guide is in [Installation & deployment](./install.en.md)**.
 
-| Form | Artifact | Interface | Notes |
-| --- | --- | --- | --- |
-| **Windows desktop** (recommended) | `Agent2API_<version>_x64-setup.exe` | App window | NSIS installer, installs to `C:\Program Files\Agent2API` by default, needs administrator approval |
-| **macOS desktop** | `Agent2API_<version>_universal.dmg` | App window | Universal binary (Apple Silicon and Intel each built, then merged); macOS 10.15+ |
-| **Linux desktop** | `Agent2API_<version>_amd64.deb` or `Agent2API_<version>_amd64.AppImage` | App window | deb installs system-wide (needs webkit2gtk-4.1 / gtk3); the AppImage is a single self-contained file that runs on any distro |
-| **Docker** | `aimodcc/agent2api:latest` | **Browser panel** | amd64 / arm64 images, see [Docker Deployment](#-docker-deployment) |
+| Form | Artifact | Interface |
+| --- | --- | --- |
+| **Desktop** (Windows / macOS / Linux) | `Agent2API_<version>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | App window |
+| **Server** (Windows Server / Linux, headless) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | Browser panel |
+| **Docker** | `aimodcc/agent2api:latest` (amd64 / arm64) | Browser panel |
 
-> Two more assets, `agent2api-server-linux-<arch>.tar.gz`, are the payload for the Docker version's **in-container one-click update** (the package the panel downloads in "Download and update"); they are not a separate deployment form and normal users can ignore them.
+**Desktop**: install and launch → add an account on the "Accounts" page → set your client's `base_url` to `http://127.0.0.1:3065/v1` (`api_key` can be anything, e.g. `sk-local`). No Node or other runtime required — the gateway runs inside the app process and stays in the tray.
 
-**Desktop apps** (Windows / macOS / Linux) simply launch after installation — **no Node or any other runtime required**; the gateway runs inside the app process and stays in the tray.
-
-1. First launch starts the local gateway (port 3065) inside the app process and opens the main window. If an older version's data directory or data files are found, a dialog walks you through the migration.
-2. Click "Add account" on the Accounts page, pick a provider and follow the dialog: sign in or fill in credentials (web login / SMS code / pasted credentials / importing this machine's desktop login state).
-3. Set your OpenAI client's `base_url` to `http://127.0.0.1:3065/v1` and put anything in `api_key` (for example `sk-local`; the server does not check it while authentication is disabled).
-
-Closing the window minimizes to the tray by default and the gateway keeps forwarding in the background; to quit for real, right-click the tray icon and choose "Exit".
-
-> **First launch on macOS**: the app inside the dmg is neither code-signed nor notarized (signing needs a paid Apple Developer account — see `.github/workflows/build.yml`), so Gatekeeper blocks the first launch. Allow it once under "System Settings → Privacy & Security" and it opens normally afterwards.
->
-> **Linux desktop notes**: the tray needs `libayatana-appindicator3` (most desktops ship it; install `libayatana-appindicator3-1` if the tray icon does not appear, then restart). An AppImage needs the executable bit before its first run (`chmod +x`; the app sets it automatically when you pick "Open installer"). Updates: deb goes through the system installer (it asks for your password once), while an AppImage is upgraded by replacing the file.
->
-> **Desktop differences**: "import desktop login state" for AutoClaw and ChatGLM (智谱清言) is Windows-only (it reads Windows DPAPI ciphertext, so that section is hidden on macOS / Linux); the others (Raccoon / CatPaw / Cline) read plaintext files under `HOME` and work on all three platforms. Tray, launch-at-login, LAN access and web-panel hosting are supported on macOS / Linux too.
-
-### Verification
-
-Once the gateway is up, use curl to confirm connectivity (put any name that actually exists in `GET /v1/models` into `model`):
+**Server** (no GUI; registered as a system service and started at boot):
 
 ```bash
-curl http://127.0.0.1:3065/health
-curl http://127.0.0.1:3065/v1/models
-
-curl http://127.0.0.1:3065/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"Hello"}],"stream":true}'
+# Linux
+tar -xzf agent2api-server-linux-amd64.tar.gz && cd agent2api-server-linux-amd64 && sudo bash install.sh
 ```
 
-Client example (Python SDK):
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:3065/v1", api_key="sk-local")
-resp = client.chat.completions.create(
-    model="deepseek-v4.1-flash",     # whichever provider owns it — see GET /v1/models
-    messages=[{"role": "user", "content": "Hello"}],
-)
-print(resp.choices[0].message.content)
+```powershell
+# Windows Server (administrator PowerShell)
+Expand-Archive agent2api-server-windows-amd64.zip -DestinationPath C:\agent2api-pkg
+cd C:\agent2api-pkg; .\install-service.ps1
 ```
 
-**Pages running in a browser** (a self-built web UI, …) that call this endpoint with `fetch` hit a cross-origin preflight rejection — the gateway does **not** answer CORS by default, so the preflight lands on the API-key check and gets a 401. Two ways out: ① turn on "Security → Gateway CORS" in Settings (origin `*`; with `*` any web page could drive your local gateway, so set a "Gateway Key" too); ② make the page same-origin — serve it from a small local static server that reverse-proxies `/v1` to `127.0.0.1:3065`.
-
-### LAN access
-
-By default the gateway only listens on `127.0.0.1`. After turning on "Settings → General → LAN access" it listens on all adapters, and devices on the LAN just point their API base URL at this machine's IP (the UI shows the full address) to share the accounts. For safety, enabling it requires registering a panel administrator first: the management API then demands an admin session or a gateway key, and with no key enabled the forwarding API refuses service too (the enable flow adds a "default" key automatically). The web panel can optionally be exposed to the LAN as well (off by default). Changes take effect after a restart.
-
-The desktop installers (Windows / macOS) already ship the web panel's `ui/` folder: once you turn on "expose the web management panel to the LAN" as well, devices on the LAN can open the same address in a browser to get the management UI — the same interface as the Docker form. **The desktop window itself never goes through web login** (there is no login page in the app): it authenticates with this machine's first gateway key, so flipping that switch never asks you to sign in from the desktop app. The web login page only appears when a browser opens the panel.
-
-## 🐳 Docker Deployment
+**Docker**:
 
 ```bash
-docker run -d --name agent2api --restart unless-stopped \
-  -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data aimodcc/agent2api:latest
 ```
 
-Open `http://<host>:3065` in a browser — the first visit walks you through **registering the admin account**; log in and create an API key in the "Gateway Keys" page for your clients — `http://<host>:3065/v1` is the OpenAI-compatible endpoint (it refuses to forward until the first key exists). All state (SQLite database / config / logs) lives in the `./data` volume.
-
-Compose users (images are published for amd64 and arm64):
-
-```yaml
-services:
-  agent2api:
-    image: aimodcc/agent2api:latest
-    container_name: agent2api
-    restart: unless-stopped
-    ports:
-      - "3065:3065"
-    volumes:
-      - ./data:/data
-```
-
-Environment variables (all optional):
-
-| Variable | Description |
-| --- | --- |
-| `AGENT2API_ADMIN_USER` + `AGENT2API_ADMIN_PASSWORD` | Preset the admin account & password (password in plain text, hashed automatically at startup). Leave unset to register in the panel |
-| `AGENT2API_PANEL_PORT` | Serve the panel (UI + `/api/*`) on its own port; map only the main port publicly to keep the management plane internal (bind the panel port as `127.0.0.1:3066:3066`) |
-| `AGENT2API_HOST` / `AGENT2API_PROXY_PORT` | Listen address (default `0.0.0.0`) / port (default `3065`) |
-| `AGENT2API_ALLOW_NO_KEY` | Set to `1` to serve `/v1` without any key — private networks only |
-| `AGENT2API_CAPTCHA_ENABLED` | Login-page human verification widget: `1` enabled (default), `0` disabled |
-| `AGENT2API_SELF_UPDATE` | In-container update entry: `1` enabled by default (the panel offers "Download and update"); set `0` to upgrade manually only |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | Advanced: point update checks/downloads at your own source. The first swaps the repository (defaults to the upstream `aimod-cc/agent2api`; forks should override it), the second swaps the API root (default `https://api.github.com`, must return a GitHub-shaped release JSON). With a custom source set, the download allowlist additionally admits only **that source's own host** (scheme follows the source: an `http://` source also allows plaintext downloads — for local drills / internal mirrors only) |
-
-Build from source: clone the repo and run `docker compose up -d --build` (the image contains only the gateway and the panel, no Rust toolchain).
-
-**Web panel capability notes** (these stem from having no local desktop client): web login (WorkBuddy / Qoder / Cline), SMS codes and pasted credentials work fully; web logins that need a callback on this machine (AutoClaw / CatPaw / Accio / CodeArts / Trae) and "import desktop login state" are unavailable — use pasted credentials instead. A desktop app with "expose the web management panel" turned on shows the same differences in a browser: one interface, one set of rules.
-
-### In-container updates (optional)
-
-The panel's "Software update" page can download and apply updates from inside the container: it fetches `agent2api-server-linux-<arch>.tar.gz` from the official Release (verifying the `.sha256`), replaces the executable and `ui/`, then exits gracefully so the `restart` policy brings the same container back up. Controlled by `AGENT2API_SELF_UPDATE` (set to `1` in the Dockerfile); set it to `0` to upgrade manually only.
-
-Those two `agent2api-server-linux-<arch>.tar.gz` assets exist **solely as the payload for that update chain**: CI reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image (see the `linux-server` job in `.github/workflows/build.yml`). There is no install script and no systemd unit, and it is not a separate deployment form — outside a container the update flow would simply stop the service (it replaces files, then exits, relying on Docker's `restart` policy to bring the process back).
-
-Be aware of the trade-off: after an in-container update the image tag and the version actually running **drift apart** (`docker inspect` still reports the old tag), and `docker compose pull && up -d` rebuilds the container back to the version baked into the image. If you want pinned versions, leave this entry point off.
+Whichever form you pick, open the panel afterwards (`http://127.0.0.1:3065/`; use the host IP for the server and Docker forms), register the admin account, then create a key on the "Gateway Keys" page. Connectivity check: `curl http://127.0.0.1:3065/health`
 
 ## 📸 Screenshots
 

@@ -12,7 +12,7 @@
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 핵심 기능](#-핵심-기능) • [💬 커뮤니티 및 지원](#-커뮤니티-및-지원) • [🤝 지원 공급자](#-지원-공급자) • [🚀 빠른 시작](#-빠른-시작) • [🐳 Docker 배포](#-docker-배포) • [📸 화면 미리보기](#-화면-미리보기) • [🔧 개발 및 빌드](#-개발-및-빌드) • [📜 사용 고지](#-사용-고지)
+[✨ 핵심 기능](#-핵심-기능) • [💬 커뮤니티 및 지원](#-커뮤니티-및-지원) • [🤝 지원 공급자](#-지원-공급자) • [🚀 빠른 시작](#-빠른-시작) • [📦 설치와 배포](./install.ko.md) • [📸 화면 미리보기](#-화면-미리보기) • [🔧 개발 및 빌드](#-개발-및-빌드) • [📜 사용 고지](#-사용-고지)
 
 </div>
 
@@ -91,111 +91,36 @@ Agent2API는 여러 AI 데스크톱 클라이언트에 로그인된 계정을 �
 
 ## 🚀 빠른 시작
 
-Releases에는 네 가지 형태의 산출물이 있습니다. 시스템에 맞는 것을 고르세요:
+세 가지 형태 중 환경에 맞는 것을 고르세요. **설치, 업그레이드, 제거, 문제 해결의 전체 안내는 [설치와 배포](./install.ko.md) 에 있습니다**.
 
-| 형태 | 산출물 | 인터페이스 | 설명 |
-| --- | --- | --- | --- |
-| **Windows 데스크톱**(권장) | `Agent2API_<버전>_x64-setup.exe` | 앱 창 | NSIS 설치 프로그램, 기본 설치 경로 `C:\Program Files\Agent2API`, 설치 시 관리자 권한 필요 |
-| **macOS 데스크톱** | `Agent2API_<버전>_universal.dmg` | 앱 창 | 유니버설 바이너리(Apple Silicon과 Intel을 각각 빌드해 병합). macOS 10.15 이상 |
-| **Linux 데스크톱** | `Agent2API_<버전>_amd64.deb` 또는 `Agent2API_<버전>_amd64.AppImage` | 앱 창 | deb는 시스템에 설치(webkit2gtk-4.1 / gtk3 필요), AppImage는 설치가 필요 없는 단일 파일로 모든 배포판에서 실행 |
-| **Docker** | `aimodcc/agent2api:latest` | **브라우저 패널** | amd64 / arm64 이미지, [Docker 배포](#-docker-배포) 참고 |
-> 별도로 `agent2api-server-linux-<arch>.tar.gz` 첨부 2개가 있는데, 이는 Docker 버전의 **컨테이너 내 원클릭 업데이트** 페이로드(패널의 "다운로드 후 업데이트"가 받는 패키지)이며 독립된 배포 형태가 아닙니다. 일반 사용자는 신경 쓸 필요가 없습니다.
+| 형태 | 산출물 | 인터페이스 |
+| --- | --- | --- |
+| **데스크톱**(Windows / macOS / Linux) | `Agent2API_<버전>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | 앱 창 |
+| **서버**(Windows Server / Linux, GUI 없음) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | 브라우저 패널 |
+| **Docker** | `aimodcc/agent2api:latest`(amd64 / arm64) | 브라우저 패널 |
 
-**데스크톱**(Windows / macOS / Linux)은 설치 후 그냥 실행하면 됩니다. **Node나 다른 런타임이 필요 없으며**, 게이트웨이는 앱 프로세스 안에서 돌고 트레이에 상주합니다.
+**데스크톱**: 설치 후 실행 → "계정" 페이지에서 계정 추가 → 클라이언트 `base_url` 을 `http://127.0.0.1:3065/v1` 로 설정(`api_key` 는 아무 값이나 가능합니다. 예: `sk-local`). Node 나 다른 런타임은 필요 없고, 게이트웨이는 앱 프로세스 안에서 돌며 트레이에 상주합니다.
 
-1. 첫 실행 시 앱 프로세스 안에서 로컬 게이트웨이(포트 3065)가 시작되고 메인 창이 열립니다. 이전 버전의 데이터 디렉터리나 데이터 파일이 발견되면 마이그레이션 안내 대화상자가 표시되며, 안내에 따라 진행하면 됩니다.
-2. "계정" 페이지에서 "계정 추가"를 누르고 프로바이더를 고른 뒤, 대화상자 안내대로 로그인하거나 자격 증명을 입력하면 됩니다(웹 로그인 / SMS 인증 코드 / 자격 증명 붙여넣기 / 이 PC 로그인 상태 가져오기).
-3. OpenAI 클라이언트의 `base_url`을 `http://127.0.0.1:3065/v1`로 설정하고 `api_key`는 아무 값이나 넣으면 됩니다(예: `sk-local`. 인증을 켜지 않으면 서버는 검사하지 않습니다).
-
-창을 닫아도 기본적으로 트레이로 최소화될 뿐이며 게이트웨이는 백그라운드에서 계속 전달합니다. 완전히 종료하려면 트레이 아이콘을 오른쪽 클릭해 "종료"를 선택하세요.
-
-> **macOS 첫 실행**: dmg 안의 앱에는 Apple 코드 서명과 공증이 적용되지 않았습니다(서명에는 유료 Apple Developer 계정이 필요합니다. `.github/workflows/build.yml` 설명 참고). 따라서 Gatekeeper가 첫 실행을 차단하며, "시스템 설정 → 개인정보 보호 및 보안"에서 한 번 수동으로 허용하면 됩니다.
->
-> **Linux 데스크톱**: 트레이는 `libayatana-appindicator3`가 필요합니다(대부분의 데스크톱 환경에 포함). 아이콘이 보이지 않으면 `libayatana-appindicator3-1`을 설치하고 다시 실행하세요. AppImage는 첫 실행 전에 실행 권한이 필요합니다(`chmod +x`, "설치 프로그램 열기"를 선택하면 자동으로 부여됩니다). 업데이트: deb는 시스템 설치 프로그램을 거치고(설치 시 비밀번호를 한 번 묻습니다), AppImage는 파일을 교체하면 업그레이드됩니다.
->
-> **데스크톱 버전의 차이**: AutoClaw와 智谱清言의 "이 PC 로그인 상태 가져오기"는 Windows에서만 사용할 수 있습니다(Windows DPAPI 암호문을 읽기 때문에 macOS / Linux에서는 해당 섹션이 숨겨집니다). 나머지(小浣熊 / CatPaw / Cline)는 `HOME` 아래 평문 파일을 읽으므로 세 플랫폼 모두에서 사용할 수 있습니다. 트레이, 자동 시작, LAN 접근, 웹 패널 호스팅은 macOS / Linux에서도 동일하게 지원됩니다.
-
-### 확인
-
-게이트웨이가 뜨면 curl로 연결을 확인합니다(`model`에는 `GET /v1/models`에 실제로 있는 이름을 넣으세요):
+**서버**(GUI 없음. 시스템 서비스로 등록되어 부팅 시 자동 시작):
 
 ```bash
-curl http://127.0.0.1:3065/health
-curl http://127.0.0.1:3065/v1/models
-
-curl http://127.0.0.1:3065/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'
+# Linux
+tar -xzf agent2api-server-linux-amd64.tar.gz && cd agent2api-server-linux-amd64 && sudo bash install.sh
 ```
 
-클라이언트 연동 예시(Python SDK):
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:3065/v1", api_key="sk-local")
-resp = client.chat.completions.create(
-    model="deepseek-v4.1-flash",     # 목록에 있는 아무 프로바이더의 모델 — GET /v1/models 참고
-    messages=[{"role": "user", "content": "你好"}],
-)
-print(resp.choices[0].message.content)
+```powershell
+# Windows Server (관리자 PowerShell)
+Expand-Archive agent2api-server-windows-amd64.zip -DestinationPath C:\agent2api-pkg
+cd C:\agent2api-pkg; .\install-service.ps1
 ```
 
-**브라우저에서 도는 페이지**(자체 제작 Web UI 등)가 `fetch`로 바로 붙으면 교차 출처 프리플라이트에 거부됩니다 — 게이트웨이는 기본적으로 CORS에 응답하지 않아 프리플라이트가 API 키 검사에 걸려 401이 됩니다. 해법: ① 설정의 "보안 → 게이트웨이 교차 출처 접근"을 켜기(출처 `*`. 어떤 웹 페이지든 이 PC 게이트웨이를 두드릴 수 있으므로 "게이트웨이 키"도 함께 설정하세요); ② 페이지를 게이트웨이와 동일 출처로 — 로컬 정적 서버가 페이지를 제공하고 `/v1`을 `127.0.0.1:3065`로 리버스 프록시.
-
-### LAN 접근
-
-기본적으로 `127.0.0.1`만 수신합니다. "설정 → 일반 → LAN 접근"을 켜면 모든 네트워크 어댑터에서 수신하고, LAN 기기는 API 주소를 이 PC의 IP로 지정하기만 하면 됩니다(화면에 전체 주소 표시). 보안을 위해 켜기 전에 패널 관리자 등록이 필요합니다. 관리 API는 관리자 세션 또는 게이트웨이 키를 요구하며, 활성화된 키가 없으면 전달 API도 거부합니다(켜는 과정에서 "기본" 키가 자동 추가됩니다). 웹 패널의 LAN 공개도 선택할 수 있습니다(기본 비공개). 변경은 재시작 후 적용됩니다.
-
-데스크톱 설치 프로그램(Windows / macOS)에는 웹 패널의 `ui/`가 이미 함께 들어 있습니다. "웹 관리 패널도 공개"를 켜면 LAN 기기에서 브라우저로 같은 주소를 열면 관리 화면이 나옵니다 —— Docker 버전과 동일한 화면입니다. **데스크톱 창 자체는 웹 로그인을 거치지 않습니다**(앱에 로그인 페이지가 없습니다). 이 PC의 첫 번째 게이트웨이 키를 자격 증명으로 사용하므로, 이 스위치를 켜는 데 데스크톱에서 추가 로그인이 필요하지 않습니다. 웹 로그인 페이지는 브라우저로 패널을 열 때만 나타납니다.
-
-## 🐳 Docker 배포
+**Docker**:
 
 ```bash
-docker run -d --name agent2api --restart unless-stopped \
-  -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data aimodcc/agent2api:latest
 ```
 
-브라우저에서 `http://<호스트>:3065`를 열면 첫 방문 시 **관리자 계정 등록**으로 안내합니다. 로그인 후 "게이트웨이 키" 페이지에서 클라이언트용 API 키를 만들면 됩니다 — `http://<호스트>:3065/v1`이 OpenAI 호환 엔드포인트이며, 키를 만들기 전에는 전달을 거부합니다. 모든 상태(SQLite 데이터베이스 / 설정 / 로그)는 `./data` 볼륨 하나에 저장됩니다.
-
-compose 사용자용(amd64 / arm64 이미지 모두 제공):
-
-```yaml
-services:
-  agent2api:
-    image: aimodcc/agent2api:latest
-    container_name: agent2api
-    restart: unless-stopped
-    ports:
-      - "3065:3065"
-    volumes:
-      - ./data:/data
-```
-
-환경 변수(모두 선택 사항):
-
-| 변수 | 설명 |
-| --- | --- |
-| `AGENT2API_ADMIN_USER` + `AGENT2API_ADMIN_PASSWORD` | 관리자 계정과 비밀번호 사전 설정(비밀번호는 평문으로 입력, 시작 시 자동 해시). 미설정 시 패널에서 등록 |
-| `AGENT2API_PANEL_PORT` | 패널을 별도 포트로 분리: 설정하면 패널(UI + `/api/*`)이 해당 포트만 수신하고, 공개 측에는 메인 포트만 매핑해 관리 표면을 내부에 둘 수 있습니다(패널 포트는 루프백에 바인딩. `127.0.0.1:3066:3066`처럼 기재) |
-| `AGENT2API_HOST` / `AGENT2API_PROXY_PORT` | 수신 주소(기본 `0.0.0.0`) / 포트(기본 `3065`) |
-| `AGENT2API_ALLOW_NO_KEY` | `1`이면 fail-closed 해제(키 미설정이어도 `/v1` 허용, 순수 내부망 한정) |
-| `AGENT2API_CAPTCHA_ENABLED` | 로그인 페이지 사람 확인 위젯: 기본 `1`(켜짐), `0`은 끔 |
-| `AGENT2API_SELF_UPDATE` | 컨테이너 안의 업데이트 창구: 기본 `1`(켜짐. 패널에서 "다운로드 후 업데이트" 가능). `0`이면 꺼지고 수동 업그레이드만 가능 |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 심화: "업데이트 확인 / 업데이트 다운로드"를 자체 소스로 교체합니다. 전자는 저장소를 바꾸고(기본값은 업스트림 `aimod-cc/agent2api`, fork 후 변경 가능), 후자는 API 루트를 바꿉니다(기본 `https://api.github.com`, GitHub와 같은 형태의 release JSON을 반환해야 함). 자체 소스 설정 후 다운로드 허용 목록은 **그 소스 자신의 호스트**만 추가로 허용합니다(스킴은 소스를 따름: `http://`를 설정하면 평문 다운로드도 허용. 로컬 연습 / 내부 미러용) |
-
-소스에서 빌드하려면: 이 저장소를 클론한 뒤 `docker compose up -d --build`(이미지에는 게이트웨이와 패널만 들어가며 Rust 도구 체인은 포함되지 않습니다).
-
-**웹 패널 기능 차이**( 이 PC에 데스크톱 클라이언트가 없음에서 비롯됩니다): 웹 로그인(WorkBuddy / Qoder / Cline), SMS 인증 코드, 자격 증명 붙여넣기는 완전히 사용 가능합니다. 이 PC 콜백이 필요한 웹 로그인(AutoClaw / CatPaw / Accio / CodeArts / Trae)과 "이 PC 로그인 상태 가져오기"는 사용할 수 없으니 자격 증명 붙여넣기를 쓰세요. 데스크톱에서 "웹 관리 패널도 공개"를 켠 뒤 브라우저로 열어도 같은 차이가 적용됩니다 —— 동일한 화면, 동일한 판정입니다.
-
-### 컨테이너 내 업데이트(선택)
-
-패널의 "소프트웨어 업데이트" 페이지에서 컨테이너 안에서 바로 "다운로드 후 업데이트"를 실행할 수 있습니다. 공식 Release의 `agent2api-server-linux-<arch>.tar.gz`를 받아(`.sha256` 검증) 실행 파일과 `ui/`를 교체한 뒤 프로세스가 정상 종료되면 `restart` 정책이 같은 컨테이너를 다시 띄웁니다. `AGENT2API_SELF_UPDATE`로 제어하며(Dockerfile에서 기본 `1`), `0`으로 두면 수동 업그레이드만 사용합니다.
-
-그 `agent2api-server-linux-<arch>.tar.gz` 는 **이 업데이트 경로 전용 페이로드**입니다: CI 가 Dockerfile 의 컴파일 경로를 재사용해 패키징하므로 안에 든 실행 파일이 이미지와 동일한 도구 체인에서 나옵니다(`.github/workflows/build.yml` 의 `linux-server` job 참고). 설치 스크립트도 systemd 유닛도 없고 별도의 배포 형태도 아닙니다 —— 컨테이너 밖에서는 서비스가 자동으로 되살아나지 않습니다(업데이트는 "파일 교체 후 종료"이고, Docker 의 `restart` 정책이 프로세스를 다시 띄우는 전제입니다).
-
-주의할 점: 컨테이너 내 업데이트 후에는 이미지 태그와 **실제 실행 중인 버전이 어긋납니다**(`docker inspect`에는 여전히 이전 태그가 표시됩니다). `docker compose pull && up -d`로 컨테이너를 재생성하면 이미지에 포함된 버전으로 되돌아갑니다. 버전을 고정하려면 이 진입점을 켜지 마세요.
+어느 형태든 설치 후 패널(`http://127.0.0.1:3065/`. 서버와 Docker 는 호스트 IP 로 바꿔서)을 열어 관리자 계정을 등록하고, "게이트웨이 키" 페이지에서 키를 만드세요. 연결 확인: `curl http://127.0.0.1:3065/health`
 
 ## 📸 화면 미리보기
 

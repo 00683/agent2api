@@ -12,7 +12,7 @@
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ Principais recursos](#-principais-recursos) • [💬 Comunidade e suporte](#-comunidade-e-suporte) • [🤝 Provedores compatíveis](#-provedores-compatíveis) • [🚀 Início rápido](#-início-rápido) • [🐳 Implantação com Docker](#-implantação-com-docker) • [📸 Capturas de tela](#-capturas-de-tela) • [🔧 Desenvolvimento e build](#-desenvolvimento-e-build) • [📜 Aviso de uso](#-aviso-de-uso)
+[✨ Principais recursos](#-principais-recursos) • [💬 Comunidade e suporte](#-comunidade-e-suporte) • [🤝 Provedores compatíveis](#-provedores-compatíveis) • [🚀 Início rápido](#-início-rápido) • [📦 Instalação e implantação](./install.pt-BR.md) • [📸 Capturas de tela](#-capturas-de-tela) • [🔧 Desenvolvimento e build](#-desenvolvimento-e-build) • [📜 Aviso de uso](#-aviso-de-uso)
 
 </div>
 
@@ -91,111 +91,36 @@ Panorama dos recursos de proxy reverso por plataforma (✓ suportado · ✗ não
 
 ## 🚀 Início rápido
 
-A página de Releases oferece quatro formas; escolha a do seu sistema:
+Três formas — escolha a que combina com o seu ambiente; **o guia completo de instalação, atualização, desinstalação e solução de problemas está em [Instalação e implantação](./install.pt-BR.md)**.
 
-| Forma | Artefato | Interface | Observações |
-| --- | --- | --- | --- |
-| **Desktop Windows** (recomendado) | `Agent2API_<versão>_x64-setup.exe` | Janela do app | Instalador NSIS, instala em `C:\Program Files\Agent2API` por padrão e exige aprovação de administrador |
-| **Desktop macOS** | `Agent2API_<versão>_universal.dmg` | Janela do app | Binário universal (Apple Silicon e Intel compilados separadamente e mesclados); macOS 10.15+ |
-| **Desktop Linux** | `Agent2API_<versão>_amd64.deb` ou `Agent2API_<versão>_amd64.AppImage` | Janela do app | O deb instala no sistema (requer webkit2gtk-4.1 / gtk3); o AppImage é um único arquivo autossuficiente que roda em qualquer distribuição |
-| **Docker** | `aimodcc/agent2api:latest` | **Painel no navegador** | Imagens amd64 / arm64, veja [Implantação com Docker](#-implantação-com-docker) |
-> Há também dois anexos `agent2api-server-linux-<arch>.tar.gz`: são o payload da **atualização em um clique dentro do contêiner** da versão Docker (o pacote que o painel baixa em "Baixar e atualizar"), não uma forma de implantação independente — usuários comuns não precisam se preocupar com eles.
+| Forma | Artefato | Interface |
+| --- | --- | --- |
+| **Desktop** (Windows / macOS / Linux) | `Agent2API_<versão>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | Janela do app |
+| **Servidor** (Windows Server / Linux, sem GUI) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | Painel no navegador |
+| **Docker** | `aimodcc/agent2api:latest` (amd64 / arm64) | Painel no navegador |
 
-Os **apps de desktop** (Windows / macOS / Linux) bastam ser iniciados após a instalação — **não é necessário instalar Node nem qualquer outro runtime**; o gateway roda dentro do processo do aplicativo e permanece na bandeja.
+**Desktop**: instale e abra → adicione uma conta na página "Contas" → aponte o `base_url` do cliente para `http://127.0.0.1:3065/v1` (o `api_key` pode ser qualquer coisa, por exemplo `sk-local`). Não é preciso Node nem outro runtime: o gateway roda dentro do processo do aplicativo e fica na bandeja.
 
-1. Na primeira execução, o gateway local (porta 3065) sobe dentro do processo do aplicativo e a janela principal abre. Se um diretório ou arquivo de dados de uma versão antiga for encontrado, um diálogo orienta a migração — basta seguir as instruções.
-2. Clique em "Adicionar conta" na página de Contas, escolha um provedor e siga o diálogo: entre ou preencha as credenciais (login pela web / código por SMS / colar credenciais / importar o estado de login desta máquina).
-3. Aponte o `base_url` do seu cliente OpenAI para `http://127.0.0.1:3065/v1` e preencha o `api_key` com qualquer coisa (por exemplo `sk-local`; o servidor não valida enquanto a autenticação estiver desativada).
-
-Fechar a janela apenas minimiza para a bandeja, e o gateway continua encaminhando em segundo plano; para sair de verdade, clique com o botão direito no ícone da bandeja e escolha "Sair".
-
-> **Primeira abertura no macOS**: o app dentro do dmg não tem assinatura de código nem notarização da Apple (assinar exige uma conta paga de Apple Developer — veja a explicação em `.github/workflows/build.yml`), então o Gatekeeper bloqueia a primeira execução. Libere uma vez em "Ajustes do Sistema → Privacidade e Segurança" e ele abre normalmente depois.
->
-> **Notas do desktop Linux**: a bandeja depende de `libayatana-appindicator3` (a maioria dos ambientes traz; instale `libayatana-appindicator3-1` e reabra se o ícone não aparecer). Um AppImage precisa do bit de execução antes da primeira execução (`chmod +x`; o app o define automaticamente ao escolher "Abrir instalador"). Atualizações: o deb passa pelo instalador do sistema (ele pede sua senha uma vez), enquanto o AppImage é atualizado substituindo o arquivo.
->
-> **Diferenças do desktop**: o "importar o estado de login desta máquina" do AutoClaw e do ChatGLM (智谱清言) só existe no Windows (ele lê texto cifrado do DPAPI, então essa seção fica oculta no macOS / Linux); os demais (Raccoon / CatPaw / Cline) leem arquivos em texto puro sob `HOME` e funcionam nas três plataformas. Bandeja, início automático, acesso pela rede local e hospedagem do painel web também funcionam no macOS / Linux.
-
-### Verificação
-
-Com o gateway no ar, use curl para confirmar a conectividade (coloque em `model` qualquer nome que exista de fato em `GET /v1/models`):
+**Servidor** (sem GUI; registrado como serviço do sistema e iniciado no boot):
 
 ```bash
-curl http://127.0.0.1:3065/health
-curl http://127.0.0.1:3065/v1/models
-
-curl http://127.0.0.1:3065/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'
+# Linux
+tar -xzf agent2api-server-linux-amd64.tar.gz && cd agent2api-server-linux-amd64 && sudo bash install.sh
 ```
 
-Exemplo de integração de cliente (SDK de Python):
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:3065/v1", api_key="sk-local")
-resp = client.chat.completions.create(
-    model="deepseek-v4.1-flash",     # o provedor que tiver o modelo — veja GET /v1/models
-    messages=[{"role": "user", "content": "你好"}],
-)
-print(resp.choices[0].message.content)
+```powershell
+# Windows Server (PowerShell como administrador)
+Expand-Archive agent2api-server-windows-amd64.zip -DestinationPath C:\agent2api-pkg
+cd C:\agent2api-pkg; .\install-service.ps1
 ```
 
-**Páginas no navegador** (uma interface web própria, …) que chamam este endpoint com `fetch` esbarram no preflight cross-origin — o gateway **não** responde CORS por padrão, então o preflight cai na verificação de API key e recebe 401. Duas saídas: ① ative "Segurança → Acesso cross-origin do gateway" nas Configurações (origem `*`; com `*` qualquer página pode acionar o seu gateway, então configure também uma "Gateway Key"); ② coloque a página na mesma origem — sirva-a de um pequeno servidor estático local que faz proxy reverso de `/v1` para `127.0.0.1:3065`.
-
-### Acesso pela rede local
-
-Por padrão o gateway escuta apenas `127.0.0.1`. Ao ativar "Configurações → Geral → Acesso pela rede local" ele passa a escutar todos os adaptadores e os dispositivos da rede só precisam apontar o endereço da API para o IP desta máquina (a interface mostra o endereço completo). Por segurança, é obrigatório registrar um administrador do painel antes de ativar: a API de gerenciamento passa a exigir sessão de administrador ou uma Gateway Key e, sem chave ativa, a API de encaminhamento também recusa (o fluxo cria uma chave "padrão" automaticamente). O painel web pode ser exposto à rede local opcionalmente (fechado por padrão). As mudanças valem após reiniciar.
-
-Os instaladores de desktop (Windows / macOS) já incluem a pasta `ui/` do painel web: ao ativar também a opção de expor o painel de gerenciamento à rede local, dispositivos da rede podem abrir o mesmo endereço no navegador e ver a interface de gerenciamento — a mesma interface da versão Docker. **A janela do desktop em si nunca passa pelo login web** (não existe página de login no app): ela se autentica com a primeira Gateway Key desta máquina, então ligar esse interruptor não pede login no app. A página de login web só aparece quando um navegador abre o painel.
-
-## 🐳 Implantação com Docker
+**Docker**:
 
 ```bash
-docker run -d --name agent2api --restart unless-stopped \
-  -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data aimodcc/agent2api:latest
 ```
 
-Abra `http://<host>:3065` no navegador: a primeira visita guia o **cadastro do administrador**; depois de entrar, crie uma API key na página "Gateway Keys" para os clientes — `http://<host>:3065/v1` é o endpoint compatível com OpenAI (sem nenhuma chave ele recusa o encaminhamento). Todo o estado (banco SQLite / configuração / logs) fica em um único volume `./data`.
-
-Para quem usa compose (há imagens amd64 e arm64):
-
-```yaml
-services:
-  agent2api:
-    image: aimodcc/agent2api:latest
-    container_name: agent2api
-    restart: unless-stopped
-    ports:
-      - "3065:3065"
-    volumes:
-      - ./data:/data
-```
-
-Variáveis de ambiente (todas opcionais):
-
-| Variável | Descrição |
-| --- | --- |
-| `AGENT2API_ADMIN_USER` + `AGENT2API_ADMIN_PASSWORD` | Predefine o administrador e a senha (a senha vai em texto puro e é transformada em hash na inicialização). Sem isso, use o cadastro no painel |
-| `AGENT2API_PANEL_PORT` | Painel em porta separada: ao definir, o painel (interface + `/api/*`) escuta só nessa porta e basta mapear a porta principal publicamente para manter o plano de gerenciamento interno (vincule a porta do painel ao loopback, como `127.0.0.1:3066:3066`) |
-| `AGENT2API_HOST` / `AGENT2API_PROXY_PORT` | Endereço de escuta (padrão `0.0.0.0`) / porta (padrão `3065`) |
-| `AGENT2API_ALLOW_NO_KEY` | `1` desativa o fail-closed (serve `/v1` mesmo sem chave configurada — só para redes internas) |
-| `AGENT2API_CAPTCHA_ENABLED` | Widget de verificação humana na tela de login: `1` ativado (padrão), `0` desativado |
-| `AGENT2API_SELF_UPDATE` | Ponto de atualização dentro do contêiner: `1` ativado por padrão (o painel oferece "Baixar e atualizar"); `0` desativa e deixa apenas a atualização manual |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | Avançado: aponte "verificar atualizações / baixar atualizações" para a sua própria fonte. O primeiro troca o repositório (por padrão segue o upstream `aimod-cc/agent2api`; em fork, sobrescreva), o segundo troca a raiz da API (padrão `https://api.github.com`; deve devolver um JSON de release no formato do GitHub). Com uma fonte própria configurada, a lista de permissões de download passa a aceitar, além disso, apenas **o próprio host dessa fonte** (o esquema segue a fonte: uma fonte `http://` também permite download em texto puro — só para ensaios locais / espelhos internos) |
-
-Compilar a partir do código: clone o repositório e rode `docker compose up -d --build` (a imagem contém apenas o gateway e o painel, sem toolchain Rust).
-
-**Diferenças de recursos no painel web** (decorrem de "não haver cliente de desktop local"): login pela web (WorkBuddy / Qoder / Cline), código por SMS e credenciais coladas funcionam plenamente; logins pela web que exigem callback nesta máquina (AutoClaw / CatPaw / Accio / CodeArts / Trae) e a "importação do estado de login local" não estão disponíveis — use credenciais coladas. Com o desktop e a opção de expor o painel ativadas, abrir no navegador mostra as mesmas diferenças: uma interface, um conjunto de regras.
-
-### Atualização dentro do contêiner (opcional)
-
-A página "Atualização de software" do painel consegue baixar e aplicar atualizações de dentro do contêiner: busca `agent2api-server-linux-<arch>.tar.gz` no Release oficial (validando o `.sha256`), substitui o executável e a pasta `ui/` e encerra o processo de forma graciosa, para que a política de `restart` suba o mesmo contêiner de novo. Controlado por `AGENT2API_SELF_UPDATE` (`1` no Dockerfile); defina `0` para atualizar apenas manualmente.
-
-Aqueles dois `agent2api-server-linux-<arch>.tar.gz` existem **apenas como payload dessa cadeia de atualização**: a CI reaproveita o caminho de compilação do Dockerfile para que o executável de dentro seja da mesma toolchain da imagem (veja o job `linux-server` em `.github/workflows/build.yml`). Não há script de instalação nem unidade systemd, e não é uma forma de implantação separada — fora de um contêiner o serviço não voltaria sozinho (a atualização troca arquivos e encerra o processo, contando com a política `restart` do Docker para subi-lo de novo).
-
-Atenção ao custo: depois de uma atualização interna, a tag da imagem e a versão realmente em execução **divergem** (`docker inspect` continua mostrando a tag antiga), e `docker compose pull && up -d` recria o contêiner na versão embutida na imagem. Se você quer versões fixas, deixe esse caminho desativado.
+Em qualquer forma, abra o painel depois (`http://127.0.0.1:3065/`; use o IP do host nas formas servidor e Docker), registre o administrador e crie uma chave na página "Gateway Keys". Teste de conectividade: `curl http://127.0.0.1:3065/health`
 
 ## 📸 Capturas de tela
 

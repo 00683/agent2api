@@ -67,6 +67,7 @@ GitHub 的归属规则只有一条：**提交头里的 author 邮箱出现在某
   4. `desktop-tauri/src-tauri/tauri.conf.json`
   5. `desktop-tauri/src-tauri/server/Cargo.toml`
 - 应用内「关于」与更新检查读的是 `env!("CARGO_PKG_VERSION")`（第 5 处），改完跑一次 `cargo check` 让 `Cargo.lock` 跟着刷新。
+- **顺手过一遍安装文档**：安装说明已经从 README 搬进 `docs/install.md`（README 只留速查表 + 一个链接），另有 5 份译文 `docs/install.{en,zh-Hant,ja,ko,pt-BR}.md`，六份内容一一对应。凡是这次改动碰到了**安装 / 升级 / 卸载步骤、产物体名、默认端口、环境变量、安装脚本参数**，六份都要同步改；README 速查表受影响时也一起改。
 
 ## 5. 正式版发版流程
 
@@ -177,6 +178,7 @@ docker 的 `:latest` 不会被 beta tag 移动（`.github/workflows/docker.yml`�
 - [ ] Linux 桌面端：装 deb（或 `chmod +x` 后跑 AppImage）能启动，且面板「设置 → 软件更新」能检查到版本、给出对应包型的安装入口（deb → 系统安装器，AppImage → 换文件）；
 - [ ] Docker Hub：`aimodcc/agent2api` 的 Tags 页出现 `<版本>` 与 `latest`，Pushed 时间一致；
 - [ ] 安装包「关于」页版本号与 tag 一致；
+- [ ] 安装文档对得上实际产物：`docs/install.md` 与 5 份译文的产物名、端口、命令、环境变量跟这次 Release 一致（README 里那几张速查表同理）；
 - [ ] beta 版多一条：Release 显示 **Prerelease**，且 Docker Hub 上 `latest` 没有跟着动。
 
 ## 8. 已知坑与排查

@@ -12,7 +12,7 @@
 [![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
 
-[✨ 核心特性](#-核心特性) • [💬 社群與支援](#-社群與支援) • [🤝 支援的供應商](#-支援的供應商) • [🚀 快速開始](#-快速開始) • [🐳 Docker 部署](#-docker-部署) • [📸 介面預覽](#-介面預覽) • [🔧 開發與建置](#-開發與建置) • [📜 使用聲明](#-使用聲明)
+[✨ 核心特性](#-核心特性) • [💬 社群與支援](#-社群與支援) • [🤝 支援的供應商](#-支援的供應商) • [🚀 快速開始](#-快速開始) • [📦 安裝與部署](./install.zh-Hant.md) • [📸 介面預覽](#-介面預覽) • [🔧 開發與建置](#-開發與建置) • [📜 使用聲明](#-使用聲明)
 
 </div>
 
@@ -91,111 +91,36 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 
 ## 🚀 快速開始
 
-Releases 頁提供四種形態的產物，依你的系統挑一個：
+三種形態，依你的環境挑一個；**完整的安裝、升級、解除安裝與排錯見 [安裝與部署](./install.zh-Hant.md)**。
 
-| 形態 | 產物 | 介面 | 說明 |
-| --- | --- | --- | --- |
-| **Windows 桌面端**（推薦） | `Agent2API_<版本>_x64-setup.exe` | 應用程式視窗 | NSIS 安裝包，預設裝到 `C:\Program Files\Agent2API`，安裝時需要管理員授權 |
-| **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 應用程式視窗 | 通用二進位（Apple Silicon 與 Intel 各編一遍再合併），最低 macOS 10.15 |
-| **Linux 桌面端** | `Agent2API_<版本>_amd64.deb` 或 `Agent2API_<版本>_amd64.AppImage` | 應用程式視窗 | deb 裝進系統（依賴 webkit2gtk-4.1 / gtk3）；AppImage 免安裝單檔，任何發行版可用 |
-| **Docker** | `aimodcc/agent2api:latest` | **瀏覽器面板** | amd64 / arm64 雙架構，見 [Docker 部署](#-docker-部署) |
-> 另有兩個 `agent2api-server-linux-<arch>.tar.gz` 附件，那是 Docker 版**容器內一鍵更新**的載荷（面板「下載並更新」時取得的包），不是獨立部署形態，一般使用者不必理會。
+| 形態 | 產物 | 介面 |
+| --- | --- | --- |
+| **桌面端**（Windows / macOS / Linux） | `Agent2API_<版本>_x64-setup.exe`、`_universal.dmg`、`_amd64.deb`、`_amd64.AppImage` | 應用程式視窗 |
+| **伺服器端**（Windows Server / Linux，無 GUI） | `agent2api-server-windows-amd64.zip`、`agent2api-server-linux-<arch>.tar.gz` | 瀏覽器面板 |
+| **Docker** | `aimodcc/agent2api:latest`（amd64 / arm64） | 瀏覽器面板 |
 
-**桌面端**（Windows / macOS / Linux）安裝後啟動即可，**無需安裝 Node 或任何其它執行環境**；閘道跑在應用程式行程內，常駐系統匣。
+**桌面端**：裝完啟動 → 「帳號」頁新增帳號 → 客戶端 `base_url` 填 `http://127.0.0.1:3065/v1`（`api_key` 隨便填，例如 `sk-local`）。無需安裝 Node 或任何其它執行環境，閘道跑在應用程式行程內，常駐系統匣。
 
-1. 首次啟動即在應用程式行程內啟動本機閘道（連接埠 3065）並開啟主視窗；若偵測到舊版本的資料目錄或資料檔案，會彈窗提示遷移，依指引操作即可。
-2. 點「帳號」頁的「新增帳號」，選供應商後依彈窗提示完成登入或填寫憑證即可（方式以彈窗為準：網頁登入 / 手機驗證碼 / 貼上憑證 / 匯入本機登入狀態）。
-3. 把 OpenAI 客戶端的 `base_url` 填成 `http://127.0.0.1:3065/v1`，`api_key` 隨便填（例如 `sk-local`，未啟用鑑權時伺服器端不校驗）。
-
-關閉視窗預設最小化到系統匣，閘道繼續在背景轉發；徹底結束請在系統匣圖示按右鍵選「結束」。
-
-> **macOS 首次開啟**：dmg 裡的應用程式未做 Apple 程式碼簽章與公證（簽章需要付費的 Apple Developer 帳號，見 `.github/workflows/build.yml` 的說明），Gatekeeper 會攔下首次啟動 —— 到「系統設定 → 隱私權與安全性」手動放行一次即可。
->
-> **Linux 桌面端**：系統匣依賴 `libayatana-appindicator3`（多數桌面環境已內建）；若圖示不顯示，裝 `libayatana-appindicator3-1` 後重開即可。AppImage 首次執行前需要可執行位（`chmod +x`，程式在「開啟安裝包」時會自動補）。更新方式：deb 走系統安裝器（安裝時會問一次密碼），AppImage 是換檔案即升級。
->
-> **桌面端的差異**：AutoClaw 與智譜清言的「匯入本機登入狀態」只在 Windows 可用（讀的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其餘家（小浣熊 / CatPaw / Cline）讀的是 `HOME` 下的明文檔案，三個平台都可用。系統匣、開機自動啟動、區域網路存取與網頁面板代管在 macOS / Linux 上同樣支援。
-
-### 驗證
-
-閘道起來後，用 curl 確認連線性（`model` 填 `GET /v1/models` 裡任一實際存在的名字）：
+**伺服器端**（無圖形介面，註冊成系統服務、開機自動啟動）：
 
 ```bash
-curl http://127.0.0.1:3065/health
-curl http://127.0.0.1:3065/v1/models
-
-curl http://127.0.0.1:3065/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'
+# Linux
+tar -xzf agent2api-server-linux-amd64.tar.gz && cd agent2api-server-linux-amd64 && sudo bash install.sh
 ```
 
-客戶端接入範例（Python SDK）：
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:3065/v1", api_key="sk-local")
-resp = client.chat.completions.create(
-    model="deepseek-v4.1-flash",     # 清單裡有哪家就是哪家，見 GET /v1/models
-    messages=[{"role": "user", "content": "你好"}],
-)
-print(resp.choices[0].message.content)
+```powershell
+# Windows Server（管理員 PowerShell）
+Expand-Archive agent2api-server-windows-amd64.zip -DestinationPath C:\agent2api-pkg
+cd C:\agent2api-pkg; .\install-service.ps1
 ```
 
-**瀏覽器裡的頁面**（自建 Web UI 等）用 `fetch` 直連會被跨來源預檢拒絕——閘道預設不回應 CORS，預檢落到 API Key 校驗上得 401。兩種解法：① 設定頁「安全 → 閘道跨來源存取」開啟（來源 `*`；此時任何網頁都能借本機閘道打上游，建議同時設定「閘道 Key」）；② 頁面與閘道同來源——本地靜態服務託管頁面並把 `/v1` 反向代理到 `127.0.0.1:3065`。
-
-### 區域網路存取
-
-預設只監聽 `127.0.0.1`。開啟「設定 → 一般 → 區域網路存取」後改聽所有網路介面卡，區域網路裝置把 API 位址指向本機 IP 即可共用（介面會給出完整位址）。出於安全，開啟前必須註冊面板管理員：管理介面要求管理員工作階段或閘道 Key，無可用 Key 時轉發介面同樣拒絕服務（開啟流程會自動補一把「預設」Key）；也可選擇同時開放網頁面板（預設關閉）。變更重新啟動後生效。
-
-桌面端（Windows / macOS）安裝包裡就帶著網頁面板那一份 `ui/`，開啟「同時開放網頁管理面板」後區域網路裝置用瀏覽器存取同一網址即是管理介面 —— 與 Docker 版是同一份介面；**桌面視窗自己不走網頁登入**（沒有登入頁），它以本機第一把閘道 Key 作為憑證，開啟這個開關不需要你額外登入桌面端。網頁登入頁只在瀏覽器存取面板時出現。
-
-## 🐳 Docker 部署
+**Docker**：
 
 ```bash
-docker run -d --name agent2api --restart unless-stopped \
-  -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data aimodcc/agent2api:latest
 ```
 
-瀏覽器開啟 `http://<主機>:3065`，首次進入會引導**註冊管理員帳號**；登入後在「閘道 Key」頁建立一把 API Key 給客戶端用 —— `http://<主機>:3065/v1` 即 OpenAI 相容端點（未建立 Key 前拒絕轉發）。所有狀態（SQLite 資料庫 / 設定 / 日誌）都落在 `./data` 一個卷裡。
-
-compose 使用者（amd64 / arm64 都有映像）：
-
-```yaml
-services:
-  agent2api:
-    image: aimodcc/agent2api:latest
-    container_name: agent2api
-    restart: unless-stopped
-    ports:
-      - "3065:3065"
-    volumes:
-      - ./data:/data
-```
-
-環境變數（都可選）：
-
-| 變數 | 說明 |
-| --- | --- |
-| `AGENT2API_ADMIN_USER` + `AGENT2API_ADMIN_PASSWORD` | 預置管理員帳號密碼（密碼明文填，啟動時自動轉雜湊）；不填走面板註冊 |
-| `AGENT2API_PANEL_PORT` | 面板分連接埠：設定後面板（介面 + `/api/*`）單獨監聽該連接埠，公網只映射主連接埠即可把管理面留在內網（面板連接埠綁定迴環位址，寫 `127.0.0.1:3066:3066`） |
-| `AGENT2API_HOST` / `AGENT2API_PROXY_PORT` | 監聽位址（預設 `0.0.0.0`）/ 連接埠（預設 `3065`） |
-| `AGENT2API_ALLOW_NO_KEY` | 設 `1` 關閉 fail-closed（未設 Key 也放行 `/v1`，僅限純內網） |
-| `AGENT2API_CAPTCHA_ENABLED` | 登入頁人機驗證元件：預設 `1` 開啟，`0` 關閉 |
-| `AGENT2API_SELF_UPDATE` | 容器內的更新入口：預設 `1` 開啟（面板可「下載並更新」）；設 `0` 關閉，只走手動升級 |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 進階：把「檢查更新 / 下載更新」換成自建源。前者換儲存庫（預設跟上游 `aimod-cc/agent2api`，fork 後可改），後者換 API 根（預設 `https://api.github.com`，需返回與 GitHub 同形的 release JSON）。配了自建源後，下載白名單只額外放行**該源自己的網域**（按源的 scheme：配 `http://` 就允許明文下載，僅建議本地演練 / 內網映像用） |
-
-從原始碼建置：複製本專案後 `docker compose up -d --build`（映像裡只有閘道與面板，不含 Rust 工具鏈）。
-
-**網頁面板的功能差異**（源於「沒有本機桌面客戶端」）：網頁登入（WorkBuddy / Qoder / Cline）、手機驗證碼、貼上憑證完全可用；需要本機回呼的網頁登入（AutoClaw / CatPaw / Accio / CodeArts / Trae）與「匯入本機登入狀態」不可用，請改用貼上憑證。桌面端開著「同時開放網頁管理面板」時，用瀏覽器存取該面板也是這一套差異 —— 同一份介面、同一套判定。
-
-### 容器內更新（選用）
-
-面板的「軟體更新」頁在容器裡能直接「下載並更新」：下載官方 Release 裡的 `agent2api-server-linux-<arch>.tar.gz`（校驗 `.sha256`）→ 替換執行檔與 `ui/` → 行程優雅結束、由 `restart` 策略拉起同一個容器。由 `AGENT2API_SELF_UPDATE` 控制（Dockerfile 預設 `1`），設為 `0` 則只走手動升級。
-
-那兩個 `agent2api-server-linux-<arch>.tar.gz` 就是給這條更新鏈用的載荷，**用途只此一個**：CI 沿用 Dockerfile 的編譯路徑打包，讓包內執行檔與映像裡的同源同工具鏈（見 `.github/workflows/build.yml` 的 `linux-server` job）。它沒有安裝腳本、沒有 systemd 單元，也不是另一種部署方式 —— 容器外還得靠監管把服務拉回來（更新流程是「換檔案 → 結束行程」，靠 Docker 的 `restart` 策略把行程拉回來）。
-
-代價要清楚：更新後容器標籤與**實際執行的版本會漂移**（`docker inspect` 顯示的仍是舊 tag），執行 `docker compose pull && up -d` 重建容器會回到映像裡的版本。想固定版本就別開這個入口。
+三種形態裝完後都開啟面板（`http://127.0.0.1:3065/`，伺服器端與 Docker 換成主機 IP）註冊管理員帳號，再在「閘道 Key」頁建一把 Key。連線性自測：`curl http://127.0.0.1:3065/health`
 
 ## 📸 介面預覽
 
