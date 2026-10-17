@@ -10,6 +10,15 @@ license-file = "../../../LICENSE"
 repository = "https://github.com/aimod-cc/agent2api"
 homepage = "https://github.com/aimod-cc/agent2api"
 
+# 关掉 bin 自动发现：`src/bin/service.rs` 其实是 `agent2api-server.rs` 的**模块**
+# （那边写着 `#[cfg(windows)] pub mod service;`），但 Cargo 会把 `src/bin/*.rs`
+# 一律当成独立 bin 目标 —— 于是它被当成一个「没有 main、又依赖 Windows-only
+# crate」的假二进制去编译。Linux 上（docker 镜像与 linux-server 包都走
+# `cargo build -p agent2api-server`，**不带** `--bin`）整个构建直接失败：
+#   error[E0601]: `main` function not found in crate `service`
+# 本包的 bin 目标只有下面显式声明的这一个；将来再加 bin 也要在这里登记。
+autobins = false
+
 # ── 为什么拆成独立 crate ──────────────────────────────────────
 # 网关本体（原桌面 crate 的 src/server 模块）要同时服务两种形态：
 #   · Tauri 桌面端（进程内 HTTP 服务器）；

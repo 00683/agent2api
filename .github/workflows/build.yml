@@ -327,8 +327,16 @@ jobs:
 
       # 只编 server crate（`-p`），不碰桌面壳：少了 tauri / wry / webview2
       # 那一整棵依赖树，构建快且产物里没有任何 GUI 依赖。
+      #
+      # ⚠️ 必须在 `desktop-tauri/src-tauri` 下跑，不能用「仓库根 + --manifest-path」：
+      # 产物目录由 `src-tauri/.cargo/config.toml` 的 `target-dir = "../../target"`
+      # 决定，而 cargo **只从 CWD 往上找配置文件** —— 从仓库根跑，这个配置根本
+      # 不会被读到，产物落到 `desktop-tauri/src-tauri/target/`，下面的打包步骤
+      # 按 `target/release/...` 去找就会「找不到文件」而失败（2026-10-17 实测，
+      # v3.0.9-beta.1 的 windows-server 作业就是这么挂的）。
       - name: 构建服务端
-        run: cargo build --release -p agent2api-server --bin agent2api-server --manifest-path desktop-tauri/src-tauri/Cargo.toml
+        working-directory: desktop-tauri/src-tauri
+        run: cargo build --release -p agent2api-server --bin agent2api-server
 
       - name: 打包
         shell: pwsh
