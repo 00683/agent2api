@@ -109,7 +109,10 @@ if [ -d dist/linux-desktop ]; then
   done < <(find dist/linux-desktop -maxdepth 2 -type f \( -name '*.deb' -o -name '*.AppImage' \) | sort)
   if [ ${#LINUX_PKGS[@]} -gt 0 ]; then
     ASSETS+=("${LINUX_PKGS[@]}")
-    echo "→ 已下载 Linux 桌面端包: $(basename "${LINUX_PKGS[@]}")"
+    # 用 ${arr[*]##*/} 而不是 $(basename "${arr[@]}")：本机 Git Bash 的
+    # /usr/bin/basename 只认第一个操作数（POSIX 形态），传数组会把后几个
+    # 静默吞掉 —— 回显只剩 AppImage 时看着像「deb 没下载到」（2026-10-17 实测）
+    echo "→ 已下载 Linux 桌面端包: ${LINUX_PKGS[*]##*/}"
   else
     echo "⚠️  linux-desktop artifact 里没有 .deb / .AppImage —— Linux 用户将看不到可下载的安装包"
   fi
