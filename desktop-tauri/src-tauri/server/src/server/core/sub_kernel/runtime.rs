@@ -377,6 +377,12 @@ async fn poll_providers(
 /// 从测试口发请求（见 `select_test_node`），**不再为被测节点开专用端口**；
 /// 专用端口只服务真正在用的节点（账号引用，lazy listeners）。没有节点时
 /// 不生成组与监听器（空策略组会让内核配置解析失败）。
+
+/// 内核出站绑定的物理网卡：到节点服务器的直连拨号必须绕开本机代理的
+/// 虚拟网卡 —— TUN 会把这类拨号再套一层代理，节点服务器直接拒收（门全红）。
+/// 换网络方式或网卡改名后这里要跟着改，否则门拨不出去。
+const KERNEL_INTERFACE_NAME: &str = "WLAN";
+
 fn build_config(
     providers: &[ProviderInput],
     controller_port: u16,
@@ -472,6 +478,15 @@ fn build_config(
         "mode": "rule",
         "log-level": "warning",
         "ipv6": false,
+        "interface-name": KERNEL_INTERFACE_NAME,
+        // DoH 拿节点服务器的真实 IP：系统解析会被本机 TUN 的 fake-ip 劫持成
+        // 198.18.x.x，假地址从物理网卡出去是不通的。DoH 地址用 IP 形式，
+        // 避免「解析 DoH 服务器自己的域名」也被劫持。
+        "dns": {
+            "enable": true,
+            "nameserver": ["https://223.5.5.5/dns-query"],
+            "proxy-server-nameserver": ["https://223.5.5.5/dns-query"],
+        },
         "external-controller": format!("127.0.0.1:{controller_port}"),
         "secret": secret,
         "profile": { "store-selected": false },
