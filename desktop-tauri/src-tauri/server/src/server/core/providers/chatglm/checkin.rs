@@ -135,11 +135,15 @@ pub async fn claim_daily_login_score(
         return Ok(json!({ "success": true, "msg": "今日登录积分已领取过" }));
     }
     let result = http::check_envelope(&payload, "每日登录积分领取")?;
-    let score = result
+    // `result.score` 与余额是**同一套单位**（百分之一积分），必须走同一个
+    // 换算函数 —— 否则余额显示 18644.05、签到提示却写 +20000（放大一百倍）。
+    // 换算规则的依据见 `balance::score_from_raw` 的文档。
+    let score_raw = result
         .get("score")
         .and_then(Value::as_f64)
         .or_else(|| result.as_f64())
         .unwrap_or(0.0);
+    let score = super::balance::score_from_raw(score_raw);
     let message = if score > 0.0 {
         format!("今日登录积分 +{score}")
     } else if open == Some(false) {
@@ -188,11 +192,14 @@ pub async fn claim_bonus(
             let status = payload.get("status").and_then(Value::as_i64).unwrap_or(0);
             if status == 0 {
                 let result = http::check_envelope(&payload, "积分活动领取")?;
-                let gained = result
+                // 同 `daily_login_score`：积分字段一律走同一个换算（见
+                // `balance::score_from_raw`），否则提示里的数字会大一百倍
+                let gained_raw = result
                     .get("score")
                     .and_then(Value::as_f64)
                     .or_else(|| result.get("reward").and_then(Value::as_f64))
                     .unwrap_or(0.0);
+                let gained = super::balance::score_from_raw(gained_raw);
                 if gained > 0.0 {
                     any_success = true;
                     messages.push(format!("积分活动 +{gained}"));
@@ -299,5 +306,26 @@ mod tests {
         let value = guest_result();
         assert_eq!(value["success"], json!(false));
         assert!(value["msg"].as_str().unwrap_or("").contains("访客"));
+    }
+
+    /// **签到积分与余额同一换算**：上游 `result.score` 也是百分之一积分。
+    ///
+    /// ── 这条锁的是什么 ──────────────────────────────────────────
+    /// 余额已经确认要除以 100（`left_score: 1864405` → 18644.05），而签到
+    /// 返回的 `score` 是同一账户的同一套积分单位。两处若各写一份换算，
+    /// 迟早漂成「余额对了、签到提示大一百倍」（`+20000` 而不是 `+200`）。
+    ///
+    /// 本测试直接锁「签到走的是 balance 的那个函数」，而不是在 checkin 里
+    /// 另写一个 `/100`。
+    #[test]
+    fn checkin_score_uses_balance_scale() {
+        // 签到日志文案里的 200 积分（score_rule: "登录赠送200积分/天"），
+        // 上游按百分之一记 ⇒ 原始值 20000
+        assert_eq!(super::super::balance::score_from_raw(20000.0), 200.0);
+        // 与余额换算同源：同一函数、同一结果
+        assert_eq!(
+            super::super::balance::score_from_raw(1864405.0),
+            18644.05
+        );
     }
 }

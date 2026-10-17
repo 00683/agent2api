@@ -62,7 +62,25 @@ pub const DEFAULT_ASSISTANT_ID: &str = "65940acff94777010aa6b796";
 
 // ── 积分 / 余额 / 签到 ─────────────────────────────────────────
 
+/// **会员信息（余额的权威来源）** —— `result.left_score` 就是界面上那个「积分」。
+///
+/// ── 别拿 `score_activity_status.current_score` 当余额（首版踩过）────
+/// 那条返回的是「**本期会员积分活动**已经攒了多少分」：没在跑活动的账号
+/// 回 `status:-2 / current_score:0`（实测），于是余额一律显示 0，
+/// 而账户里其实有积分。两者是两件事，账户积分只认 `left_score`
+/// （实测 `1864405` 这类量级，界面按百分之一折算显示）。
+///
+/// 响应里同时带 `left_token` / `token_left_percent` / `is_member` / `level` /
+/// `vip_expired_at` / `svip_expired_at` / `score_rule`，因此会员档位与令牌
+/// 额度都从这一个响应读得出，不必再打 `payment-api/v1/cs/me`。
+///
+/// 访客 401（`user needs login`）—— 与其余积分接口同一处置。
+pub const PATH_MEMBER_INFO: &str = "/chatglm/member-api/member/member_info";
+
 /// 会员积分活动状态（`status` / `remain_days` / `target_score` / `current_score`）
+///
+/// **不是余额**：`current_score` 是活动进度分，见 [`PATH_MEMBER_INFO`] 的说明。
+/// 客户端只把 `status` 1/2/3/4 当有效档（`-2` = 无此活动）。
 pub const PATH_SCORE_ACTIVITY_STATUS: &str = "/chatglm/member-api/member/score_activity_status";
 
 /// 积分活动是否开启
@@ -73,6 +91,23 @@ pub const PATH_SCORE_ACTIVITY_DRAW: &str = "/chatglm/member-api/member/score_act
 
 /// **每日登录积分（本家的「签到」）** —— POST，返回 `result.score` 为本次到账数
 pub const PATH_DAILY_LOGIN_SCORE: &str = "/chatglm/member-api/member/daily_login_score";
+
+/// **积分流水**（界面上「积分明细」里那条真实的收支账）—— `page` / `page_size`
+/// 都是**必填**（缺任一个回 400 `invalid param`）。
+///
+/// ```text
+///   GET /chatglm/member-api/member/score_record?page=1&page_size=20
+///   result: { list: [ { id, user_id, title, score, remark, created_at, expired_at } ],
+///             has_more, next_send_time }
+/// ```
+/// 四条读法（实测，2026-10）：
+///   1. `score` 是**带符号的字符串**：正数=获得、负数=消耗（`"-0.96"` 那种）；
+///   2. `score` 用的**就是真实积分**，不是 [`PATH_MEMBER_INFO`] 的百分之一 ——
+///      11 条相加恰好等于余额 24144.05（分毫不差），因此**不要再除 100**；
+///   3. `created_at` / `expired_at` 是**秒**级时间戳（不是毫秒）；
+///   4. `page_size` 放大到 1000 也只回同一条数（上游按实际条数返回），
+///      翻页靠 `has_more`。
+pub const PATH_SCORE_RECORD: &str = "/chatglm/member-api/member/score_record";
 
 /// 夏季/季节性活动领取状态
 pub const PATH_SUMMER_DAY_CLAIM_STATUS: &str =
@@ -86,6 +121,41 @@ pub const PATH_SCORE_ALERT_CONFIG: &str = "/chatglm/member-api/member/score_aler
 
 /// 付费侧「我的」信息（余额 / 会员档位；**登录账号**才有数据，访客 401）
 pub const PATH_PAYMENT_ME: &str = "/chatglm/payment-api/v1/cs/me";
+
+// ── 任务中心（「做任务，赚积分」）──────────────────────────────
+
+/// 任务中心：分类 + 任务表 + 账户积分概览（**新手任务与每日任务的唯一权威**）
+///
+/// 响应 `result.categories[]` 按 `code` 分三档：`newbie`（新手任务，一次性）、
+/// `daily`（每日任务，UTC+8 零点重置）、`timeLimit`（限时任务，目前只有邀请）；
+/// 每档带 `progress{done,total}`，每条任务带 `task_id` / `status`（1 未开始
+/// 2 已点击 3 已完成）/ `daily_quota` / `reward.points`。
+///
+/// `result.user_info` 里的 `points_balance` 是**已折算的字符串**
+/// （实测 `"18644.05"`），与 `member_info.left_score` 的百分之一口径互证。
+///
+/// ── 这个平面要求带 User-Agent（实测）──────────────────────────
+/// `agent-api` 下所有接口（含模型目录 `operation/detail`）在**完全不带 UA** 时
+/// 一律 `40002 bad request`；带任意 UA（`undici` / `node` / `reqwest` / 浏览器
+/// 均可）就正常。本仓库的出站客户端恒带 `undici`（见 `core::egress`），因此
+/// 走 `http::*` 不需要额外处理 —— 但**探测脚本**忘了带 UA 会误判成签名错误。
+pub const PATH_TASK_CENTER: &str = "/chatglm/agent-api/task/center";
+
+/// 点「去完成」：登记本次任务会话，返回 `jump{target,params}` 供客户端跳转
+///
+/// **complete 的前置**：没先点过这条，直接 complete 会拿到 HTTP 200 +
+/// `status:500 internal server error`（实测）。
+pub const PATH_TASK_CLICK: &str = "/chatglm/agent-api/task/click";
+
+/// 结算一条任务：`result.reward.points_awarded` 为本轮到账（已领过则是 0）
+///
+/// 幂等：重复结算返回 `points_awarded: 0`，`user_info` 不变。上游对「是否真的
+/// 做过那个动作」**不做校验**（实测对未完成的任务点过 click 后直接 complete
+/// 即到账真积分），行为证明由客户端自己保证。
+pub const PATH_TASK_COMPLETE: &str = "/chatglm/agent-api/task/complete";
+
+/// 任务中心规则说明（Markdown 正文；只用于界面展示，无状态）
+pub const PATH_TASK_RULE_DESC: &str = "/chatglm/agent-api/task/rule_desc";
 
 // ── 登录 ────────────────────────────────────────────────────
 

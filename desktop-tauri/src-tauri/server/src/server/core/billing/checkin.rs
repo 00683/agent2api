@@ -420,11 +420,27 @@ pub async fn checkin_for(
                     if bonus_ok { "成功" } else { "无可领取" }
                 ),
             );
+            // ── 每日任务：任务中心 `categories[code=daily]` ─────────
+            // 用户口径：每日任务接我们的每日签到（新手任务另走 onboarding）。
+            // 与「每日登录积分」并列在同一次签到里执行：登录积分是签到本身，
+            // 每日任务是签到后顺手领的日常。上游按天重置（UTC+8 零点），
+            // 重复领幂等（`points_awarded:0`），见 `chatglm::tasks` 模块头。
+            let daily =
+                crate::server::core::providers::chatglm::tasks::claim_daily_tasks(store, &id)
+                    .await
+                    .map_err(|error| error.message);
             let mut row = claim_result(id, name, &display, true, claim);
             if let Some(object) = row.as_object_mut() {
                 object.insert(
                     "bonus".to_string(),
                     match &bonus {
+                        Ok(value) => value.clone(),
+                        Err(message) => serde_json::json!({ "success": false, "msg": message }),
+                    },
+                );
+                object.insert(
+                    "dailyTasks".to_string(),
+                    match &daily {
                         Ok(value) => value.clone(),
                         Err(message) => serde_json::json!({ "success": false, "msg": message }),
                     },

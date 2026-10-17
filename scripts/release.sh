@@ -113,8 +113,11 @@ else
   echo "    Release 将不含 Linux 桌面安装包，Linux 面板的「下载并安装」会被藏起"
 fi
 
-# 容器内更新包：两个架构的 tar.gz + 同名 .sha256（面板按名找校验文件，
-# 缺了会拒绝安装）。老 tag 的 run 没有这两个 artifact —— 提醒一句继续走。
+# 容器内更新包 / 裸机安装包：两个架构的 tar.gz + 同名 .sha256（面板按名找
+# 校验文件，缺了会拒绝安装）。老 tag 的 run 没有这两个 artifact —— 提醒一句继续走。
+#
+# 同一个包身兼两职：容器内一键更新的载荷 + Linux 裸机安装包（包内附
+# install.sh / systemd 单元 / env 样例，解包后跑 install.sh 即可）。
 if [ -d dist/linux-server-amd64 ] && [ -d dist/linux-server-arm64 ]; then
   # 两个目录下各是 <包名>.tar.gz 与 <包名>.tar.gz.sha256，原样全带上
   for file in dist/linux-server-amd64/* dist/linux-server-arm64/*; do
@@ -124,6 +127,18 @@ if [ -d dist/linux-server-amd64 ] && [ -d dist/linux-server-arm64 ]; then
 else
   echo "⚠️  这个 run 里没有 linux-server-* 产物（本功能上线前的 tag？）——"
   echo "    Release 将不含容器内更新包，面板更新入口会退回「手动升级命令」提示"
+fi
+
+# Windows 服务端包（无 GUI，命令行安装 + 注册成 Windows 服务）。
+# 与上面 linux-server 同一口径：老 tag 的 run 里没有，提醒一句继续走。
+if [ -d dist/windows-server-amd64 ]; then
+  for file in dist/windows-server-amd64/*; do
+    ASSETS+=("$file")
+  done
+  echo "→ 已下载 $(basename "$(ls dist/windows-server-amd64/*.zip)")（含 .sha256）"
+else
+  echo "⚠️  这个 run 里没有 windows-server-amd64 产物（本功能上线前的 tag？）——"
+  echo "    Release 将不含 Windows 服务端包，Windows Server 用户只能自己编译"
 fi
 
 # ── 2. 更新日志 = tag 所指提交的提交信息 ──────────────────────
@@ -158,6 +173,9 @@ echo "  [4] Linux 桌面端：Release 里 .deb 与 .AppImage 都在；在 Linux 
 echo "      直接运行 AppImage）后，面板「设置 → 软件更新」能检查到下一版并给出安装入口"
 echo "  [5] 容器内更新：面板「设置 → 软件更新」出现「下载并更新」，且 Release 里"
 echo "      agent2api-server-linux-{amd64,arm64}.tar.gz 与各自的 .sha256 都在"
+echo "  [6] 服务端包（无 GUI）：Release 里还有 windows-server-amd64.zip（含 .sha256）。"
+echo "      两个平台的包解包后都应看到安装脚本 —— Linux: install.sh / agent2api.service"
+echo "      / agent2api.env.example；Windows: install-service.ps1"
 if [ "$PRERELEASE" = true ]; then
-  echo "  [6] Docker 镜像：只出 $TAG 那个版本 tag（beta tag 不移动 :latest）"
+  echo "  [7] Docker 镜像：只出 $TAG 那个版本 tag（beta tag 不移动 :latest）"
 fi

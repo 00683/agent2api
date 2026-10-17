@@ -217,6 +217,13 @@ pub fn token_shape_ok(token: &str) -> bool {
 ///
 /// `account_id` 为空 → 取本家组内优先级最小的启用账号（与转发选路同一判据）；
 /// 找不到返回 Err（调用方据此报「没有可用凭证」）。
+///
+/// ── 令牌读**顶层**键（全仓的存储契约）──────────────────────────
+/// `accessToken` / `refreshToken` 在记录顶层，与其余各家一致 —— 这也是
+/// `StoredAccount::access_token()` 与 `has_credentials()` 读的位置。嵌套的
+/// `auth.accessToken`（参考实现的形态）**不认**：认了它等于给「有没有凭证」
+/// 这条判据开第二条读法，而那个判据是转发选路 / 余额查询 / 界面三处共用的
+/// 事实来源（见 `chatglm_accounts.rs` 的说明）。
 pub fn from_record(record: Option<&Value>) -> Result<ChatglmCredentials, GatewayError> {
     let Some(record) = record else {
         return Err(GatewayError::with_status(
@@ -224,19 +231,24 @@ pub fn from_record(record: Option<&Value>) -> Result<ChatglmCredentials, Gateway
             "没有可用的智谱清言凭证：请先在账号页添加（访客模式或登录账号）",
         ));
     };
-    let auth = record.get("auth").unwrap_or(record);
-    let access_token = auth
-        .get("accessToken")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string();
-    let refresh_token = auth
-        .get("refreshToken")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string();
+    // 兼容一层历史数据：早期版本把令牌写在 `auth` 里（现已改为顶层），
+    // 读到旧记录时仍认，免得用户重装前后那条账号凭空失效
+    let field_of = |key: &str| -> String {
+        record
+            .get(key)
+            .and_then(Value::as_str)
+            .or_else(|| {
+                record
+                    .get("auth")
+                    .and_then(|auth| auth.get(key))
+                    .and_then(Value::as_str)
+            })
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    };
+    let access_token = field_of("accessToken");
+    let refresh_token = field_of("refreshToken");
     if access_token.is_empty() && refresh_token.is_empty() {
         return Err(GatewayError::with_status(
             401,

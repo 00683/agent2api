@@ -11,9 +11,10 @@
 //!      时间戳是智谱自创的校验位算法（不是普通时间戳）。
 //!      实测边界：错密钥 40014、过期时间戳 40013、缺设备号 40004、缺令牌 40003。
 //!
-//!   2. 对话响应的 SSE 帧是「**全量快照**」而不是增量
-//!      （每帧给到目前为止的完整 parts），
-//!      因此另开一台做差分的状态机
+//!   2. 对话响应的 SSE 帧**混着两种语义**：`part.status == "init"` 的帧是增量，
+//!      带 finish 的帧给整段全文快照（实测帧序列见 `protocol::chatglm_stream`
+//!      的模块头；一律按快照差分会让回答下发两遍），
+//!      因此另开一台按帧语义差分的状态机
 //!      （`protocol::chatglm_stream` ← `upstream::translate::ChatglmToChatStream`）。
 //!
 //!   3. **上游只认最后一条 user 消息**：messages 数组里的历史与 system 全被丢弃
@@ -50,6 +51,7 @@
 //!   models.rs       模型目录（operation/detail + 持久化缓存 + 内置兜底）
 //!   balance.rs      积分余额（会员积分活动 + 会员档位）
 //!   checkin.rs      每日登录积分（= 签到）与活动领取（= 领取类）
+//!   tasks.rs        任务中心（新手任务 → onboarding；每日任务 → 签到）
 //!   adapter.rs      ProviderAdapter 实现（本目录的装配层）
 //! ```
 //!
@@ -59,9 +61,10 @@
 //! | LLM 请求 | ✓ | 三个对话端点实测通（默认走 `engine/stream`） |
 //! | Token 自动续期 | ✓ | `user/refresh` 实测可换新令牌（且会轮换 refresh_token） |
 //! | 模型列表 | ✓ | `operation/detail?tag=available_models` + 内置兜底 |
-//! | 余额查询 | ✓ | 会员积分活动（登录账号） |
-//! | 签到 | ✓ | `member/daily_login_score`（登录账号） |
+//! | 余额查询 | ✓ | `member_info.left_score`（登录账号） |
+//! | 签到 | ✓ | `member/daily_login_score` + 任务中心每日任务（登录账号） |
 //! | 领取类 | ✓ | `score_activity_draw` + `summer_day_give_score`（登录账号） |
+//! | 新手任务 | ✓ | 任务中心 `categories[code=newbie]` 的 click + complete |
 //!
 //! ── 硬约束 ──────────────────────────────────────────────────
 //! release 是 `panic=abort`：本目录零 unwrap/expect/panic。
@@ -78,5 +81,6 @@ mod live_tests;
 pub mod models;
 pub mod plan;
 pub mod sign;
+pub mod tasks;
 
 pub use adapter::{ChatglmAdapter, CHATGLM_ADAPTER};

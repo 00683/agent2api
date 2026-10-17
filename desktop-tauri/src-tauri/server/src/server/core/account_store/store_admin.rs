@@ -421,7 +421,10 @@ impl AccountStore {
     ///      顺序（provider 路由优先级 → 组内优先级 → 加入时间）排好，再连续编号，
     ///      于是升级前后实际先用哪个账号完全一致，用户不会感到突变；
     ///   ③ 全局去重（手工编辑出的并列号）；
-    ///   ④ Cline 拆池改名（`provider: "cline"` + `pool` 字段 → 两家里的某一家）。
+    ///   ④ Cline 拆池改名（`provider: "cline"` + `pool` 字段 → 两家里的某一家）；
+    ///   ⑤⑥ WorkBuddy / Qoder 国际版拆家（只改 provider）；
+    ///   ⑦ OfficeAce 账号名自愈（从记录里躺着的 refreshToken 解显示名）；
+    ///   ⑧ 智谱清言令牌从嵌套 `auth` 抬到顶层。
     ///
     /// 顺序上 ④ 必须在 ①②③ **之后**：前几步按 provider 分组时看到的还是旧 id
     /// （一条 `cline` 组），改名后这一组被拆成两条；若反过来先改名，优先级整队
@@ -493,6 +496,22 @@ impl AccountStore {
             );
         }
 
+        // ⑧ 智谱清言令牌从嵌套 `auth` 抬到顶层
+        // （见 `chatglm_accounts::migrate_nested_tokens`）：首版把令牌写进了嵌套
+        // `auth`，而 `has_credentials()` 只读顶层 —— 不抬的话那几条存量记录会一直
+        // 被静默过滤掉（模型管理里看不到这一家、余额报「没有可用凭证」）。
+        let chatglm_healed =
+            super::chatglm_accounts::migrate_nested_tokens(&mut state.accounts);
+        if chatglm_healed > 0 {
+            logging::log(
+                "[Accounts]",
+                &format!(
+                    "🔧 已修复 {chatglm_healed} 个智谱清言账号的令牌存储位置（嵌套 auth → 顶层，\
+                     修复后即可正常选路与查询余额）"
+                ),
+            );
+        }
+
         if provider_added == 0
             && assignments.is_empty()
             && !scope_migrated
@@ -500,6 +519,7 @@ impl AccountStore {
             && workbuddy_moved == 0
             && qoder_moved == 0
             && officeace_named == 0
+            && chatglm_healed == 0
         {
             return json!({
                 "providerAdded": 0,

@@ -14,9 +14,13 @@
 //! ── 记录里的字段 ────────────────────────────────────────────
 //! ```text
 //! { id, provider: "chatglm", name, uid, loginName(=昵称),
-//!   auth: { accessToken, refreshToken }, tokenTail,
+//!   accessToken, refreshToken, tokenTail,
 //!   deviceId, isGuest, source, priority, enabled, addedAt, updatedAt }
 //! ```
+//! 令牌在**顶层**（全仓的存储契约，理由见 `add_chatglm_account` 里那段注释）；
+//! 嵌套 `auth.accessToken` 是**会话形态**（`StoreView::to_session` 的产物），
+//! 不是记录形态。
+//!
 //! `deviceId` 必须落盘：它是**身份的一部分**（服务端把设备号写进 JWT，
 //! 访客身份按它分配 —— 每次现随机就是每次换身份，见 `credentials` 的模块头）。
 //! `refreshToken` 也要落：续期与新访客的失效恢复都靠它。
@@ -149,17 +153,23 @@ impl AccountStore {
             "loginName".to_string(),
             Value::String(nickname.clone()),
         );
-        // 令牌成对落 `auth`（与各家同一形态：`auth.accessToken` 是转发读的那一格）
-        let mut auth = Map::new();
-        auth.insert(
+        // ── 令牌落**顶层** `accessToken` / `refreshToken`（不是嵌套 auth）─────
+        // 全仓的凭证约定是顶层键：`StoredAccount::access_token()` 只读顶层
+        // `accessToken`，而 `has_credentials()`（转发选路 / 余额查询 / 本轮行
+        // 的 `hasCredentials` 三处的统一判据）正是建立在它之上。
+        // 落进嵌套 `auth` 的后果是**静默吞掉一整家**：账号导入成功、目录也拉得到，
+        // 但 `/v1/models` 里一个模型都没有、余额报「没有可用凭证」、点名转发报
+        // 没有可用账号 —— 与 `state.rs::has_officeace_key` 那段注释描述的同款症状。
+        // 参考实现（`Acainkao` 那套）读的是 `auth.accessToken`，本仓的存储契约
+        // 不是它，别照抄。
+        record.insert(
             "accessToken".to_string(),
             Value::String(credentials.access_token.clone()),
         );
-        auth.insert(
+        record.insert(
             "refreshToken".to_string(),
             Value::String(credentials.refresh_token.clone()),
         );
-        record.insert("auth".to_string(), Value::Object(auth));
         let tail_source = if !credentials.access_token.is_empty() {
             &credentials.access_token
         } else {
@@ -220,22 +230,19 @@ impl AccountStore {
             return Err(AccountStoreError::new("该账号不是智谱清言账号", 400));
         }
         let mut merged = record.fields().clone();
-        let mut auth = merged
-            .get("auth")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        auth.insert(
+        merged.insert(
             "accessToken".to_string(),
             Value::String(access_token.to_string()),
         );
         if !refresh_token.trim().is_empty() {
-            auth.insert(
+            merged.insert(
                 "refreshToken".to_string(),
                 Value::String(refresh_token.to_string()),
             );
         }
-        merged.insert("auth".to_string(), Value::Object(auth));
+        // 历史上若把令牌写在嵌套 `auth` 里，一并清掉（避免两处不一致时
+        // 哪个是权威变成看运气）
+        merged.remove("auth");
         merged.insert(
             "tokenTail".to_string(),
             Value::String(token_tail_of(access_token)),
@@ -244,5 +251,295 @@ impl AccountStore {
         record = StoredAccount::from_map(merged);
         self.with_conn(&_guard, |conn| sql::put(conn, &record))?;
         Ok(())
+    }
+}
+
+/// 启动迁移：把历史记录里嵌套的 `auth.accessToken` 提升到**顶层**
+/// （幂等，可重复调用）。原地改 `accounts`，返回被修复的条数。
+///
+/// ── 修的是什么（首版接入时留下的存量数据）──────────────────────
+/// 首版把令牌写进了嵌套 `auth`，而 `has_credentials()`（转发选路 / 余额查询 /
+/// 界面 `hasCredentials` 三处共用的判据）只读顶层 `accessToken`。后果是整家被
+/// **静默过滤**：账号导入成功、模型目录也拉得到，但模型管理里看不到这一家、
+/// 余额报「没有可用凭证」、点名转发报没有可用账号。
+///
+/// 写入路径已经改成顶层键，但**已经落库的那几条记录不会自己变好** —— 读取侧的
+/// 兼容（`credentials::from_record` 认两种形态）只保证「转发能取到凭证」，
+/// 抬不动 `has_credentials()` 那条判据，因此存量记录仍会在选路与界面上消失。
+/// 这就是必须补一次迁移的原因。
+///
+/// ── 为什么只搬这两枚令牌 ──────────────────────────────────────
+/// 嵌套 `auth` 里当年的写入方只放了 `accessToken` / `refreshToken`
+/// （对照 `add_chatglm_account` 的旧版形态），所以其余键不该被无中生有地搬上来：
+/// 这个函数只做「顶层缺、嵌套有」的那两枚键的补齐，不认别的键名。
+///
+/// ── 何时删掉 `auth` ──────────────────────────────────────────
+/// 两枚令牌**都**已在顶层、且嵌套里没有别的残留时才删掉这个空壳；顶层本来就
+/// 有值（写入侧已是新版）而嵌套里还留着旧令牌时也删 —— 那种情况下两份值可能不
+/// 一致，而 `auth` 已经没有任何读方（`from_record` 只在顶层缺失时才回退到它），
+/// 留着就是一处会让「哪份是权威」变成看运气的歧义（与
+/// `update_chatglm_tokens` 里那句 `merged.remove("auth")` 同一取舍）。
+/// 嵌套里还带着别的键时整个 `auth` 原样留着：那些键本文件不认识，删掉等于替
+/// 别的代码丢数据。
+///
+/// 幂等：抬过一次之后顶层就有了，再跑一遍返回 0、不写库。
+pub(crate) fn migrate_nested_tokens(accounts: &mut [StoredAccount]) -> usize {
+    let mut healed = 0usize;
+    for record in accounts.iter_mut() {
+        if record.provider() != chatglm_id() {
+            continue;
+        }
+        // 先把要读的东西**全部克隆成自有值**再改：`record.get` 是共享借用，
+        // 与后面的 `record.set` / `record.remove`（可变借用）不能同时活着
+        // （与 `clear_rate_limit` / `migrate_rate_limit_keys` 同一处置）。
+        let Some(nested) = record.get("auth").and_then(Value::as_object).cloned() else {
+            continue;
+        };
+        // 嵌套里有没有值得搬的令牌（只认这两枚键）
+        let nested_token = |key: &str| -> Option<String> {
+            nested
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        let nested_access = nested_token("accessToken");
+        let nested_refresh = nested_token("refreshToken");
+        // 顶层已有的值不动：写入侧已按新约定落过，那份比旧壳里的更可信
+        let top_access = record
+            .get("accessToken")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        let top_refresh = record
+            .get("refreshToken")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        let mut changed = false;
+        if top_access.is_empty() {
+            if let Some(token) = nested_access.as_ref() {
+                record.set("accessToken", Value::String(token.clone()));
+                changed = true;
+            }
+        }
+        if top_refresh.is_empty() {
+            if let Some(token) = nested_refresh.as_ref() {
+                record.set("refreshToken", Value::String(token.clone()));
+                changed = true;
+            }
+        }
+        // 空壳才删：`auth` 里除了这两枚令牌没别的东西
+        let only_tokens = nested
+            .keys()
+            .all(|key| key == "accessToken" || key == "refreshToken");
+        if only_tokens {
+            record.remove("auth");
+            changed = true;
+        }
+        if !changed {
+            continue;
+        }
+        // 尾段跟着新令牌重算（原实现也是从令牌算的；顶层一旦补齐，界面读的就是它）
+        let tail_source: &str = if !top_access.is_empty() {
+            &top_access
+        } else {
+            nested_access
+                .as_deref()
+                .or(nested_refresh.as_deref())
+                .unwrap_or("")
+        };
+        if !tail_source.is_empty() {
+            record.set("tokenTail", Value::String(token_tail_of(tail_source)));
+        }
+        record.set_updated_at(logging::now_ms());
+        healed += 1;
+    }
+    healed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// **令牌必须落在顶层**：`has_credentials()`（转发选路 / 余额查询 / 界面
+    /// `hasCredentials` 三处的统一判据）只读顶层 `accessToken`。
+    ///
+    /// ── 这条测试锁的是真实发生过的故障 ──────────────────────────
+    /// 首版把令牌写进嵌套 `auth`（照抄参考实现的读法），后果是
+    /// `has_credentials()` 恒假 ⇒ 整家被静默过滤掉：账号导入成功、模型目录也
+    /// 拉得到，但模型管理里看不到这一家、余额报「没有可用凭证」、点名转发报
+    /// 「没有可用账号」。与 `state.rs::has_officeace_key` 注释里描述的 OfficeAce
+    /// 那次同款 —— 改存储键名前先看这条测试。
+    #[test]
+    fn tokens_must_sit_on_top_level_for_has_credentials() {
+        let record = StoredAccount::from_map(
+            json!({
+                "id": "6ad26bd46976b1c1ab1c2cb2",
+                "provider": "chatglm",
+                "accessToken": "aaaaaaaaaaaaaaaaaaaa",
+                "refreshToken": "bbbbbbbbbbbbbbbbbbbb",
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        );
+        assert!(
+            record.has_credentials(),
+            "顶层 accessToken 必须被 has_credentials 认到（否则整家被静默过滤）"
+        );
+        assert_eq!(record.access_token(), "aaaaaaaaaaaaaaaaaaaa");
+    }
+
+    /// 嵌套 `auth` 形态**不被** `has_credentials()` 认 —— 这就是别再把令牌
+    /// 写进那里的原因（读取侧为兼容历史数据仍认它，见 `credentials::from_record`）。
+    #[test]
+    fn nested_auth_is_not_recognized_by_has_credentials() {
+        let record = StoredAccount::from_map(
+            json!({
+                "id": "x",
+                "provider": "chatglm",
+                "auth": { "accessToken": "aaaaaaaaaaaaaaaaaaaa" },
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        );
+        assert!(
+            !record.has_credentials(),
+            "嵌套 auth 不被认（写入侧必须用顶层键）"
+        );
+    }
+
+    /// 读取侧对两种形态都认：历史数据（嵌套）与现行形态（顶层）都能取到凭证
+    #[test]
+    fn credentials_reader_accepts_both_shapes() {
+        let top = json!({
+            "accessToken": "top-token-value",
+            "deviceId": "c9074ab1-208b-4255-8f71-09cc2ce32278",
+        });
+        let credentials = crate::server::core::providers::chatglm::credentials::from_record(Some(&top))
+            .expect("顶层形态应当读到");
+        assert_eq!(credentials.access_token, "top-token-value");
+
+        let nested = json!({
+            "auth": { "accessToken": "nested-token-value" },
+            "deviceId": "c9074ab1-208b-4255-8f71-09cc2ce32278",
+        });
+        let credentials =
+            crate::server::core::providers::chatglm::credentials::from_record(Some(&nested))
+                .expect("历史嵌套形态仍应读到（免得旧账号凭空失效）");
+        assert_eq!(credentials.access_token, "nested-token-value");
+    }
+
+    /// **迁移把历史嵌套记录救回来**：抬到顶层之后 `has_credentials()` 才认，
+    /// 整家才会重新出现在模型管理与选路里。
+    ///
+    /// 这条锁的是用户实际踩到的那个故障的**存量数据**一侧：光改写入路径不够，
+    /// 已经落库的记录不会自己变好（见 `migrate_nested_tokens` 的说明）。
+    #[test]
+    fn migration_promotes_nested_tokens_to_top_level() {
+        let mut accounts = vec![StoredAccount::from_map(
+            json!({
+                "id": "6ad26bd46976b1c1ab1c2cb2",
+                "provider": "chatglm",
+                "auth": {
+                    "accessToken": "nested-access-token",
+                    "refreshToken": "nested-refresh-token",
+                },
+                "deviceId": "c9074ab1-208b-4255-8f71-09cc2ce32278",
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        )];
+        // 迁移前：不被认（这正是「整家静默消失」那个症状）
+        assert!(!accounts[0].has_credentials());
+        let healed = migrate_nested_tokens(&mut accounts);
+        assert_eq!(healed, 1, "应当修复 1 条");
+        // 迁移后：顶层有值、判据认了、空壳壳也清掉了
+        assert!(accounts[0].has_credentials());
+        assert_eq!(accounts[0].access_token(), "nested-access-token");
+        assert_eq!(accounts[0].refresh_token(), "nested-refresh-token");
+        assert!(
+            accounts[0].get("auth").is_none(),
+            "只装令牌的空壳应当清掉（留着就有两份可能不一致的权威）"
+        );
+        // 幂等：再跑一遍无事发生、不写库
+        assert_eq!(migrate_nested_tokens(&mut accounts), 0);
+    }
+
+    /// 迁移**不碰别的家**：判据是本家 provider，别家的 `auth` 原样留着
+    /// （那是别家的会话形态，含义与本家这次修的不是一回事）。
+    #[test]
+    fn migration_ignores_other_providers() {
+        let mut accounts = vec![StoredAccount::from_map(
+            json!({
+                "id": "user-abc",
+                "provider": "workbuddy",
+                "auth": { "accessToken": "someone-elses-token" },
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        )];
+        assert_eq!(migrate_nested_tokens(&mut accounts), 0);
+        assert!(
+            accounts[0].get("auth").is_some(),
+            "别家的 auth 不该被本家迁移动到"
+        );
+    }
+
+    /// 顶层已有值时不覆盖（写入侧已是新版，那份比旧壳里的更可信），
+    /// 但只装令牌的空壳仍会清掉。
+    #[test]
+    fn migration_keeps_existing_top_level_value() {
+        let mut accounts = vec![StoredAccount::from_map(
+            json!({
+                "id": "x",
+                "provider": "chatglm",
+                "accessToken": "fresh-top-level-token",
+                "auth": { "accessToken": "stale-nested-token" },
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        )];
+        assert_eq!(migrate_nested_tokens(&mut accounts), 1);
+        assert_eq!(
+            accounts[0].access_token(),
+            "fresh-top-level-token",
+            "顶层已有的新令牌不能被旧壳里的覆盖"
+        );
+        assert!(accounts[0].get("auth").is_none());
+    }
+
+    /// `auth` 里还带着别的键时整个留着：那些键本模块不认识，
+    /// 删掉等于替别的代码丢数据。
+    #[test]
+    fn migration_keeps_auth_shell_with_extra_keys() {
+        let mut accounts = vec![StoredAccount::from_map(
+            json!({
+                "id": "x",
+                "provider": "chatglm",
+                "auth": {
+                    "accessToken": "nested-access-token",
+                    "somethingElse": "keep-me",
+                },
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        )];
+        assert_eq!(migrate_nested_tokens(&mut accounts), 1);
+        assert_eq!(accounts[0].access_token(), "nested-access-token");
+        assert!(
+            accounts[0].get("auth").is_some(),
+            "带其它键的 auth 不该被删（会丢数据）"
+        );
     }
 }

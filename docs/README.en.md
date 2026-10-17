@@ -81,7 +81,7 @@ Reverse-proxy capabilities at a glance (✓ supported · ✗ not supported · �
 
 > Note: in Model list, ✓ means automatic online fetching is supported (some platforms also keep a built-in static table as a fallback); ZCode only has a built-in static table. ✗ in Token auto-refresh means the platform has no usable refresh flow (the account keeps working while its credentials are valid). Qoder check-in is available on the China version only.
 >
-> **Zhipu Qingyan** is the only provider here that supports a **guest mode**: no sign-in required — one click gets you a credential that works for chat right away (the free quota is issued by the upstream per device). The catch is that a guest account has no points system — the "Balance" / "Sign-in" / "Claim" columns above apply only to **signed-in accounts** (paste a token or import the desktop client sign-in state); guests are skipped honestly.
+> **Zhipu Qingyan** is the only provider here that supports a **guest mode**: no sign-in required — one click gets you a credential that works for chat right away (the free quota is issued by the upstream per device). The catch is that a guest account has no points system — the "Balance" / "Sign-in" / "Claim" columns above, plus the **task center's newbie and daily tasks**, apply only to **signed-in accounts** (paste a token or import the desktop client sign-in state); guests are skipped honestly.
 
 `/v1/chat/completions`, `/v1/responses`, `/v1/messages` (incl. `count_tokens`) and `/v1/models` behave identically for every platform; model mapping, the global priority queue, 429 fallback, egress proxying, outbound fingerprint redaction and request reporting apply to all platforms alike.
 

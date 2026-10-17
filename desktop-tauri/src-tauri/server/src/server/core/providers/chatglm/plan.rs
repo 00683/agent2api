@@ -30,6 +30,24 @@
 //! 但实测发现**上游其实不依赖这些标记**（把标记去掉、直接拼接也能得到正确结果）；
 //! 保留它们是为了贴齐已知可用的形态，不是上游的硬要求。
 //!
+//! ── 标记会漏进官方客户端的聊天记录（用户实测反馈，必读）────────────
+//! 拍平后的那段文本不只是"给模型看的提示词"，它**就是上游存下来的那条用户
+//! 消息本身**：官方客户端会把 `<|user|>` / `<|assistant|>` 原样显示在气泡里
+//! （实测截图：用户从本网关发「你好」，客户端里那条消息变成
+//! `<|user|>\n你好\n<|assistant|>`）。因此：
+//!
+//!   · **只有一段用户输入时一律原样发**（见 [`plain_single_message`]）——
+//!     单轮请求没有任何历史要表达，套标记纯粹是白脏一次对话记录。实测不带
+//!     任何标记的单条消息上游照常正确回答（这本来就是它的常规形态）。
+//!   · 多轮 / 带 system 时仍然必须拍平（见上：数组形态的历史与 system 都被
+//!     丢弃）。那种情况下标记是**功能的代价**：要么历史与 system 失效，
+//!     要么对话记录里出现标记 —— 两害相权取其轻，选后者并在这里写明。
+//!
+//! 另外还有几条实测否证（别再试了）：`meta_data.system_prompt`、
+//! 顶层 `system_prompt` / `system`、`meta_data.system` **全都被忽略**
+//! （用「无论问什么都只回答字母A」的 system 逐个试过，五个位置都答了正常
+//! 自我介绍）。所以 system 不能靠换字段绕开，只能折进正文。
+//!
 //! ── 其它实测结论（写进实现，别照搬别家的假设）──────────────────
 //!   - `content` **必须是数组**（`[{type:"text", text}]`）；用字符串直接 400
 //!     `invalid param`；
@@ -114,6 +132,38 @@ pub fn flatten_messages(messages: &[Value]) -> String {
     out
 }
 
+/// 只有一段用户输入时给出的**原样文本**（否则 `None`，交给 [`flatten_messages`]）。
+///
+/// ── 判据 ────────────────────────────────────────────────────
+/// 跳过空白消息之后，剩下的必须**恰好一条**，且它的 role 不是
+/// `system` / `developer` / `assistant` —— 那三种在拍平里带着语义
+/// （system 段与"这句话是模型说的"），省掉标记就不成立了。
+///
+/// ── 为什么要这么做（见模块头）────────────────────────────────
+/// 拍平文本就是上游存下来的那条用户消息，标记会被官方客户端显示出来。
+/// 单轮请求（面板的「测试」按钮、只发一条消息的客户端）没有任何历史要表达，
+/// 原样发既不影响结果，又不脏对话记录。
+///
+/// 返回的是**未 trim 的原文**：那是用户自己敲的字，一个空格都不该替他改。
+fn plain_single_message(messages: &[Value]) -> Option<String> {
+    let mut found: Option<String> = None;
+    for message in messages {
+        let text = message_text(message.get("content").unwrap_or(&Value::Null));
+        if text.trim().is_empty() {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        let role = string_field(message, "role");
+        if matches!(role.as_str(), "system" | "developer" | "assistant") {
+            return None;
+        }
+        found = Some(text);
+    }
+    found
+}
+
 /// 从客户端请求体里读多轮消息。
 ///
 /// 两种形态都吃：`messages`（Chat Completions）优先；
@@ -163,7 +213,9 @@ pub struct ChatPlan {
 /// （`result.default` 那一组）。
 pub fn build_chat_body(body: &Value, model: &str) -> Value {
     let messages = read_messages(body);
-    let flat = flatten_messages(&messages);
+    // 单轮原样发、多轮才拍平（理由见模块头：标记会显示在官方客户端里）
+    let flat = plain_single_message(&messages)
+        .unwrap_or_else(|| flatten_messages(&messages));
     // reasoning_effort：客户端显式传了就透传（上游认这个键，取值 "")/thinking/
     // deep_thinking 三档由 `meta_data.chat_mode` 与 `reasoning_effort` 共同表达）
     let chat_mode = body
@@ -345,5 +397,81 @@ mod tests {
     fn plan_targets_engine_stream() {
         let plan = build_chat_plan(&json!({ "messages": [user_text("x")] }), "m");
         assert!(plan.url.ends_with("/chatglm/mainchat-api/engine/stream"));
+    }
+
+    /// **单轮请求不套任何标记**（用户实测反馈：客户端里出现了 `<|user|>`）。
+    ///
+    /// ── 锁的是真实发生过的现象 ──────────────────────────────────
+    /// 从面板「测试」发一句「你好」，官方客户端的聊天记录里那条消息变成
+    /// `<|user|>\n你好\n<|assistant|>` —— 因为拍平文本就是上游存下来的
+    /// 用户消息本身。单轮没有历史要表达，原样发即可（实测不带标记上游照常答）。
+    #[test]
+    fn single_message_goes_out_verbatim() {
+        let body = build_chat_body(&json!({ "messages": [user_text("你好")] }), "m");
+        let text = body["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(text, "你好", "单轮必须原样发，一个标记都不该有");
+        assert!(!text.contains("<|"), "标记会显示在官方客户端里: {text}");
+
+        // 前后夹着空消息也仍然算单轮（空段本来就被跳过）
+        let body = build_chat_body(
+            &json!({ "messages": [
+                user_text("   "),
+                json!({ "role": "assistant", "content": [] }),
+                user_text("你好"),
+            ] }),
+            "m",
+        );
+        assert_eq!(body["messages"][0]["content"][0]["text"], json!("你好"));
+    }
+
+    /// 原样发时**不 trim 用户自己的字**，也不因为别的 role 而误判
+    #[test]
+    fn verbatim_keeps_user_whitespace_and_tolerates_unknown_roles() {
+        let body = build_chat_body(
+            &json!({ "messages": [user_text("  空行保留\n\n段落  ")] }),
+            "m",
+        );
+        assert_eq!(
+            body["messages"][0]["content"][0]["text"],
+            json!("  空行保留\n\n段落  "),
+            "用户自己敲的空白不该被网关改掉"
+        );
+        // 未知 role（tool 等）按用户侧输入处理 —— 单轮时同样原样发
+        let body = build_chat_body(
+            &json!({ "messages": [{ "role": "tool", "content": "工具结果" }] }),
+            "m",
+        );
+        assert_eq!(body["messages"][0]["content"][0]["text"], json!("工具结果"));
+    }
+
+    /// 带 system / 多轮时**仍然拍平**（标记有语义，不能省）
+    #[test]
+    fn multi_turn_or_system_still_flattens() {
+        for messages in [
+            // 多条用户消息
+            json!([user_text("一"), user_text("二")]),
+            // system + 用户
+            json!([
+                { "role": "system", "content": [{ "type": "text", "text": "只回答A" }] },
+                user_text("你好"),
+            ]),
+            // assistant 历史
+            json!([
+                user_text("记住88"),
+                { "role": "assistant", "content": [{ "type": "text", "text": "好的" }] },
+                user_text("是多少"),
+            ]),
+        ] {
+            let body = build_chat_body(&json!({ "messages": messages }), "m");
+            let text = body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap_or("");
+            assert!(
+                text.contains("<|"),
+                "多轮 / 带 system 必须拍平（否则历史与 system 会被上游丢弃）: {text}"
+            );
+        }
     }
 }

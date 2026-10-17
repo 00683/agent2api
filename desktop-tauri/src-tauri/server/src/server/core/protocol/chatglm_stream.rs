@@ -1,44 +1,40 @@
-//! 上游智谱清言 SSE（`parts` **全量快照**）→ 标准 chat SSE 增量帧（状态机）。
+//! 上游智谱清言 SSE（`parts` 逐帧文本）→ 标准 chat SSE 增量帧（状态机）。
 //!
 //! ── 为什么需要新的一台状态机（而不是复用任何一台）──────────────
 //! 本家的流是 SSE（`data: {...}` 逐帧），但**帧语义与 OpenAI 完全不同**：
 //!
 //! ```text
-//!   智谱清言：每帧给「到目前为止的完整 parts 快照」
-//!     {id, conversation_id, assistant_id, status, parts:[{id, logic_id, role,
-//!      model, status, content:[{type,text|think|...}]}]}
+//!   智谱清言：每帧给 `parts:[{id, logic_id, status, content:[{type,text|think}]}]`
 //!   OpenAI ：每帧给「这一拍的增量 delta」
 //!     {choices:[{delta:{content:"新增的几个字"}, index:0}]}
 //! ```
 //!
-//! 因此本机的活儿是**差分**：记住上一帧的完整文本，与新快照比对，
-//! 只把**新增的那一段**作为 `delta.content` 下发。
-//! **不能直接累加**（那会把整段文本反复下发成重复内容），也**不能原样透传**
-//! （下游按 delta 语义拼接，会把三次快照拼成三份全文）。
-//!
-//! ── 差分口径（实测帧序列推导）──────────────────────────────
-//! 实测一轮 `输出：AAA` 的帧演进（见 `_recon` 记录）：
+//! ── 帧语义（live 抓帧实测，2026-10）─────────────────────────
+//! 同一轮回答里混着**两种**帧，靠 `status` 区分，**不能一律按快照差分**
+//! （那正是「AI 回答两遍」的成因，见 `advance` 的注释）：
 //!
 //! ```text
-//!   [1] top=init   part=init    text="AAA"     ← 首帧就可能是全文
-//!   [2] top=init   part=finish  text="AAA"
-//!   [3] top=finish part=finish  text="AAA"
+//!   [1] top=init   part=init    text="1"            ← 增量帧：本帧就是新增内容
+//!   [2] top=init   part=init    text="\n"           ← 增量帧
+//!   [3] top=init   part=init    text="2\n3"         ← 增量帧
+//!   [4] top=init   part=finish  text="1\n2\n3"      ← 全文快照帧（注意 part 先 finish）
+//!   [5] top=finish part=finish  text="1\n2\n3"      ← 全文快照帧 + 终态
 //! ```
-//! 以及长回答（从 1 数到 20）的渐进形态：`"1"` → `"1\n"` → `"1\n2\n3"` …
-//! 可见快照是**单调增长**的，因此差分规则是：
-//!   - 新文本以旧文本为前缀 → 下发 `新[旧.len()..]`（正常增量）；
-//!   - 新文本**不以**旧文本为前缀（上游重写/回退，实测存在于 parts 被整段
-//!     替换的场景）→ 下发**全文**（宁可重复也不能丢内容：下游拼接时重复
-//!     好过缺字，且这种回退极少见）；
-//!   - 文本变短 → 同上，下发全文。
 //!
-//! ── 与段落（parts / logic_id）的关系 ─────────────────────────
-//! 一帧可能带多个 part（多段内容，如正文 + 工具结果）。本实现按**整帧文本**差分
-//! （把所有 part 的 text 块按顺序拼成一条），而不是按 part 分别差分：
-//!   - 下游的 chat 协议只有一条正文流，按 part 分别跟踪没有对应的下发形态；
-//!   - 实测多 part 场景（工具调用后续写）里，整帧文本同样是单调增长的，
-//!     整帧差分给出的正是「新增的那一段」。
-//! `think` 块单独走 `reasoning_content` 通道，按同样规则差分。
+//! 因此规则是：**`part.status == "init"` 的帧原样下发并追加进基准；
+//! 出现 finish 的帧（顶层或 part）给的是整段全文，只补基准之后的后缀。**
+//! 长回答实测：23 个 init 帧拼接 = 157 字，与收尾快照的 157 字逐字相同。
+//!
+//! ── 分段（`logic_id`）与占位段 ──────────────────────────────
+//! 一轮回答是**分段**的，每段一个 `logic_id`（实测四段：占位段 → 表单段 →
+//! 思考段 → 正文段）。换段即换基准：新段首帧若被拿去和旧段比对，会被误判成
+//! 「对不上」而整段重发。另有「占位段」（`meta_data.engine.action == "loading"`，
+//! 内容是「正在梳理您的需求～」这句状态文案）—— 官方客户端会把它替换掉，
+//! 我们一旦下发就收不回来，所以整段跳过（见 `is_loading_placeholder`）。
+//!
+//! 一帧可能带多个 part：本实现按**整帧文本**处理（所有 `text` 块按顺序拼成一条），
+//! 因为下游 chat 协议只有一条正文流。`think` 块单独走 `reasoning_content` 通道，
+//! 与正文各自维护基准。
 //!
 //! ── 收尾判定 ────────────────────────────────────────────────
 //! `status == "finish"`（顶层）为终态：发 `finish_reason` 帧 + usage 帧 +
@@ -66,10 +62,16 @@ pub struct ChatFromChatglmStream {
     /// 已下发过首帧（role assistant）
     started: bool,
     finished: bool,
-    /// 上一帧的正文全文（差分的基准）
-    last_text: String,
-    /// 上一帧的思考全文（差分的基准）
-    last_thinking: String,
+    /// 当前内容段的 key（上游 `logic_id`，缺失时退回落 `part.id`）。
+    ///
+    /// 上游一轮回答是**分段**的（实测：`占位段 → 表单段 → 思考段 → 正文段`，
+    /// 每段一个 `logic_id`）。换段意味着上一段结束、新的一段开始，
+    /// 差分基准必须跟着清零，否则新段的首帧会被拿去和旧段比对。
+    segment_key: String,
+    /// **当前段**已下发的正文全文（差分基准）
+    segment_text: String,
+    /// **当前段**已下发的思考全文（差分基准）
+    segment_thinking: String,
     /// 上游最后一次给出的会话 id（收尾帧里回填，便于排查）
     conversation_id: String,
     /// 上游最后一次给出的业务错误（若有）
@@ -87,8 +89,9 @@ impl ChatFromChatglmStream {
             created: crate::server::logging::now_ms() / 1000,
             started: false,
             finished: false,
-            last_text: String::new(),
-            last_thinking: String::new(),
+            segment_key: String::new(),
+            segment_text: String::new(),
+            segment_thinking: String::new(),
             conversation_id: String::new(),
             upstream_error: None,
             usage: None,
@@ -189,9 +192,11 @@ impl ChatFromChatglmStream {
             return self.fail_with_code(&message, 502);
         }
 
-        // 正文 / 思考：本帧全文（快照）
+        // 正文 / 思考：本帧文本 + 本帧是「增量」还是「全文快照」（见 `advance`）
         let (full_text, full_thinking) = collect_text(event);
-        let (text_delta, thinking_delta) = self.diff(&full_text, &full_thinking);
+        let is_snapshot = frame_is_snapshot(event);
+        let (text_delta, thinking_delta) =
+            self.advance(event, &full_text, &full_thinking, is_snapshot);
 
         // 终态判定：顶层 status == "finish"（实测顶层先变成 finish，其次 part）
         let frame_status = string_field(event, "status").to_lowercase();
@@ -219,14 +224,42 @@ impl ChatFromChatglmStream {
         out
     }
 
-    /// 与上一帧快照求差，返回 `(正文增量, 思考增量)`。
+    /// 本帧 → 要下发的 `(正文增量, 思考增量)`，并推进当前段的累积基准。
     ///
-    /// 规则见模块头：以旧值为前缀时发后缀；否则发全文（宁可重复不丢内容）。
-    fn diff(&mut self, full_text: &str, full_thinking: &str) -> (String, String) {
-        let text = diff_segment(&self.last_text, full_text);
-        let thinking = diff_segment(&self.last_thinking, full_thinking);
-        self.last_text = full_text.to_string();
-        self.last_thinking = full_thinking.to_string();
+    /// ── 三种帧（实测，逐条对应真实流）──────────────────────────
+    /// 1. **占位段**（`part.meta_data.engine.action == "loading"`）：
+    ///    上游在真正回答前先发一段状态文案（实测原文：「让我们先核对下本轮任务的
+    ///    目标与偏好，正在梳理您的需求～」）。它**不是回答的一部分** —— 官方客户端
+    ///    也只是短暂显示再替换掉。我们一旦下发就收不回来，所以整段跳过。
+    /// 2. **增量帧**（`part.status == "init"`）：本帧文本就是新增的一小段，
+    ///    原样下发并追加进基准。
+    /// 3. **全文快照帧**（`part.status` / 顶层 `status` 为 finish）：本帧给的是
+    ///    **整段全文**，只补「还没下发过」的那一截。
+    ///
+    /// ── 为什么第 3 条不能像以前那样"对不上就发全文"（真实故障）──────
+    /// 曾经对每帧一律做前缀差分，而收尾帧给的是全文、与前一段增量对不上，
+    /// 于是整段回答被**再下发一遍** —— 用户看到的就是「AI 回答了两遍」。
+    /// 快照对不上只可能是上游改写/回退，那种情况下重复一遍比漏几个字更糟
+    /// （重复是稳定可见的故障，改写极少见且下游无法撤回已发内容）。
+    fn advance(
+        &mut self,
+        event: &Value,
+        full_text: &str,
+        full_thinking: &str,
+        is_snapshot: bool,
+    ) -> (String, String) {
+        if is_loading_placeholder(event) {
+            return (String::new(), String::new());
+        }
+        // 换段（logic_id 变了）⇒ 新的一段开始，基准清零
+        let key = segment_key_of(event);
+        if !key.is_empty() && key != self.segment_key {
+            self.segment_key = key;
+            self.segment_text.clear();
+            self.segment_thinking.clear();
+        }
+        let text = advance_segment(&mut self.segment_text, full_text, is_snapshot);
+        let thinking = advance_segment(&mut self.segment_thinking, full_thinking, is_snapshot);
         (text, thinking)
     }
 
@@ -361,19 +394,88 @@ impl ChatFromChatglmStream {
     }
 }
 
-/// 求一段文本相对上一版的增量（规则见模块头）
-fn diff_segment(previous: &str, current: &str) -> String {
-    if current.is_empty() {
+/// 求一段文本相对**当前段已下发内容**的增量，并推进基准。
+///
+/// - `is_snapshot == false`（增量帧）：本帧就是新内容，原样下发；
+/// - `is_snapshot == true`（全文快照帧）：以已下发内容为前缀，只补后缀；
+///   对不上（上游改写/回退）时**不补发** —— 补发就是「回答两遍」（见 `advance`）。
+fn advance_segment(emitted: &mut String, frame: &str, is_snapshot: bool) -> String {
+    if frame.is_empty() {
         return String::new();
     }
-    if previous.is_empty() {
-        return current.to_string();
+    if !is_snapshot {
+        emitted.push_str(frame);
+        return frame.to_string();
     }
-    if let Some(rest) = current.strip_prefix(previous) {
-        return rest.to_string();
+    // `emitted` 为空时 `strip_prefix` 返回整段，因此新段的第一个快照帧会整段下发
+    match frame.strip_prefix(emitted.as_str()) {
+        Some(rest) => {
+            emitted.push_str(rest);
+            rest.to_string()
+        }
+        None => String::new(),
     }
-    // 不是简单增长（上游重写 / 回退）：发全文，宁重复不丢内容
-    current.to_string()
+}
+
+/// 本帧是不是「全文快照」帧。
+///
+/// 实测：`part.status` 会先于顶层 `status` 变 finish（从 1 数到 5 的流里，
+/// 第 6 帧 `top=init / part=finish` 且文本已是全文），因此两处都要认。
+fn frame_is_snapshot(event: &Value) -> bool {
+    if is_finish_status(&string_field(event, "status")) {
+        return true;
+    }
+    event
+        .get("parts")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            !parts.is_empty()
+                && parts
+                    .iter()
+                    .all(|part| is_finish_status(&string_field(part, "status")))
+        })
+}
+
+fn is_finish_status(status: &str) -> bool {
+    matches!(status.to_lowercase().as_str(), "finish" | "finished")
+}
+
+/// 本帧是不是「回答前的临时占位段」（实测标记：`engine.action == "loading"`）。
+///
+/// 这类段有自己的 `logic_id`（与正文段不同），内容是一句状态文案。**不能下发**：
+/// 官方客户端会把它替换掉，而下游收到的是最终正文，混进去就是一段永久的噪音。
+fn is_loading_placeholder(event: &Value) -> bool {
+    event
+        .get("parts")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.pointer("/meta_data/engine/action")
+                    .and_then(Value::as_str)
+                    == Some("loading")
+            })
+        })
+}
+
+/// 本帧所属内容段的 key：`logic_id` 优先，缺失退回落 `part.id`。
+///
+/// 两个都没有（上游形态变了）时返回空串，调用方按「不换段」处理 ——
+/// 宁可沿用旧基准，也不要在读到空串时把基准清掉（那会让整段重新下发一遍）。
+fn segment_key_of(event: &Value) -> String {
+    let Some(parts) = event.get("parts").and_then(Value::as_array) else {
+        return String::new();
+    };
+    for part in parts {
+        let logic = string_field(part, "logic_id");
+        if !logic.is_empty() {
+            return logic;
+        }
+        let id = string_field(part, "id");
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    String::new()
 }
 
 /// 把一帧里所有 part 的 text / think 块按顺序拼成两条全文。
@@ -462,57 +564,112 @@ mod tests {
         format!("data: {payload}\n\n").into_bytes()
     }
 
-    /// **最核心的一条**：全量快照必须差分，拼起来恰好是最终全文（不能重复）
+    /// **回归：回答不能重复下发**（用户实测「AI 回答了两遍」）。
+    ///
+    /// 帧序列逐条照抄 live 抓帧：前五帧 `part=init` 是**增量**，收尾两帧给**全文**。
+    /// 旧实现把每帧都按快照做前缀差分，收尾全文与前一段增量对不上就「发全文」，
+    /// 于是整段回答被再下发一遍 —— 拼接结果正好是两遍回答。
     #[test]
-    fn snapshot_frames_become_deltas() {
+    fn deltas_then_finish_snapshot_do_not_repeat_the_answer() {
         let mut machine = ChatFromChatglmStream::new("glm-5.3-flash");
         let mut frames = Vec::new();
-        // 递增快照（长回答的实测形态）
-        for text in ["1", "1\n", "1\n2\n3", "1\n2\n3\n4"] {
+        for text in ["1", "\n", "2\n3", "\n4\n", "5"] {
             frames.extend(machine.push(&sse(&format!(
-                r#"{{"id":"m","conversation_id":"c","status":"init","parts":[{{"content":[{{"type":"text","text":"{}"}}]}}]}}"#,
+                r#"{{"id":"m","conversation_id":"c","status":"init","parts":[{{"logic_id":"s","status":"init","content":[{{"type":"text","text":"{}"}}]}}]}}"#,
                 text.replace('\n', "\\n")
             ))));
         }
+        // 收尾第一拍：part 先 finish，这一帧已经是全文
         frames.extend(machine.push(&sse(
-            r#"{"id":"m","conversation_id":"c","status":"finish","parts":[{"content":[{"type":"text","text":"1\n2\n3\n4"}]}]}"#,
+            r#"{"id":"m","conversation_id":"c","status":"init","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"1\n2\n3\n4\n5"}]}]}"#,
+        )));
+        // 收尾第二拍：顶层终态，又来一遍同样的全文
+        frames.extend(machine.push(&sse(
+            r#"{"id":"m","conversation_id":"c","status":"finish","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"1\n2\n3\n4\n5"}]}]}"#,
         )));
         let (text, _, finish) = collect(&frames);
-        // 差分后的拼接结果 == 最终全文（若误用累加，这里会是 "11\n1\n2\n3…"）
-        assert_eq!(text, "1\n2\n3\n4");
+        assert_eq!(text, "1\n2\n3\n4\n5", "完整回答只能出现一次");
         assert_eq!(finish.as_deref(), Some("stop"));
     }
 
-    /// 首帧就是全文（实测形态）时也能正确下发
+    /// 短回答：首帧增量本身就是全文，收尾快照不得再补一遍（旧实现这里也发两遍）
     #[test]
-    fn full_text_on_first_frame() {
+    fn whole_answer_in_first_delta_is_not_repeated() {
         let mut machine = ChatFromChatglmStream::new("m");
-        let frames = machine.push(&sse(
-            r#"{"id":"m","status":"init","parts":[{"content":[{"type":"text","text":"AAA"}]}]}"#,
+        let mut frames = machine.push(&sse(
+            r#"{"id":"m","status":"init","parts":[{"logic_id":"s","status":"init","content":[{"type":"text","text":"AAA"}]}]}"#,
         ));
+        frames.extend(machine.push(&sse(
+            r#"{"id":"m","status":"init","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"AAA"}]}]}"#,
+        )));
+        frames.extend(machine.push(&sse(
+            r#"{"id":"m","status":"finish","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"AAA"}]}]}"#,
+        )));
         let (text, _, _) = collect(&frames);
         assert_eq!(text, "AAA");
-        // 再来一帧完全相同的快照 → 无增量
-        let frames = machine.push(&sse(
-            r#"{"id":"m","status":"init","parts":[{"content":[{"type":"text","text":"AAA"}]}]}"#,
-        ));
-        let (text, _, _) = collect(&frames);
-        assert_eq!(text, "", "相同快照不应产生增量");
     }
 
-    /// 思考内容走 reasoning_content 通道，同样差分
+    /// 收尾快照比增量累计更长时，只补缺口那一段
+    #[test]
+    fn finish_snapshot_only_emits_the_missing_tail() {
+        let mut machine = ChatFromChatglmStream::new("m");
+        for text in ["前", "半"] {
+            machine.push(&sse(&format!(
+                r#"{{"status":"init","parts":[{{"logic_id":"s","status":"init","content":[{{"type":"text","text":"{text}"}}]}}]}}"#
+            )));
+        }
+        let frames = machine.push(&sse(
+            r#"{"status":"finish","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"前半加尾"}]}]}"#,
+        ));
+        let (text, _, _) = collect(&frames);
+        assert_eq!(text, "加尾");
+    }
+
+    /// 占位段（`engine.action == "loading"`）整段跳过，正文段照常下发
+    #[test]
+    fn loading_placeholder_is_skipped() {
+        let mut machine = ChatFromChatglmStream::new("m");
+        let frames = machine.push(&sse(
+            r#"{"status":"init","parts":[{"logic_id":"ph","status":"finish","meta_data":{"engine":{"type":"ppt","action":"loading"}},"content":[{"type":"text","text":"让我们先核对下本轮任务的目标与偏好，正在梳理您的需求～"}]}]}"#,
+        ));
+        let (text, _, _) = collect(&frames);
+        assert_eq!(text, "", "占位文案不是回答，下发就收不回来了");
+        // 正文段（另一个 logic_id）开始 → 基准清零，首帧整段下发
+        let frames = machine.push(&sse(
+            r#"{"status":"init","parts":[{"logic_id":"body","status":"init","content":[{"type":"text","text":"真正的回答"}]}]}"#,
+        ));
+        let (text, _, _) = collect(&frames);
+        assert_eq!(text, "真正的回答");
+    }
+
+    /// 换段（logic_id 变了）必须重置基准，否则新段的首帧会被旧段基准吞掉
+    #[test]
+    fn segment_change_resets_the_baseline() {
+        let mut machine = ChatFromChatglmStream::new("m");
+        machine.push(&sse(
+            r#"{"status":"init","parts":[{"logic_id":"think","status":"init","content":[{"type":"think","think":"先想"}]}]}"#,
+        ));
+        let frames = machine.push(&sse(
+            r#"{"status":"init","parts":[{"logic_id":"body","status":"finish","content":[{"type":"text","text":"正文全文"}]}]}"#,
+        ));
+        let (text, thinking, _) = collect(&frames);
+        assert_eq!(text, "正文全文", "新段的第一个快照帧应整段下发");
+        assert_eq!(thinking, "", "新段没有思考内容");
+    }
+
+    /// 思考内容走 reasoning_content 通道，与正文同一套「增量 / 快照」规则
     #[test]
     fn thinking_uses_reasoning_channel() {
         let mut machine = ChatFromChatglmStream::new("m");
         machine.push(&sse(
-            r#"{"status":"init","parts":[{"content":[{"type":"think","think":"想"}]}]}"#,
+            r#"{"status":"init","parts":[{"logic_id":"t","status":"init","content":[{"type":"think","think":"想"}]}]}"#,
         ));
         let frames = machine.push(&sse(
-            r#"{"status":"init","parts":[{"content":[{"type":"think","think":"想一会"}]}]}"#,
+            r#"{"status":"init","parts":[{"logic_id":"t","status":"finish","content":[{"type":"think","think":"想一会"}]}]}"#,
         ));
         let (text, thinking, _) = collect(&frames);
         assert_eq!(text, "");
-        assert_eq!(thinking, "一会", "思考也应是增量");
+        assert_eq!(thinking, "一会", "快照只补后缀");
     }
 
     /// 正文与思考同帧给出时各走各的通道
@@ -535,18 +692,18 @@ mod tests {
         assert!(frames.is_empty());
     }
 
-    /// 上游重写（快照不再是前缀）时下发全文（宁可重复不丢内容）
+    /// 快照对不上（上游改写/回退）时**不补发**：整段重发的故障比漏几个字更糟
     #[test]
-    fn rewritten_snapshot_falls_back_to_full_text() {
+    fn mismatched_snapshot_is_not_replayed() {
         let mut machine = ChatFromChatglmStream::new("m");
         machine.push(&sse(
-            r#"{"status":"init","parts":[{"content":[{"type":"text","text":"ABC"}]}]}"#,
+            r#"{"status":"init","parts":[{"logic_id":"s","status":"init","content":[{"type":"text","text":"ABC"}]}]}"#,
         ));
         let frames = machine.push(&sse(
-            r#"{"status":"init","parts":[{"content":[{"type":"text","text":"XYZ"}]}]}"#,
+            r#"{"status":"finish","parts":[{"logic_id":"s","status":"finish","content":[{"type":"text","text":"XYZ"}]}]}"#,
         ));
         let (text, _, _) = collect(&frames);
-        assert_eq!(text, "XYZ", "非前缀增长应发全文");
+        assert_eq!(text, "", "对不上的快照不得整段重发");
     }
 
     /// 多 part 按顺序拼接后差分
@@ -621,20 +778,24 @@ mod tests {
         assert!(raw.contains("error"));
     }
 
-    /// 差分工具本身的三条规则
+    /// 差分工具本身：增量原样、快照只补后缀、对不上不发
     #[test]
-    fn diff_rules() {
-        // 首帧（无基准）→ 全文
-        assert_eq!(diff_segment("", "abc"), "abc");
-        // 正常增长（旧值是前缀）→ 只发后缀
-        assert_eq!(diff_segment("abc", "abcdef"), "def");
-        // 完全相同的快照 → 无增量（最要紧的一条：不能重复下发）
-        assert_eq!(diff_segment("abc", "abc"), "");
-        // 上游重写（旧值不是前缀）→ 发全文
-        assert_eq!(diff_segment("abc", "xyz"), "xyz");
-        // 文本变短（回退）→ 也发全文（宁可重复，不可丢内容）
-        assert_eq!(diff_segment("abcdef", "abc"), "abc");
-        // 空的新帧 → 无增量
-        assert_eq!(diff_segment("abc", ""), "");
+    fn advance_segment_rules() {
+        let mut emitted = String::new();
+        // 增量帧：本帧就是新内容，原样下发并累积
+        assert_eq!(advance_segment(&mut emitted, "abc", false), "abc");
+        assert_eq!(advance_segment(&mut emitted, "def", false), "def");
+        // 快照帧：只补还没下发过的后缀
+        assert_eq!(advance_segment(&mut emitted, "abcdefgh", true), "gh");
+        // 与已下发内容完全一致 → 无增量（最要紧的一条：不能重复下发）
+        assert_eq!(advance_segment(&mut emitted, "abcdefgh", true), "");
+        // 对不上（上游改写 / 回退）→ 不发，绝不整段重发
+        assert_eq!(advance_segment(&mut emitted, "xyz", true), "");
+        // 空帧 → 无增量
+        assert_eq!(advance_segment(&mut emitted, "", true), "");
+        assert_eq!(advance_segment(&mut emitted, "", false), "");
+        // 新段的第一个快照帧（基准为空）→ 整段下发
+        let mut fresh = String::new();
+        assert_eq!(advance_segment(&mut fresh, "整段", true), "整段");
     }
 }

@@ -115,9 +115,10 @@ pub mod catpaw;
 /// 智谱清言（`chatglm.cn`，桌面客户端 2.0.7）：**无状态转发 + 双凭证形态**
 /// （访客免登录可换证 / 登录账号有积分）。适配实现在 `chatglm/`：请求要
 /// 签名三件套 + 设备号（实测边界见 `chatglm/sign.rs`）、多轮 messages 必须
-/// 拍平成单条（上游只认最后一条 user 消息，见 `chatglm/plan.rs`）、响应是
-/// 「SSE 全量快照」因此走 `UpstreamResponse::ChatglmSnapshot` 那条翻译层
-/// （差分后下发）。余额 / 签到 / 领取类齐备，但只对登录账号有效（访客如实跳过）。
+/// 拍平成单条（上游只认最后一条 user 消息，见 `chatglm/plan.rs`）、响应帧混着
+/// 「增量」与「收尾全文快照」两种语义，因此走 `UpstreamResponse::ChatglmSnapshot`
+/// 那条翻译层（按帧语义差分后下发，见 `protocol::chatglm_stream` 的模块头）。
+/// 余额 / 签到 / 领取类齐备，但只对登录账号有效（访客如实跳过）。
 pub mod chatglm;
 pub mod cline;
 /// CodeArts（华为云 snap-access）。适配器实现在 `codearts/`，
@@ -486,7 +487,8 @@ pub enum ProviderKind {
     /// ── 上游长什么样（从客户端 app.asar + 线上包逆向，见 `chatglm/mod.rs`）──
     /// 全部能力都在 `chatglm.cn` 的一组 REST 接口上，请求要带**签名三件套 +
     /// 设备号**（密钥是客户端内置的；时间戳是智谱自创的校验位算法）。
-    /// 对话响应是「**SSE 全量快照**」而不是增量，因此另开一台做差分的状态机
+    /// 对话响应的帧**混着两种语义**（`part.status == "init"` 是增量、带 finish 的
+    /// 帧给全文快照），因此另开一台按帧语义差分的状态机
     /// （`UpstreamResponse::ChatglmSnapshot`）。
     ///
     /// ── 与别家最不同的一点：**访客凭证** ────────────────────────

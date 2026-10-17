@@ -128,6 +128,18 @@ windows = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
 ] }
+# Windows 服务形态（bin/service.rs）：`--service` 参数下把进程交给 SCM
+# （StartServiceCtrlDispatcherW + 控制事件回调 + 状态上报）。
+#
+# 为什么用这个 crate 而不是直接拼 windows-sys：SCM 的握手是「先注册
+# 控制回调 → 再上报 RUNNING → 收到 STOP 后回到 STOPPED」这一串顺序敏感的
+# 调用，顺序错了 SCM 会直接把服务判成启动失败（1053）。crate 把这层封成了
+# 回调 + `set_service_status` 两个动作，错误也被规整成 Result。
+#
+# 它与上面 `windows` 0.61 是**两条独立绑定**（内部依赖 windows-sys 0.61），
+# 但只链 Win32_System_Services / Foundation 等少数模块，体积影响可忽略；
+# 且仅 Windows 目标编译，Linux / Docker 构建完全不受影响。
+windows-service = "0.8"
 
 [dev-dependencies]
 # 路由级测试用 `ServiceExt::oneshot` 直接打 Router（不占端口、不跑 serve），

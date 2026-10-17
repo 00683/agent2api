@@ -70,8 +70,20 @@ export type CreditRow = {
    *
    * 两种"看着像用完、其实没完"的必须留在主列表：**每日重置**的包明天回满
    * （`remain` 现在就是 0），**不限量**的（`-1` 哨兵）本来就花不完。
+   *
+   * **流水行恒为 false**（见 {@link CreditRow.amount}）：一笔已经发生的收支没有
+   * "还能不能花"可言，一条 `-0.96` 的消耗也不是"用完了的积分包"。
    */
   spent: boolean
+  /**
+   * 这一行是**流水一笔**（`record: true`）而不是积分包：有它时右侧读数是带符号
+   * 的金额（`+1000` / `-0.96`），没有「剩 / 共」那套措辞、也不画比例条。
+   *
+   * 判据走**后端给的标记**而不是「有没有 total」这类形状探测：上游给一笔
+   * 没有剩余概念的记录，和给一份没写面额的包，在形状上可以长得一样，
+   * 只有产出它的那一端知道它是哪一种。
+   */
+  amount: number | null
 }
 
 /**
@@ -124,6 +136,44 @@ export function creditRowsOf(entry: UsageEntry): CreditRow[] {
   const now = Date.now()
   return packs.map(pack => {
     const name = String(pack?.name || '').trim() || t('积分包')
+
+    // ── 流水一笔：另一套读法（见 CreditRow.amount）──────────────
+    // 右侧读数是**带符号的金额**，不是「剩 x / y」：一笔已经发生的收支没有
+    // 剩余可言。符号必须留着 —— 取掉绝对值后，「获得 1000」与「消耗 1000」
+    // 在屏幕上长得一模一样，而这一列恰恰就是靠符号读的。
+    if (pack?.record === true) {
+      const amount = numberOrNull(pack?.amount)
+      const unit = String(pack?.unit || '').trim()
+      const at = numberOrNull(pack?.at)
+      const expireAt = numberOrNull(pack?.expireAt)
+      const value = amount === null ? '—' : `${amount > 0 ? '+' : ''}${numberText(amount)}`
+      const view = unit && value !== '—' ? `${value} ${unitLabel(unit)}` : value
+      const parts: string[] = []
+      if (at !== null && at > 0) parts.push(shortTime(at))
+      if (expireAt !== null && expireAt > 0) parts.push(t('{time} 到期', { time: shortTime(expireAt) }))
+      const remark = String(pack?.remark || '').trim()
+      return {
+        name,
+        view,
+        // 获得是这一列的"进项"，消耗不该抢同样的注意力；两者都不用红
+        tone: amount !== null && amount < 0 ? 'muted' : 'ok',
+        percent: null,
+        window: parts.length ? parts.join(' · ') : null,
+        title: [
+          name,
+          view,
+          at !== null && at > 0 ? formatTime(at) : '',
+          expireAt !== null && expireAt > 0
+            ? t('到期 {time}', { time: formatTime(expireAt) })
+            : '',
+          remark,
+        ].filter(Boolean).join(' · '),
+        // 流水恒不进「已用完 / 已过期」那组（见 CreditRow.spent）
+        spent: false,
+        amount,
+      }
+    }
+
     const unit = String(pack?.unit || '').trim()
     const total = numberOrNull(pack?.total)
     const used = numberOrNull(pack?.used)
@@ -211,7 +261,7 @@ export function creditRowsOf(entry: UsageEntry): CreditRow[] {
       percent === null && remain !== null ? t('上游未给总量，画不出剩余比例') : '',
       used !== null && total !== null ? t('已用 {used} / 共 {total}', { used: numberText(used), total: numberText(total) }) : '',
     ].filter(Boolean).join(' · ')
-    return { name, view, tone, percent, window: parts.length ? parts.join(' · ') : null, title, spent }
+    return { name, view, tone, percent, window: parts.length ? parts.join(' · ') : null, title, spent, amount: null }
   })
 }
 

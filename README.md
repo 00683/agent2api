@@ -31,7 +31,7 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 - 📊 **请求报表** —— 请求量、成功率、Token 消耗一览，还有缓存命中率与 365 天热力图
 - ⏰ **定时任务** —— 自动签到、凭证维护、模型目录刷新，开关与间隔在一页里管理
 - 💰 **余额与用量** —— 账号行内直接看余额与用量，支持跨账号并发查询
-- 🖥️ **四种形态** —— Windows / macOS / Linux 桌面端托盘常驻、免装 Node；Docker 版面板与网关同端口（amd64 / arm64），界面六语
+- 🖥️ **三种形态** —— 桌面端（Windows / macOS / Linux，托盘常驻）、服务端（Windows / Linux，无界面，注册成系统服务）、Docker（面板与网关同端口，amd64 / arm64）；都不需要装 Node，界面六语
 
 ## ❤️ 赞助商
 
@@ -81,7 +81,7 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 
 > 注：模型列表的 ✓ 表示支持在线自动拉取，部分平台另有内置静态表兜底；ZCode 仅有内置静态表。Token 续期列 ✗ 表示该平台没有可用的续期接口（账号在有效期内不受影响）。Qoder 签到仅中国版可用。
 >
-> **智谱清言**是本项目**唯一支持「访客模式」**的一家：不需要登录，点一下就能换到一份可直接对话的凭证（免费额度由上游按设备发放）。代价是访客账号没有积分体系 —— 上表里的「余额查询 / 签到 / 领取类」只对**登录账号**有效（粘贴令牌或导入客户端登录态），访客会被如实跳过。
+> **智谱清言**是本项目**唯一支持「访客模式」**的一家：不需要登录，点一下就能换到一份可直接对话的凭证（免费额度由上游按设备发放）。代价是访客账号没有积分体系 —— 上表里的「余额查询 / 签到 / 领取类」，以及**任务中心的新手任务与每日任务**，都只对**登录账号**有效（粘贴令牌或导入客户端登录态），访客会被如实跳过。
 
 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`（含 `count_tokens`）与 `/v1/models` 对所有平台一视同仁；模型映射、全局优先级队列、429 降级、出网代理、出站指纹脱敏与请求报表同样全平台通用。
 
@@ -91,16 +91,23 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 
 ## 🚀 快速开始
 
-Releases 页提供四种形态的产物，按你的系统选一个：
+Releases 页提供六种形态的产物，按你的系统选一个：
 
 | 形态 | 产物 | 界面 | 说明 |
 | --- | --- | --- | --- |
-| **Windows 桌面端**（推荐） | `Agent2API_<版本>_x64-setup.exe` | 应用窗口 | NSIS 安装包，默认装到 `C:\Program Files\Agent2API`，安装时需要管理员授权 |
+| **Windows 桌面端** | `Agent2API_<版本>_x64-setup.exe` | 应用窗口 | NSIS 安装包，默认装到 `C:\Program Files\Agent2API`，安装时需要管理员授权 |
 | **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 应用窗口 | 通用二进制（Apple Silicon 与 Intel 各编一遍再合并），最低 macOS 10.15 |
 | **Linux 桌面端** | `Agent2API_<版本>_amd64.deb` 或 `Agent2API_<版本>_amd64.AppImage` | 应用窗口 | deb 装进系统（依赖 webkit2gtk-4.1 / gtk3）；AppImage 免安装单文件，任意发行版可用 |
+| **Windows 服务端**（无 GUI） | `agent2api-server-windows-amd64.zip` | **浏览器面板** | 命令行安装、注册成 Windows 服务，见 [服务端部署](#-服务端部署windows--linux无界面) |
+| **Linux 服务端**（无 GUI） | `agent2api-server-linux-<arch>.tar.gz` | **浏览器面板** | 命令行安装、systemd 托管，同一个包也是容器内更新载荷 |
 | **Docker** | `aimodcc/agent2api:latest` | **浏览器面板** | amd64 / arm64 双架构，见 [Docker 部署](#-docker-部署) |
 
-> 另有两个 `agent2api-server-linux-<arch>.tar.gz` 附件，那是 Docker 版**容器内一键更新**的载荷（面板「下载并更新」时下载的包），不是独立部署形态，普通用户不用管。
+> 选哪个：**自己有桌面**（要托盘、开机自启、本机登录态导入）→ 桌面端；
+> **服务器上没有图形界面**（Windows Server / Linux 服务器）→ 服务端包；
+> **已经跑 Docker** → 镜像。
+>
+> 桌面端需要图形界面，**装不到无 GUI 的服务器上**。服务端包不链接任何
+> WebView / GTK 依赖，一个可执行文件加一个 `ui/` 目录就能跑。
 
 **桌面端**（Windows / macOS / Linux）安装后启动即可，**无需安装 Node 或任何其它运行时**；网关跑在应用进程内，托盘常驻。
 
@@ -150,6 +157,122 @@ print(resp.choices[0].message.content)
 
 桌面端（Windows / macOS）装包里就带着网页面板那一份 `ui/`，打开「同时开放网页管理面板」后局域网设备用浏览器访问同一地址即是管理界面 —— 与 Docker 版是同一份界面；**桌面窗口自己不走网页登录**（没有登录页），它以本机第一把网关 Key 作为凭证，打开这个开关不需要你额外登录桌面端。网页登录页只在浏览器访问面板时出现。
 
+## 🖥️ 服务端部署（Windows / Linux，无界面）
+
+给**没有图形界面的服务器**用（Windows Server、Linux 服务器、云主机）。产物是同一份
+`agent2api-server` 二进制：无窗口、无托盘、不链接 WebView / GTK，运行时不依赖
+Node 或任何其它运行时。命令只负责**安装**，装完之后的管理（加账号、建 Key、
+看报表）都在浏览器面板里做。
+
+服务以系统服务方式常驻：开机自启、崩溃自动拉起、无控制台后台运行。
+
+### Windows Server
+
+下载 `agent2api-server-windows-amd64.zip`，解压后**以管理员身份**打开 PowerShell：
+
+```powershell
+Expand-Archive agent2api-server-windows-amd64.zip -DestinationPath C:\agent2api-pkg
+cd C:\agent2api-pkg
+.\install-service.ps1
+```
+
+脚本会：装程序到 `C:\Agent2API`、数据落到 `C:\ProgramData\Agent2API`、注册名为
+`Agent2API` 的 Windows 服务（`LocalSystem`，开机自启）、加防火墙入站规则，然后启动。
+
+```powershell
+# 自定义位置与端口
+.\install-service.ps1 -InstallDir D:\apps\agent2api -DataDir D:\data\agent2api -Port 8080
+
+# 日常管理
+Get-Service Agent2API
+Restart-Service Agent2API
+Stop-Service Agent2API
+
+# 卸载（保留数据）；加 -Purge 连程序与数据一起删
+.\install-service.ps1 -Uninstall
+```
+
+**升级**：解压新版本包，重跑一次 `install-service.ps1` 即可（脚本会先停服务、
+覆盖程序与界面、再启动；数据与配置不动）。
+
+> **两个 Windows 特有的坑，脚本已经处理好了**：
+> 服务进程的工作目录是 `C:\Windows\system32` 而不是 exe 所在目录 —— 界面目录靠
+> exe 路径定位，不受影响；数据目录则由脚本显式写入服务注册表的
+> `AGENT2API_PROXY_HOME`（不设的话会落到 LocalSystem 的
+> `C:\Windows\system32\config\systemprofile` 下，几乎不可能找到）。
+> 服务没有控制台，所以日志同时落文件 `C:\ProgramData\Agent2API\logs\server.log`。
+
+### Linux（systemd）
+
+```bash
+tar -xzf agent2api-server-linux-amd64.tar.gz
+cd agent2api-server-linux-amd64      # 或解包后的目录名
+sudo bash install.sh
+```
+
+脚本会：建 `agent2api` 系统账号（不允许登录）、装程序到 `/opt/agent2api`、数据落
+`/var/lib/agent2api`、配置写到 `/etc/agent2api/agent2api.env`、装 systemd 单元并
+`enable + start`。
+
+```bash
+# 升级（保留数据与配置，旧二进制备份为 .bak）
+sudo bash install.sh --upgrade
+
+# 卸载（保留数据）；加 --purge 连数据与配置一起删
+sudo bash install.sh --uninstall
+
+# 日常管理
+systemctl status agent2api
+systemctl restart agent2api
+journalctl -u agent2api -f
+```
+
+开机自启、崩溃自动拉起（`Restart=always`）、SIGTERM 优雅停机（等在途请求跑完
+再退出，SSE 长连接不会被打断）都已配好。配置改 `/etc/agent2api/agent2api.env`
+后 `systemctl restart agent2api` 生效。
+
+> **裸机不要开 `AGENT2API_SELF_UPDATE`**：那是容器内的方案（换文件后退出，靠
+> 容器 restart 策略拉起）。裸机上程序文件属 root、服务账号无权替换，单元里已
+> 显式设成 `0`。升级走 `install.sh --upgrade`。
+
+### 装完之后
+
+两个平台都一样 —— 打开浏览器：
+
+```
+http://<服务器IP>:3065/
+```
+
+1. 首次进入会引导**注册管理员账号**（也可以用环境变量预置，见下）
+2. 登录后在「网关 Key」页创建一把 API Key
+3. 客户端 `base_url` 填 `http://<服务器IP>:3065/v1`，`api_key` 填刚建的那把
+
+> ⚠️ **建 Key 之前 `/v1/*` 会拒绝服务**（fail-closed）。这是刻意的：服务端形态
+> 绑 `0.0.0.0`，没配 Key 就把上游额度对全网开放是不可接受的。
+
+### 无人值守部署
+
+管理员和网关 Key 都能用环境变量预置，跳过浏览器里的手动步骤：
+
+| 变量 | 说明 |
+| --- | --- |
+| `AGENT2API_ADMIN_USER` + `AGENT2API_ADMIN_PASSWORD` | 预置管理员（密码明文填，启动时自动转 bcrypt）；也可用 `AGENT2API_ADMIN_PASSWORD_HASH` 直接给哈希 |
+| `AGENT2API_PROXY_API_KEY` | 预置一把网关 Key，跳过「面板里建第一把」 |
+| `AGENT2API_PROXY_HOME` | 数据目录 |
+| `AGENT2API_HOST` / `AGENT2API_PROXY_PORT` | 监听地址（默认 `0.0.0.0`）/ 端口（默认 `3065`） |
+| `AGENT2API_PANEL_PORT` | 面板分端口：管理面单独监听该端口，主端口只留 `/v1/*` |
+| `AGENT2API_ALLOW_NO_KEY` | 置 `1` 关闭 fail-closed（仅纯内网） |
+| `AGENT2API_LOG_FILE` | 日志文件路径，默认 `{数据目录}/logs/server.log` |
+| `AGENT2API_VERBOSE` | 置 `1` 打开 debug 日志 |
+
+Linux 写在 `/etc/agent2api/agent2api.env`；Windows 改服务注册表的
+`HKLM\SYSTEM\CurrentControlSet\Services\Agent2API\Environment`（`install-service.ps1`
+已经写好基础项，重跑脚本会覆盖）。
+
+> **账号无法预置**：账号需要扫码 / 验证码 / 粘贴凭证，这一步由上游协议决定，
+> 绕不过去。批量部署可以把已经配好的**数据目录整个拷过去**（SQLite 库 +
+> `account.key` 在同一个目录里），账号随之迁移。
+
 ## 🐳 Docker 部署
 
 ```bash
@@ -194,7 +317,7 @@ services:
 
 面板的「软件更新」页在容器里能直接「下载并更新」：下载官方 Release 里的 `agent2api-server-linux-<arch>.tar.gz`（校验 `.sha256`）→ 替换可执行文件与 `ui/` → 进程优雅退出、由 `restart` 策略拉起同一个容器。由 `AGENT2API_SELF_UPDATE` 控制（Dockerfile 默认 `1`），置 `0` 则只走手动升级。
 
-那两个 `agent2api-server-linux-<arch>.tar.gz` 就是给这条更新链用的载荷，**用途只此一个**：CI 复用 Dockerfile 的编译路径打包，让包内可执行文件与镜像里的同源同工具链（见 `.github/workflows/build.yml` 的 `linux-server` job）。它没有安装脚本、没有 systemd 单元，也不是另一种部署方式 —— 容器外还会把服务停掉（更新流程是「换文件 → 退出进程」，靠 Docker 的 `restart` 策略把进程拉回来）。
+同一个 `agent2api-server-linux-<arch>.tar.gz` 也是 [Linux 服务端](#linuxsystemd) 的安装包：包内的 `agent2api-server` 与 `ui/` 是这条更新链按名取的条目，另外还带着 `install.sh` / `agent2api.service` / `agent2api.env.example`。容器更新链只认前两个条目（其余读完即丢，见 `selfupdate::extract_bundle`），所以一份产物同时服务两种用途 —— 容器里解包替换，裸机上解包跑 `install.sh`。
 
 代价要清楚：更新后容器标签与**实际运行的版本会漂移**（`docker inspect` 显示的仍是旧 tag），执行 `docker compose pull && up -d` 重建容器会回到镜像里的版本。想固定版本就别开这个入口。
 
@@ -232,7 +355,7 @@ services:
 
 - Rust >= 1.77 与 Tauri 2 工具链（编译桌面端本体；Windows 上还需 WebView2 运行时）
 - Node.js >= 18.17（只用于 `npm run tauri:*` 与前端构建脚本，桌面端运行时不依赖 Node）
-- 目标平台：Windows 与 macOS 桌面端、Docker 服务端（**没有 Linux 桌面端**：Tauri 的 bundle 只配了 Windows 的 NSIS 与 macOS 的 app/dmg）
+- 目标平台：Windows / macOS / Linux 桌面端、Windows / Linux 服务端（无 GUI）、Docker 服务端
 
 ### 常用脚本
 

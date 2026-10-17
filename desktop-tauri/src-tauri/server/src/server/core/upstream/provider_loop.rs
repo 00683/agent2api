@@ -1680,7 +1680,8 @@ async fn attempt_queue(
                         ctx.telemetry,
                     ),
                 ),
-                // 智谱清言：SSE 帧是「全量快照」，翻译机做差分（见那台的模块头）
+                // 智谱清言：SSE 帧混着增量与收尾全文快照，翻译机按帧语义差分
+                // （见那台的模块头）
                 UpstreamResponse::ChatglmSnapshot => {
                     Box::pin(super::translate::ChatglmToChatStream::new(
                         response,

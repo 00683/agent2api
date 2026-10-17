@@ -455,7 +455,59 @@ fn map_entry(id: &str, info: &Value) -> Option<Value> {
             item.insert("quota".to_string(), quota.clone());
         }
     }
+    // 可见性：上游目录是**超集**，官方客户端只展示其中一部分。
+    // 上游自报的内部模型（`isInternal`）优先 —— 那个标记比世代判据更直接。
+    let visibility = if is_internal_entry(info) {
+        "hidden"
+    } else {
+        visibility_of(id)
+    };
+    item.insert(
+        "visibility".to_string(),
+        Value::String(visibility.to_string()),
+    );
     Some(Value::Object(item))
+}
+
+/// 上游 `isInternal` 显式标记的内部模型直接算不可见。
+///
+/// 上游目录里有这个字段（9router / 10router 的解析器都用它过滤，
+/// `Acankao/9router/src/app/api/providers/[id]/models/route.js:44`），但
+/// 它**不覆盖** 2.5 / 2.0 那批 —— 那批带的是正常的 `quotaInfo` 与
+/// `displayName`，只是官方选择器不列。所以两个判据要并用。
+fn is_internal_entry(info: &Value) -> bool {
+    info.get("isInternal").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// 该 id 在**官方客户端里是否可见**（`"shown"` / `"hidden"` / `"undeclared"`）。
+///
+/// ── 判据为什么是「世代」而不是「上游说了什么」──────────────────
+/// 官方 Antigravity 文档的模型选择器只列 9 条（Gemini 3.8 / 3.7 / 3.6 Flash、
+/// Gemini 3.1 Pro、Claude Sonnet 5.5 / Opus 5.5 / Sonnet 4.6 / Opus 4.6、
+/// GPT-OSS-120b；<https://antigravity.google/docs/models>）。而
+/// `fetchAvailableModels` 下发的是**全量静态目录** —— Manager 实测免费号与
+/// Pro 号都拿到**同样的 33 个**模型（`Acankao/Antigravity-Manager/
+/// src-tauri/src/models/quota.rs:203`），9router / 10router 的「重要模型清单」
+/// 同样不含 2.5 / 2.0 系列（`open-sse/services/usage/google.js:171-186`）。
+/// 2.5 那一支在本家是**后台任务**的降级模型（Manager 的标题生成 / 摘要用它），
+/// 不是给用户选的。
+///
+/// 因此：`gemini-2.x` 与 `gemini-2.0-flash-exp` 一律 `hidden`；其余
+/// `gemini-3*` / `claude-*` / `gpt-oss-*` 都是 `shown`。**只按世代判**，
+/// 不按具体 id 列白名单 —— 上游加了新的 3.x 时不用改这里。
+///
+/// `undeclared` 留给「上游条目自己说不清」的情形（当前没用上；语义与
+/// Trae 的「缺省 = 可见」同一纪律：没有依据就不下判断）。
+fn visibility_of(id: &str) -> &'static str {
+    let lowered = id.trim().to_ascii_lowercase();
+    // `gemini-2.5-*` / `gemini-2.0-*`：官方选择器不列（见上面论证）
+    if lowered.starts_with("gemini-2.") {
+        return "hidden";
+    }
+    if lowered.starts_with("gemini-") || lowered.starts_with("claude-") || lowered.starts_with("gpt-oss-") {
+        return "shown";
+    }
+    "undeclared"
 }
 
 /// 解析 `fetchAvailableModels` 的响应：`{models: {"<id>": {…}}}`。

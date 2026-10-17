@@ -9,14 +9,16 @@ name: build
 # 本仓库是公开仓库，标准 GitHub-hosted runner（含 macOS）对公开仓库免费且
 # 不计分钟数 —— macOS runner 是私有仓库里最贵的一档，公开仓库没有这个问题。
 #
-# ── 四个 job 的分工（名字相近，别看混）────────────────────────
+# ── 五个 job 的分工（名字相近，别看混）────────────────────────
 #   macos           → macOS 桌面端 dmg           → artifact: macos-universal
 #   windows         → Windows 桌面端 NSIS exe    → artifact: windows-nsis
 #   linux-desktop   → Linux 桌面端 deb+AppImage  → artifact: linux-desktop
-#   linux-server    → Linux **服务端**包（无 GUI，容器内一键更新用）
-#                     → artifact: linux-server-{amd64,arm64}
-# 前三者是「桌面端安装包」（给用户装在自己机器上），最后一个服务**容器形态**
-# 的原地更新 —— 后两者都在 ubuntu runner 上跑，但产物用途完全不同。
+#   linux-server    → Linux **服务端**包（无 GUI）→ artifact: linux-server-{amd64,arm64}
+#   windows-server  → Windows **服务端**包（无 GUI）→ artifact: windows-server-amd64
+#
+# 前三者是「桌面端安装包」（给用户装在自己机器上），后两者是**服务器形态**：
+# 无图形界面、命令行安装、注册成系统服务（Linux systemd / Windows SCM）。
+# linux-server 的产物同时还是容器内一键更新的载荷。
 #
 # ── 触发方式 ──────────────────────────────────────────────────
 #   · 手动 workflow_dispatch（在 Actions 页面选分支触发）：
@@ -268,17 +270,91 @@ jobs:
       - name: 打包并生成校验和
         run: |
           name="agent2api-server-linux-${{ matrix.arch }}.tar.gz"
-          mkdir -p dist
-          # 包内布局是硬约定：根下 agent2api-server 与 ui/（解包方按名取）
-          tar -C out/bundle -czf "dist/$name" agent2api-server ui
+          mkdir -p dist stage
+          # 先把要进包的东西归拢到一个暂存目录，再一次压成 tar.gz。
+          # 不能「先 tar 再 -r 追加」：gzip 流无法原地追加，tar 会直接
+          # 报 "Cannot update compressed archives"。
+          rm -rf stage/pkg
+          mkdir -p stage/pkg
+          cp -r out/bundle/agent2api-server out/bundle/ui stage/pkg/
+          cp packaging/linux/install.sh \
+             packaging/linux/agent2api.service \
+             packaging/linux/agent2api.env.example stage/pkg/
+          # 包内布局：根下 agent2api-server 与 ui/ 是容器内更新链的**硬约定**
+          # （selfupdate::extract_bundle 按名取这两个条目）；其余条目它读完即丢，
+          # 所以 install.sh / 单元 / env 样例跟它们同放不会影响一键更新。
+          # 同一个包于是既能被容器更新链消费，也能解包当裸机安装包用。
+          tar -C stage/pkg -czf "dist/$name" agent2api-server ui \
+            install.sh agent2api.service agent2api.env.example
           # 校验文件与包同名 + .sha256：面板按这个名字找它，找不到就拒绝安装
           ( cd dist && sha256sum "$name" > "$name.sha256" )
           cat "dist/$name.sha256"
           ls -lh dist
+          echo "── 包内条目 ──"
+          tar -tzf "dist/$name" | head -20
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
         with:
           name: linux-server-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Windows 服务端包（无 GUI，注册成 Windows 服务）────────────
+  # 产物是 zip：agent2api-server.exe + ui\ + install-service.ps1。
+  # 用户在服务器上解压后跑 install-service.ps1，脚本用 sc.exe 把它注册成
+  # 开机自启的 Windows 服务（见 packaging/windows/install-service.ps1）。
+  #
+  # 为什么不复用 windows job 的产物：那个 job 构建的是 Tauri 桌面端
+  # （带窗口、托盘、WebView2），装的是 NSIS 安装包。这里的产物无 GUI，
+  # 跑的是 `cargo build -p agent2api-server`（不链接 tauri 全家桶），
+  # 两者用途完全不同 —— 一个给桌面用户，一个给服务器。
+  #
+  # 为什么不走 Dockerfile：Windows 容器镜像不能跑 Linux 构建，且
+  # windows-latest runner 原生就能编，没必要多一层。
+  windows-server:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-tauri/src-tauri -> ../../target
+
+      # 只编 server crate（`-p`），不碰桌面壳：少了 tauri / wry / webview2
+      # 那一整棵依赖树，构建快且产物里没有任何 GUI 依赖。
+      - name: 构建服务端
+        run: cargo build --release -p agent2api-server --bin agent2api-server --manifest-path desktop-tauri/src-tauri/Cargo.toml
+
+      - name: 打包
+        shell: pwsh
+        run: |
+          $name = "agent2api-server-windows-amd64"
+          $stage = "stage/$name"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          # 布局是 install-service.ps1 的硬约定：脚本与 exe、ui\ 同级
+          Copy-Item "target/release/agent2api-server.exe" "$stage/"
+          Copy-Item -Recurse "desktop-tauri/ui" "$stage/ui"
+          Copy-Item "packaging/windows/install-service.ps1" "$stage/"
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name.zip" -Force
+
+          # 校验和：与 Linux 包同格式（sha256 十六进制 + 两个空格 + 文件名），
+          # 用手动升级的用户可以照 README 里的命令核对
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii "dist/$name.zip.sha256"
+
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-server-amd64
           path: dist/*
           if-no-files-found: error

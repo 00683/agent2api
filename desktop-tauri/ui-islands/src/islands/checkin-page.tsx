@@ -77,6 +77,7 @@ const CHECKIN_TAB_OPTIONS = [
 function onboardingProviderLabel(provider: string): string {
   return t(provider === 'raccoon' ? '小浣熊' : provider === 'loomy' ? 'Loomy'
     : provider === 'codearts' ? 'CodeArts'
+    : provider === 'chatglm' ? '智谱清言'
     : provider === 'officeace' ? 'OfficeAce 果办' : provider)
 }
 
