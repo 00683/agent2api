@@ -182,20 +182,47 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 gh run watch <run-id> --repo Agent2Builder/agent2api-releases --exit-status
 ```
 
-**发版收尾**：GitHub Release 由本地脚本挂到**构建仓库**（不是源码仓库）：
+**发版收尾**：GitHub Release 由本地脚本挂到**构建仓库**，再镜像一份到源码仓库：
 
 ```bash
 bash scripts/release.sh vX.Y.Z            # 自动找该 tag 的可用 run
 bash scripts/release.sh vX.Y.Z <run-id>   # 或显式指定 run
 ```
 
-脚本做三件事：从**构建仓库**下载安装包 artifact 到 `dist/` → 按 tag 提交信息（= 更新日志）在**构建仓库**创建 / 更新 GitHub Release 并挂附件 → 打印验收提示。幂等可重跑（`--clobber` 覆盖附件）。
+脚本做四件事：从**构建仓库**下载安装包 artifact 到 `dist/` → 按 tag 提交信息（= 更新日志）在**构建仓库**创建 / 更新 GitHub Release 并挂附件 → **镜像**同样的附件到源码仓库的 Release → 打印验收提示。幂等可重跑（`--clobber` 覆盖附件）。
 
 - 目标仓库由脚本里的 `BUILD_REPO` 决定，默认 `Agent2Builder/agent2api-releases`；临时换目标用环境变量：`BUILD_REPO=Other/repo bash scripts/release.sh vX.Y.Z`。
 - 脚本找的是构建仓库里名为 **`release`** 的工作流（不是 `build`）。源码仓库那个 `build.yml` 只做派发，没有产物可下。
 - **更新日志仍从源码仓库取**（`git log -1 --format=%B "$TAG"`），所以脚本要在源码仓库目录里跑。
 
-⚠️ **Release 必须出现在构建仓库**。桌面端更新检查（`core::update::version` 的 `DEFAULT_REPO`）与索引里的 `app.repo` 都指向那里；挂错仓库的症状是「Release 建出来了，但所有人都显示已是最新」——不报错，最难查。
+### 两个仓库、两把凭据（最容易踩）
+
+构建仓库属于专用构建账号，源码仓库属于主账号 —— 各自的 Release 只有**有权限的那一方**能创建 / 修改。脚本因此有两个 token 变量：
+
+```bash
+BUILD_TOKEN=...   # 对构建仓库有 contents:write（默认取当前 gh 活动账号）
+SOURCE_TOKEN=...  # 对源码仓库有 contents:write（同上）
+```
+
+本机两个账号都在 gh 里时，按账号各给一把：
+
+```bash
+BUILD_TOKEN=$(gh auth token --user Agent2Builder) \
+SOURCE_TOKEN=$(gh auth token --user aimod-cc) \
+bash scripts/release.sh vX.Y.Z
+```
+
+不传这两个变量时，脚本假定当前 `gh auth` 的账号对两边都有权限（单一账号管两个仓库的部署就是这样）。
+
+⚠️ **症状对照**：用错 token 时 GitHub 回的是 `HTTP 404: Not Found`，不是 403 —— 看着像「Release 不存在」，实际是「这个 token 看不见它」。遇到 404 先查 token 属于哪个账号。
+
+### 镜像到源码仓库
+
+默认开（`MIRROR_TO_SOURCE=0` 可关）。产物在构建仓库，但用户与贡献者习惯看源码仓库的 Releases 页 —— 那里空着会让人以为「这个版本没发」。
+
+镜像的正文末尾会附一行指向构建仓库的链接，因为**更新检查只读构建仓库**（`DEFAULT_REPO` 与索引 `app.repo`），源码仓库那份纯属展示。
+
+⚠️ **Release 必须出现在构建仓库**。桌面端更新检查（`core::update::version` 的 `DEFAULT_REPO`）与索引里的 `app.repo` 都指向那里；只发在源码仓库的症状是「Release 建出来了，但所有人都显示已是最新」——不报错，最难查。
 
 ## 6. beta 版（预发布）
 
@@ -249,6 +276,8 @@ docker 的 `:latest` 不会被 beta tag 移动（`.github/workflows/docker.yml`�
 
 - [ ] **构建仓库的 run 全绿**：`gh run list --repo Agent2Builder/agent2api-releases --limit 4` —— 应看到 `Release` 与 `docker` 两个 run，前者七个 job 全绿（含 `publish`）；
 - [ ] GitHub Release（在构建仓库）：`gh release view vX.Y.Z --repo Agent2Builder/agent2api-releases` —— 正文日志齐全，桌面端附件都在：Windows `Agent2API_<版本>_x64-setup.exe`、macOS `Agent2API_<版本>_universal.dmg`、Linux `Agent2API_<版本>_amd64.deb` 与 `Agent2API_<版本>_amd64.AppImage`（另有两个 `agent2api-server-linux-*.tar.gz` + `.sha256`，那是容器内更新包，见第 5 节）；
+- [ ] **镜像到源码仓库**：`gh release view vX.Y.Z --repo aimod-cc/Agent2API` —— 附件数与构建仓库一致（默认 10 个：4 个桌面端 + 3 个服务端包 ×2 带校验 + 无手机端）；正文末尾有指向构建仓库的链接；
+- [ ] **手机端包不在 Release 里**（当前策略）：`INCLUDE_MOBILE` 默认 0，APK / IPA 只留在构建 run 的 artifact 里。要恢复发布时加 `INCLUDE_MOBILE=1`，并同步恢复安装文档里的手机端段落；
 - [ ] **插件包**（同一次发版里，构建仓库的 `release.yml` 若也编了插件包）：Release 里应有 `agent2api-providers-<版本>-<target>.zip` 五个平台各一份，且 `pack.json` 里带 `signature`；
 - [ ] Linux 桌面端：装 deb（或 `chmod +x` 后跑 AppImage）能启动，且面板「设置 → 软件更新」能检查到版本、给出对应包型的安装入口（deb → 系统安装器，AppImage → 换文件）；
 - [ ] 手机端 APK：Release 里有 `Agent2API-<版本>.apk` 与 `.sha256`；装到 Android 上能启动、添加网关并登录，系统「应用信息」里的版本号与 tag 一致（APK 的 `versionName` 取自 `desktop-tauri/mobile/package.json`，见第 4 节第 6 处）；

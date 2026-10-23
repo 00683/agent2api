@@ -45,6 +45,20 @@ RUN_ID="${2:-}"
 BUILD_REPO="${BUILD_REPO:-Agent2Builder/agent2api-releases}"
 export BUILD_REPO
 
+# ── 两个仓库、两把凭据 ────────────────────────────────────────
+# 构建仓库属于专用构建账号，源码仓库属于主账号 —— 它们的 Release 各自只能
+# 由**有权限的那一方**创建 / 修改。早先脚本只用一个 `GH_TOKEN`，结果用主账号
+# 的 token 去 edit 构建仓库的 Release，报 `HTTP 404: Not Found`
+# （GitHub 对无权限的仓库回 404 而不是 403，看着像「Release 不存在」）。
+#
+# `BUILD_TOKEN`：对构建仓库有 contents:write 的 token（默认取当前 gh 活动账号）
+# `SOURCE_TOKEN`：对源码仓库有 contents:write 的 token（同上）
+#
+# 两者都省略时，脚本假定当前 `gh auth` 的账号对两个仓库都有权限 —— 单一账号
+# 管两个仓库的部署（fork、自建）就是这样，不必额外配。
+BUILD_TOKEN="${BUILD_TOKEN:-${GH_TOKEN:-}}"
+SOURCE_TOKEN="${SOURCE_TOKEN:-${GH_TOKEN:-}}"
+
 case "$TAG" in
   v*) ;;
   *) echo "错误: '$TAG' 不是 v* 形式的 tag" >&2; exit 1 ;;
@@ -90,9 +104,9 @@ if [ -z "$RUN_ID" ]; then
   echo "→ 查找 $TAG 触发的 build 工作流…"
   # 不按 run 整体 conclusion 过滤：只验「两个安装包 artifact 是否齐全」，
   # 构建成功但别处失败的 run 里安装包照旧可用
-  for id in $(gh run list --workflow=release --repo "$BUILD_REPO" --limit 30 --json databaseId,headBranch \
+  for id in $(GH_TOKEN="$BUILD_TOKEN" gh run list --workflow=release --repo "$BUILD_REPO" --limit 30 --json databaseId,headBranch \
       | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{JSON.parse(s).filter(r=>r.headBranch===process.argv[1]).forEach(r=>process.stdout.write(r.databaseId+"\n"))})' "$TAG"); do
-    if gh api "repos/$BUILD_REPO/actions/runs/$id/artifacts" \
+    if GH_TOKEN="$BUILD_TOKEN" gh api "repos/$BUILD_REPO/actions/runs/$id/artifacts" \
          --jq 'any(.artifacts[].name; . == "macos-universal") and any(.artifacts[].name; . == "windows-nsis")' >/dev/null 2>&1; then
       RUN_ID=$id
       break
@@ -106,7 +120,7 @@ fi
 echo "→ build run: $RUN_ID"
 
 rm -rf dist
-gh run download "$RUN_ID" --repo "$BUILD_REPO" -D dist
+GH_TOKEN="$BUILD_TOKEN" gh run download "$RUN_ID" --repo "$BUILD_REPO" -D dist
 EXE=$(ls dist/windows-nsis/*.exe)
 DMG=$(ls dist/macos-universal/*.dmg)
 echo "→ 已下载 $(basename "$EXE") / $(basename "$DMG")"
@@ -219,12 +233,12 @@ trap 'rm -f "$NOTES_FILE"' EXIT
 git log -1 --format=%B "$TAG" > "$NOTES_FILE"
 
 echo "→ GitHub Release"
-if gh release view "$TAG" --repo "$BUILD_REPO" >/dev/null 2>&1; then
+if GH_TOKEN="$BUILD_TOKEN" gh release view "$TAG" --repo "$BUILD_REPO" >/dev/null 2>&1; then
   # 已存在时也把预发布标记纠正一遍（重跑收尾 / 当初漏标的情形都靠这一行自愈）
-  gh release edit "$TAG" --repo "$BUILD_REPO" --prerelease="$PRERELEASE"
+  GH_TOKEN="$BUILD_TOKEN" gh release edit "$TAG" --repo "$BUILD_REPO" --prerelease="$PRERELEASE"
   echo "  ↳ 已存在，附件逐个覆盖上传（pre-release=$PRERELEASE）"
 else
-  gh release create "$TAG" --repo "$BUILD_REPO" --prerelease="$PRERELEASE" --title "$TAG" \
+  GH_TOKEN="$BUILD_TOKEN" gh release create "$TAG" --repo "$BUILD_REPO" --prerelease="$PRERELEASE" --title "$TAG" \
     --notes-file "$NOTES_FILE"
   echo "  ↳ 已创建（pre-release=$PRERELEASE）"
 fi
@@ -234,8 +248,48 @@ fi
 # exists（--clobber 没能先把它删掉），整批就此中断 —— 症状是 Release 建好了、
 # 附件却少了一半。逐个 + --clobber 稳定，且天然幂等（重跑只补缺的那几个）。
 for asset in "${ASSETS[@]}"; do
-  gh release upload "$TAG" "$asset" --repo "$BUILD_REPO" --clobber
+  GH_TOKEN="$BUILD_TOKEN" gh release upload "$TAG" "$asset" --repo "$BUILD_REPO" --clobber
 done
+
+# ── 2.5 镜像一份到源码仓库（MIRROR_TO_SOURCE=1 时）──────────────
+# 构建产物在构建仓库，但用户与贡献者习惯看源码仓库的 Releases 页 —— 那里
+# 空着会让人以为「这个版本没发」。所以再挂一份过去。
+#
+# ── 为什么放在脚本里而不是 CI ───────────────────────────────
+# magpie 在 CI 里做这件事，靠一个 75 分钟的 job 轮询构建仓库等资产齐。
+# 本项目的 Release 由**这个脚本**挂（构建仓库那份 `release.yml` 没有
+# publish job），所以轮到脚本时资产一定已经下到 `dist/` 了 —— 不需要
+# 轮询、不需要跨工作流等待，一行下载都不用重复。
+#
+# 默认开；`MIRROR_TO_SOURCE=0` 可关掉（例如只想在构建仓库留一份）。
+MIRROR_TO_SOURCE="${MIRROR_TO_SOURCE:-1}"
+if [ "$MIRROR_TO_SOURCE" = "1" ]; then
+  SOURCE_REPO="$(git remote get-url origin | sed -E 's#.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
+  if [ -z "$SOURCE_REPO" ] || [ "$SOURCE_REPO" = "$BUILD_REPO" ]; then
+    echo "⚠️  取不到源码仓库名（origin 不是 GitHub？），跳过镜像"
+  else
+    echo "→ 镜像到源码仓库 $SOURCE_REPO"
+    # 正文里加一句指向构建仓库：两个地方各有一份时，用户得知道更新检查读哪个
+    MIRROR_NOTES=$(mktemp)
+    {
+      cat "$NOTES_FILE"
+      printf '\n\n---\n同一份发布，也是应用更新检查读取的那一份：https://github.com/%s/releases/tag/%s\n' \
+        "$BUILD_REPO" "$TAG"
+    } > "$MIRROR_NOTES"
+    if GH_TOKEN="$SOURCE_TOKEN" gh release view "$TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1; then
+      GH_TOKEN="$SOURCE_TOKEN" gh release edit "$TAG" --repo "$SOURCE_REPO" --prerelease="$PRERELEASE" --notes-file "$MIRROR_NOTES"
+    else
+      GH_TOKEN="$SOURCE_TOKEN" gh release create "$TAG" --repo "$SOURCE_REPO" --prerelease="$PRERELEASE" \
+        --title "$TAG" --notes-file "$MIRROR_NOTES"
+    fi
+    # 同样逐个上传：一批传会在已存在的附件上报 422（见上面那段注释）
+    for asset in "${ASSETS[@]}"; do
+      GH_TOKEN="$SOURCE_TOKEN" gh release upload "$TAG" "$asset" --repo "$SOURCE_REPO" --clobber
+    done
+    rm -f "$MIRROR_NOTES"
+    echo "  ↳ 已镜像 ${#ASSETS[@]} 个附件"
+  fi
+fi
 
 # ── 3. 验收提示 ───────────────────────────────────────────────
 echo
