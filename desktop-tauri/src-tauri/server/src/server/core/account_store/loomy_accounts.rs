@@ -162,7 +162,7 @@ impl AccountStore {
             })
             .unwrap_or_else(|| {
                 if phone.len() >= 11 {
-                    format!("Loomy {}", crate::server::core::providers::loomy::credentials::mask_phone(&phone))
+                    format!("Loomy {}", crate::server::core::providers::loomy::mask_phone(&phone))
                 } else if !user_id.is_empty() {
                     format!("Loomy {user_id}")
                 } else {

@@ -42,6 +42,7 @@ use crate::server::core::account_store::priority::{
 };
 use crate::server::core::account_store::sql;
 use crate::server::core::account_store::state::{mark_name_custom, StoredAccount};
+use crate::server::core::account_store::store_view::Visibility;
 use crate::server::core::account_store::store::{AccountStore, AccountStoreError};
 use crate::server::core::account_store::store_util::{
     js_string, js_truthy, number_or, object_or_empty, optional_text, pick_token, token_tail_of,
@@ -365,21 +366,21 @@ impl AccountStore {
             "prefixPath".to_string(),
             value_or_nullish(
                 payload_object.get("prefixPath").or(existing_prefix.as_ref()),
-                Value::String(edition.prefix_path.to_string()),
+                Value::String(String::new()),
             ),
         );
         record.insert(
             "endpoint".to_string(),
             value_or_nullish(
                 payload_object.get("endpoint").or(existing_endpoint.as_ref()),
-                Value::String(edition.endpoint.to_string()),
+                Value::String(String::new()),
             ),
         );
         record.insert(
             "platform".to_string(),
             value_or_nullish(
                 payload_object.get("platform").or(existing_platform.as_ref()),
-                Value::String(edition.platform.to_string()),
+                Value::String(String::new()),
             ),
         );
         record.insert("priority".to_string(), Value::from(priority));
@@ -412,6 +413,31 @@ impl AccountStore {
             ),
         );
         Ok(self.public_account(&saved))
+    }
+
+    /// 该账号是否受保护、不可删除。返回 `Some(原因)` 表示应当拒绝删除。
+    ///
+    /// ── 现在**不保护任何账号**（函数本身刻意保留）────────────────
+    /// 三家（小浣熊 / CatPaw / AutoClaw）的桌面端实时登录态账号曾在这里被拒绝
+    /// 删除，**现已全部允许**。理由对三家是同一个：桌面端账号是「导入桌面端
+    /// 登录态」这个动作建出来的**一条账号记录**，记录里不落 token、每次转发
+    /// 实时读客户端的登录态文件。它的语义是「我要用这个客户端当前的登录态」
+    /// —— 用户完全可能想撤销这个选择。旧的「不可删除」把用户锁死：只给「禁用」
+    /// 一条路，而禁用后这条记录仍然占着列表、占着优先级序号。
+    ///
+    /// 删除**只作用于这条记录**：客户端的登录态文件我们从写、也从不删，
+    /// 所以删掉是安全且可逆的 —— 想再用，点一次「导入桌面端登录态」就能加回来。
+    ///
+    /// ── 为什么保留这个恒返回 None 的函数 ────────────────────────
+    /// 调用方（`remove_account` / `batch_remove`）只问「能不能删」、不认识
+    /// provider 分支，这是一条**明确的扩展点**：将来若真出现「不允许删」的账号
+    /// （例如某种不可再生的凭证），判定加回这一处即可，调用方一行不用改。
+    /// 原来它住在 `raccoon_accounts.rs`（那家最早引入桌面端账号）；文件收窄成
+    /// 「公开形态投影」之后，这条与具体 provider 无关的判定按职责归这里。
+    ///
+    /// 形参 `_id`：本函数不再读它，留着真实参数名会有 unused 警告（调用方不受影响）。
+    pub(crate) fn protected_from_removal(&self, _id: &str) -> Option<String> {
+        None
     }
 
     /// 删除账号（不存在 → 404；受保护的账号 → 400）。
@@ -578,7 +604,7 @@ impl AccountStore {
                 "currentAccountId": Self::pick_current(&state.accounts)
                     .map(|record| Value::String(record.id().to_string()))
                     .unwrap_or(Value::Null),
-                "list": self.snapshot(&state),
+                "list": self.snapshot(&state, Visibility::UserFacing),
             }));
         }
 
@@ -605,7 +631,7 @@ impl AccountStore {
             "currentAccountId": current_id,
         });
         if let Some(object) = result.as_object_mut() {
-            object.insert("list".to_string(), self.snapshot(&state));
+            object.insert("list".to_string(), self.snapshot(&state, Visibility::UserFacing));
         }
         Ok(result)
     }
@@ -1032,7 +1058,7 @@ impl AccountStore {
             return Ok(json!({
                 "moved": false,
                 "reason": if down { "已是最后一位" } else { "已是第一位" },
-                "list": self.snapshot(&state),
+                "list": self.snapshot(&state, Visibility::UserFacing),
             }));
         }
 
@@ -1086,7 +1112,7 @@ impl AccountStore {
                 "name": theirs_name,
                 "newPriority": mine,
             },
-            "list": self.snapshot(&state),
+            "list": self.snapshot(&state, Visibility::UserFacing),
         }))
     }
 }

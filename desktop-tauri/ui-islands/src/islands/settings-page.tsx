@@ -57,16 +57,19 @@ import {
   applyUnits,
   cancelLanRegister,
   clearDegrade,
+  closePasswordDialog,
   confirmDbRestore,
   dropLastRetryCode,
   exportAccounts,
   exportDatabase,
   importAccounts,
   load,
+  openPasswordDialog,
   panelLogout,
   refreshDebug,
   refreshDeveloperRoleCompat,
   refreshClineHeaders,
+  refreshZcodeVersion,
   refreshCors,
   refreshCaptchaPool,
   refreshModelsDev,
@@ -94,6 +97,7 @@ import {
   restoreCategory,
   saveCaptcha,
   saveClineHeaders,
+  saveZcodeVersion,
   saveCors,
   saveCaptchaPoolField,
   saveDebug,
@@ -114,6 +118,7 @@ import {
   selectCategory,
   showCategory,
   submitLanRegister,
+  submitPasswordChange,
   toggleDbIncludeLogs,
   toggleLan,
   toggleLanPanel,
@@ -131,15 +136,24 @@ import {
   type SettingsSnapshot,
   type StorageState,
 } from './settings-state'
+// 账号列表的两项偏好与账号页共用同一份 store：设置页写、账号页订阅，
+// 因此两边读写必须走同一组函数（别在这里自己 localStorage.setItem 一份字面量）
+import {
+  readGroupTotalFiltered, readNamesHidden, setGroupTotalFiltered, setNamesHidden, subscribe,
+} from './accounts-store'
 import {
   GatewayTextButton,
   ProviderPromptTextButton,
   PromptTextButton,
   gatewayEditedText,
 } from './settings-prompt-editor'
-// AI 助手分类的面板（对话模型 / 系统提示词 / 工具勾选）。独立成文件、自带一份
-// 数据流（/api/assistant/config），见该文件的模块头
-import { AssistantSettingsPane } from './assistant-settings-pane'
+// 云同步面板（设置 → 数据）：独立成文件、自带一份数据流（/api/cloud-sync），
+// 与设置页的快照 store 没有交集，见该文件的模块头
+import { CloudSyncPanel } from './settings-cloud-sync'
+import { DbRestoreDialog } from './settings-db-restore'
+// 侧边栏菜单面板（设置 → 显示）：显隐 / 顺序 / 分组。布局模型在
+// ui/sidebar-layout.js（经典脚本，主侧边栏渲染与这里共用同一份），见该文件的模块头
+import { SidebarPane } from './sidebar-pane'
 import { t } from '../i18n'
 
 /**
@@ -488,6 +502,10 @@ function themeStateText(mode: ThemeMode): string {
 function DisplayPane() {
   const [theme, setTheme] = React.useState<ThemeMode>(readThemeMode)
   const [zoom, setZoom] = React.useState<number>(readZoomPercent)
+  // 账号列表的两项「怎么看这张表」偏好：合计口径与账号名掩码。
+  // 与主题 / 缩放同属纯前端偏好（localStorage），不经过 settings-state 的快照。
+  const [groupTotalFiltered, setGroupTotalFilteredState] = React.useState<boolean>(readGroupTotalFiltered)
+  const [namesHidden, setNamesHiddenState] = React.useState<boolean>(readNamesHidden)
   // 端别取自桥（platform）而不是 navigator：与设置页其它端别判断同一口径
   const isWeb = shared().workbuddyDesktop?.platform === 'web'
 
@@ -503,6 +521,36 @@ function DisplayPane() {
       window.removeEventListener(ZOOM_EVENT, onZoom)
     }
   }, [])
+
+  // 账号列表的两项偏好：设置页写、账号页订阅同一份 store。这里同时听两路变化 ——
+  //   · store 订阅：账号页表头那颗眼睛（toggleNamesHidden）/ 另一个入口写入时，
+  //     本页的开关要跟着拨过去（同文档内的 localStorage 写入不触发 storage 事件，
+  //     只靠那一路会漏）；
+  //   · storage 事件：另一个窗口 / 另一份面板改了偏好。
+  React.useEffect(() => {
+    const sync = () => {
+      setGroupTotalFilteredState(readGroupTotalFiltered())
+      setNamesHiddenState(readNamesHidden())
+    }
+    window.addEventListener('storage', sync)
+    const off = subscribe(sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      off()
+    }
+  }, [])
+
+  /** 改合计口径：落盘 + 通知账号页（同一个 store，订阅者一起重画） */
+  function applyGroupTotalFiltered(next: boolean): void {
+    setGroupTotalFiltered(next)
+    setGroupTotalFilteredState(next)
+  }
+
+  /** 改账号名掩码：与账号页表头那颗眼睛走同一个写入函数 */
+  function applyNamesHidden(next: boolean): void {
+    setNamesHidden(next)
+    setNamesHiddenState(next)
+  }
 
   const zoomLabel = zoom === 100 ? t('100%（默认）') : `${zoom}%`
 
@@ -572,6 +620,40 @@ function DisplayPane() {
           <div className='settings-state'>{STATES.languageHint}</div>
         </div>
       </section>
+
+      {/* 账号列表：合计口径 / 账号名掩码。与上面三项同属「怎么看这张表」的纯前端
+          偏好（localStorage，见 accounts-store 的 GROUP_TOTAL_FILTERED_KEY 与
+          NAMES_HIDDEN_KEY）—— 不碰转发、不碰账号数据，所以也不进 settings-state
+          的后端快照。账号页有自己的入口改这两项（表头那颗眼睛、合计徽标本身），
+          两边读写的是同一份键。 */}
+      <section className='panel'>
+        <PanelHead title={t('账号列表')} tip={TIPS.accountList} />
+        <div className='panel-body'>
+          <div className='settings-switches'>
+            <SwitchRow
+              id='settings-group-total-filtered'
+              label={t('积分合计只统计当前筛选出来的账号')}
+              checked={groupTotalFiltered}
+              onCheckedChange={applyGroupTotalFiltered}
+            />
+            <SwitchRow
+              id='settings-names-hidden'
+              label={t('隐藏账号名（显示成星号）')}
+              checked={namesHidden}
+              onCheckedChange={applyNamesHidden}
+            />
+          </div>
+          <div className='settings-state'>
+            {groupTotalFiltered ? STATES.groupTotalFilteredOn : STATES.groupTotalFilteredOff}
+          </div>
+        </div>
+      </section>
+
+      {/* 侧边栏菜单：显隐 / 顺序 / 分组。它自己持有一份本机偏好
+          （localStorage，见 ui/sidebar-layout.js），与上面三项同属「纯前端偏好」，
+          所以放在「显示」分类里、不经过 settings-state 的快照。
+          布局的唯一真相在那个经典脚本里 —— app.js 渲染主侧边栏时读的是同一份。 */}
+      <SidebarPane />
     </>
   )
 }
@@ -1298,7 +1380,7 @@ function RoutingPane({ snap }: { snap: SettingsSnapshot }) {
 
 /* ─── 网关分类 ─────────────────────────────── */
 
-function GatewayPane({ snap }: { snap: SettingsSnapshot }) {
+function GatewayPane({ snap, panels }: { snap: SettingsSnapshot; panels: Set<string> }) {
   return (
     <>
       <section className='panel'>
@@ -1324,30 +1406,34 @@ function GatewayPane({ snap }: { snap: SettingsSnapshot }) {
         </div>
       </section>
 
-      <section className='panel'>
-        <PanelHead
-          title={t('验证码令牌池')}
-          tip={TIPS.captchaPool}
-          badge={numericBadge(snap.captchaPool)}
-          actions={
-            <RefreshButton id='btn-captcha-pool-refresh' onClick={() => void refreshCaptchaPool()} />
-          }
-        />
-        <div className='panel-body'>
-          <div className='retention-list'>
-            {CAPTCHA_POOL_FIELDS.map(field => (
-              <NumberRow
-                key={field.key}
-                field={field}
-                value={snap.captchaPool.values?.[field.key] ?? null}
-                disabled={snap.busy === 'captchaPool'}
-                onCommit={raw => saveCaptchaPoolField(field, raw)}
-              />
-            ))}
+      {/* 验证码令牌池：池子本体在 ZCode 插件里，网关只有节奏设置。
+          插件没申报（没装 / 没装 ZCode）时这块不出现。 */}
+      {panels.has('captcha_pool') ? (
+        <section className='panel'>
+          <PanelHead
+            title={t('验证码令牌池')}
+            tip={TIPS.captchaPool}
+            badge={numericBadge(snap.captchaPool)}
+            actions={
+              <RefreshButton id='btn-captcha-pool-refresh' onClick={() => void refreshCaptchaPool()} />
+            }
+          />
+          <div className='panel-body'>
+            <div className='retention-list'>
+              {CAPTCHA_POOL_FIELDS.map(field => (
+                <NumberRow
+                  key={field.key}
+                  field={field}
+                  value={snap.captchaPool.values?.[field.key] ?? null}
+                  disabled={snap.busy === 'captchaPool'}
+                  onCommit={raw => saveCaptchaPoolField(field, raw)}
+                />
+              ))}
+            </div>
+            <div className='hint retention-note'>{NOTES.captchaPool}</div>
           </div>
-          <div className='hint retention-note'>{NOTES.captchaPool}</div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <section className='panel'>
         <PanelHead
@@ -1443,7 +1529,14 @@ function GatewayPane({ snap }: { snap: SettingsSnapshot }) {
         </div>
       </section>
 
-      <ClineHeadersPanel snap={snap} />
+      {/* Cline 伪装头：实现与默认值都在插件里，插件没申报就不画。
+          放在「网关」分类下是历史位置，语义上它属于插件面板。 */}
+      {panels.has('upstream_headers') ? <ClineHeadersPanel snap={snap} /> : null}
+
+      {/* ZCode 客户端版本号：上游按它决定活动套餐下不下发。与上面那块不同，
+          这一格**不依赖插件申报** —— 它是网关自己的配置（见
+          api::zcode_version 的模块头），插件没装也要能改。 */}
+      <ZcodeVersionPanel snap={snap} />
 
       <PromptPanel snap={snap} />
 
@@ -1631,8 +1724,85 @@ function ClineHeadersPanel({ snap }: { snap: SettingsSnapshot }) {
   )
 }
 
-/* ─── 安全分类 ─────────────────────────────── */
+/**
+ * ZCode 客户端版本号（上游按它决定活动套餐下不下发）。
+ *
+ * ── 为什么需要用户自己填 ────────────────────────────────────
+ * 活动套餐的探测接口只在 `app_version` 达到当期门槛时才返回套餐列表；
+ * 版本落后时上游回的是一份**空列表**（`code: 0`，不是错误）。于是症状是
+ * 「活动明明在，界面上一片空白」—— 看起来像上游没这活动，实际是客户端
+ * 被判太旧（2026-10 实测：3.16.0 及以下全空，3.16.1 起才有 1024 礼包）。
+ *
+ * 插件里那份默认值是编译期常量，每期活动都要跟着改、跟着发版。这一格是
+ * 那条链的旁路：用户在这里填一个更新的版本号即可，不必等我们发版。
+ */
+function ZcodeVersionPanel({ snap }: { snap: SettingsSnapshot }) {
+  const state = snap.zcodeVersion
+  const [draft, setDraft] = React.useState(state.version)
+  React.useEffect(() => { setDraft(state.version) }, [state.version])
 
+  const busy = snap.busy === 'zcodeVersion'
+  const ready = state.status === 'ready'
+  const dirty = ready && draft.trim() !== state.version
+  // 环境变量优先级最高（见后端模块头）：它压着时界面上的值不生效，
+  // 必须说出来，否则用户会对着一个「改了没反应」的输入框反复重试。
+  const envShadowed = state.envOverride !== ''
+
+  return (
+    <CollapsiblePanel
+      title={t('ZCode 客户端版本号')}
+      tip={TIPS.zcodeVersion}
+      badge={state.status === 'ready'
+        ? <StatusBadge tone={envShadowed ? 'idle' : 'ok'}>
+          {envShadowed ? t('被环境变量覆盖') : t('已生效')}
+        </StatusBadge>
+        : state.status === 'unavailable'
+          ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+          : <StatusBadge tone='idle'>{t('检测中…')}</StatusBadge>}
+      actions={<RefreshButton id='btn-zcode-version-refresh' onClick={() => void refreshZcodeVersion()} />}
+    >
+      <div className='panel-body'>
+        <div className='retention-list'>
+          <div className='flex items-center gap-2'>
+            <Input
+              id='settings-zcode-version'
+              className='w-[190px] shrink-0 font-mono text-[13px]'
+              value={draft}
+              disabled={busy || !ready}
+              placeholder='3.16.2'
+              onChange={event => setDraft(event.target.value)}
+            />
+            <div className='flex-1' />
+            <Button
+              variant='ghost'
+              disabled={busy || !ready || draft === ''}
+              onClick={() => void saveZcodeVersion('')}
+            >
+              {t('清空（用内置默认值）')}
+            </Button>
+            <Button disabled={busy || !ready || !dirty} onClick={() => void saveZcodeVersion(draft)}>
+              {t('保存')}
+            </Button>
+          </div>
+        </div>
+        <div className='settings-state'>
+          {state.status === 'loading'
+            ? STATES.appLoading
+            : state.status === 'unavailable'
+              ? t('未能读取 ZCode 版本号设置，请稍后重试')
+              : envShadowed
+                ? t('环境变量 ZCODE_APP_VERSION={value} 正在生效，上面填的值暂不生效', { value: state.envOverride })
+                : draft.trim()
+                  ? t('探测与领取时会用 {version} 作为客户端版本号', { version: draft.trim() })
+                  : t('未设置，使用插件内置的默认版本号')}
+        </div>
+        <div className='hint retention-note'>{NOTES.zcodeVersion}</div>
+      </div>
+    </CollapsiblePanel>
+  )
+}
+
+/* ─── 安全分类 ─────────────────────────────── */
 function SecurityPane({ snap }: { snap: SettingsSnapshot }) {
   // 「退出登录」成功后整页跳回登录页，那时组件已不在；只有失败才需要把按钮解禁
   const [loggingOut, setLoggingOut] = React.useState(false)
@@ -1680,20 +1850,9 @@ function SecurityPane({ snap }: { snap: SettingsSnapshot }) {
         </div>
       </section>
 
-      <section className='panel'>
-        <PanelHead title={t('机器人校验')} />
-        <div className='panel-body'>
-          <SwitchRow
-            id='settings-captcha'
-            label={t('登录 / 注册需要通过 ALTCHA 人机验证（工作量证明）')}
-            checked={snap.captcha.enabled}
-            disabled={!snap.captcha.available || snap.busy === 'captcha'}
-            onCheckedChange={next => void saveCaptcha(next)}
-          />
-          <div className='hint'>{NOTES.captcha}</div>
-        </div>
-      </section>
-
+      {/* 机器人校验搬到「账户」分类（与管理员账号、登录开关同层）。
+          这里保留「退出登录」—— 它属于「当前这一端的会话」，与安全分类的
+          其它项（跨域、脱敏）不是一类。 */}
       {/* 面板登录：仅网页端（桌面壳的面板跟着应用走，没有「登录面板」的概念） */}
       {snap.panelLogin ? (
         <section className='panel' id='panel-login-section'>
@@ -1738,11 +1897,115 @@ function storageBadge(state: StorageState): React.ReactNode {
   </StatusBadge>
 }
 
+/**
+ * 「账户」分类：管理员账号（改密码）、机器人校验（两端各一张开关）、重置说明。
+ *
+ * ── 为什么登录开关做成只读 ────────────────────────────────────
+ * 「是否要求登录」由「库里有没有管理员」决定（见 `access::panel_auth_enabled`），
+ * 不是一个独立开关。做成可拨的话，用户关掉它就是在删除管理员记录 —— 那与
+ * 「重置管理员」是同一个动作，只是换了名字，却会让人以为「只是暂时关掉」。
+ * 所以这里只显示状态，要关就按下面的重置说明走，语义清楚、后果可见。
+ */
+function AccountPane({ snap }: { snap: SettingsSnapshot }) {
+  const account = snap.account
+  const captcha = snap.captcha
+  const switchDisabled = !captcha.available || snap.busy === 'captcha'
+  // 本进程是哪一端：用于给两张开关加「正在使用」标记
+  const here = captcha.localPanel ? 'desktop' : 'web'
+
+  return (
+    <>
+      <section className='panel'>
+        <PanelHead
+          title={t('管理员账号')}
+          badge={
+            account.status === 'loading'
+              ? <StatusBadge tone='idle'>{t('检测中…')}</StatusBadge>
+              : account.status === 'unavailable'
+                ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+                : account.registered
+                  ? <StatusBadge tone='ok'>{t('已启用登录')}</StatusBadge>
+                  : <StatusBadge tone='idle'>{t('未注册')}</StatusBadge>
+          }
+          actions={
+            account.registered ? (
+              <Button
+                id='btn-account-change-password'
+                variant='outline'
+                onClick={() => openPasswordDialog()}
+              >
+                {t('修改密码')}
+              </Button>
+            ) : null
+          }
+        />
+        <div className='panel-body'>
+          <div className='settings-state' id='account-username'>
+            {account.status === 'unavailable'
+              ? t('未能读取账户信息，请稍后重试')
+              : account.registered
+                ? t('当前管理员：{name}', { name: account.username || '—' })
+                : t('尚未注册管理员：管理接口不需要登录。开启「允许局域网访问」时会引导注册，也可以从登录页注册。')}
+          </div>
+          {account.registered ? (
+            <div className='hint'>
+              {t('修改密码需要输入当前密码；修改成功后，其他设备 / 浏览器上的登录会立即失效，当前这条会话保留。')}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className='panel'>
+        <PanelHead
+          title={t('机器人校验')}
+          tip={TIPS.captchaSides}
+          badge={!captcha.available
+            ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+            : null}
+        />
+        <div className='panel-body'>
+          <div className='settings-switches'>
+            <SwitchRow
+              id='settings-captcha-desktop'
+              label={here === 'desktop'
+                ? t('桌面端：登录 / 注册需要 ALTCHA 人机验证（当前正在使用）')
+                : t('桌面端：登录 / 注册需要 ALTCHA 人机验证')}
+              checked={captcha.desktop}
+              disabled={switchDisabled}
+              onCheckedChange={next => void saveCaptcha('desktop', next)}
+            />
+            <SwitchRow
+              id='settings-captcha-web'
+              label={here === 'web'
+                ? t('网页端：登录 / 注册需要 ALTCHA 人机验证（当前正在使用）')
+                : t('网页端：登录 / 注册需要 ALTCHA 人机验证')}
+              checked={captcha.web}
+              disabled={switchDisabled}
+              onCheckedChange={next => void saveCaptcha('web', next)}
+            />
+          </div>
+          <div className='hint'>{NOTES.captcha}</div>
+        </div>
+      </section>
+
+      <section className='panel'>
+        <PanelHead title={t('重置管理员')} />
+        <div className='panel-body'>
+          <div className='hint'>
+            {t('忘记密码时无法在界面里找回：需要停掉程序后，从数据库删除管理员记录（kv 表的 panelAdmin 键），重启后按首次使用重新注册。具体命令与各形态的库文件路径见 docs 目录下的「重置管理员」文档。')}
+          </div>
+          <div className='danger-zone'>
+            <strong>{t('重置会清空管理员账号与密码，面板将回到「未注册」状态。')}</strong>
+          </div>
+        </div>
+      </section>
+    </>
+  )
+}
+
 function DataPane({ snap }: { snap: SettingsSnapshot }) {
   const io = snap.busy
   const storage = snap.storage
-  // 端别取自桥（platform）：整库备份 / 恢复的文件对话框只有桌面壳有
-  const isWebBridge = shared().workbuddyDesktop?.platform === 'web'
   // 库打不开时各计数都是后端回落出来的 0，与「真的没有数据」在数字上无法区分 ——
   // 整排显示「—」，不误导用户以为数据丢了；路径仍然照显（文件位置是已知的）
   const ready = storage.status === 'ready'
@@ -1752,65 +2015,71 @@ function DataPane({ snap }: { snap: SettingsSnapshot }) {
 
   return (
     <>
-      {/* 整库备份 / 恢复：仅桌面端渲染（web shim 没有这两个桥方法）。
+      {/* 云同步（对标 cc-switch 的 WebDAV / S3 同步区块）：独立成文件、自带
+          数据流（它只读写 /api/cloud-sync，与设置页其它面板没有状态交集）。
+          排在「整库备份 / 恢复」之前 —— 两者都是「整份数据搬来搬去」的语义，
+          云同步更常用，放上面。 */}
+      <CloudSyncPanel />
+
+      {/* 整库备份 / 恢复：桌面端与网页端（含 Docker）都渲染 —— 桌面壳走系统
+          文件对话框，网页端走浏览器下载 / 上传，桥两侧的返回值同形（见
+          web_shim.rs 的 exportDatabase / importDatabase）。
           排在「账号导入 / 导出」之前 —— 恢复是整库替换，两种语义别让用户混着看 */}
-      {!isWebBridge && (
-        <section className='panel'>
-          <PanelHead
-            title={t('整库备份 / 恢复')}
-            tip={TIPS.backup}
-            actions={
-              <>
-                <Button
-                  id='btn-settings-db-export'
-                  variant='outline'
-                  disabled={io === 'dbExport' || io === 'dbImport'}
-                  onClick={() => void exportDatabase()}
-                >
-                  {io === 'dbExport' ? t('备份中…') : t('备份整库')}
-                </Button>
-                <Button
-                  id='btn-settings-db-restore'
-                  variant='destructive'
-                  disabled={io === 'dbExport' || io === 'dbImport'}
-                  onClick={() => confirmDbRestore()}
-                >
-                  {io === 'dbImport' ? t('恢复中…') : t('恢复整库')}
-                </Button>
-              </>
-            }
-          />
-          <div className='panel-body'>
-            {/* 恢复后的密钥警告（后端 warning 原文，密钥对不上时导入后账号解不开）：
-                排在面板最前 —— 用户刚点完标题栏的「恢复整库」，视线就在这片区域，
-                这条警告必须第一眼看到；而且它**常驻**，不像 toast 那样几秒后消失。
-                呈现沿用本页既有的 .danger-zone 警示框（与下面那条备份说明同款），
-                不自造组件；文案是服务端生成的数据，原样显示、不翻译 */}
-            {snap.dbWarning ? (
-              <div className='danger-zone' id='settings-db-warning'>
-                <strong>{t('⚠️ 密钥警告')}</strong>
-                <br />
-                {snap.dbWarning}
-              </div>
-            ) : null}
-            <div className='retention-row'>
-              <label htmlFor='settings-db-include-logs'>{t('包含日志与调试报文')}</label>
-              <Switch
-                id='settings-db-include-logs'
-                checked={snap.dbIncludeLogs}
-                disabled={io !== null}
-                onCheckedChange={toggleDbIncludeLogs}
-              />
-              <div className='hint'>
-                {t('取消勾选后只备份业务数据（账号、配置与余额记录），文件显著变小；事件日志、请求统计与调试报文不会进备份文件。')}
-              </div>
+      <section className='panel'>
+        <PanelHead
+          title={t('整库备份 / 恢复')}
+          tip={TIPS.backup}
+          actions={
+            <>
+              <Button
+                id='btn-settings-db-export'
+                variant='outline'
+                disabled={io === 'dbExport' || io === 'dbImport'}
+                onClick={() => void exportDatabase()}
+              >
+                {io === 'dbExport' ? t('备份中…') : t('备份整库')}
+              </Button>
+              <Button
+                id='btn-settings-db-restore'
+                variant='destructive'
+                disabled={io === 'dbExport' || io === 'dbImport'}
+                onClick={() => confirmDbRestore()}
+              >
+                {io === 'dbImport' ? t('恢复中…') : t('恢复整库')}
+              </Button>
+            </>
+          }
+        />
+        <div className='panel-body'>
+          {/* 恢复后的密钥警告（后端 warning 原文，密钥对不上时导入后账号解不开）：
+              排在面板最前 —— 用户刚点完标题栏的「恢复整库」，视线就在这片区域，
+              这条警告必须第一眼看到；而且它**常驻**，不像 toast 那样几秒后消失。
+              呈现沿用本页既有的 .danger-zone 警示框（与下面那条备份说明同款），
+              不自造组件；文案是服务端生成的数据，原样显示、不翻译 */}
+          {snap.dbWarning ? (
+            <div className='danger-zone' id='settings-db-warning'>
+              <strong>{t('⚠️ 密钥警告')}</strong>
+              <br />
+              {snap.dbWarning}
             </div>
-            <div className='danger-zone'>
-              <strong>{NOTES.backupDanger}</strong>
+          ) : null}
+          <div className='retention-row'>
+            <label htmlFor='settings-db-include-logs'>{t('包含日志与调试报文')}</label>
+            <Switch
+              id='settings-db-include-logs'
+              checked={snap.dbIncludeLogs}
+              disabled={io !== null}
+              onCheckedChange={toggleDbIncludeLogs}
+            />
+            <div className='hint'>
+              {t('取消勾选后只备份业务数据（账号、配置与余额记录），文件显著变小；事件日志、请求统计与调试报文不会进备份文件。')}
             </div>
           </div>
-        </section>
-      )}
+          <div className='danger-zone'>
+            <strong>{NOTES.backupDanger}</strong>
+          </div>
+        </div>
+      </section>
 
       <section className='panel'>
         <PanelHead
@@ -1932,19 +2201,19 @@ const FEEDBACK_LINKS = [
     title: t('问题反馈'),
     desc: t('遇到 Bug、报错或异常行为'),
     cta: t('去反馈'),
-    url: 'https://github.com/aimod-cc/agent2api/issues/new?template=bug_report.yml',
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=bug_report.yml',
   },
   {
     title: t('功能建议'),
     desc: t('想要的新功能或改进想法'),
     cta: t('提建议'),
-    url: 'https://github.com/aimod-cc/agent2api/issues/new?template=feature_request.yml',
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=feature_request.yml',
   },
   {
     title: t('请求提供商 / 模型支持'),
     desc: t('希望接入新的提供商或模型'),
     cta: t('去申请'),
-    url: 'https://github.com/aimod-cc/agent2api/issues/new?template=provider_request.yml',
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=provider_request.yml',
   },
 ] as const
 
@@ -2060,6 +2329,106 @@ const LAN_CONFIRM_COPY: Record<
       ),
     label: t('保存并重启'),
   },
+}
+
+/**
+ * 「修改密码」弹窗：当前密码 + 新密码 + 确认新密码。
+ *
+ * 三个字段都是**非受控**再取 ref 读值？不 —— 这里用受控 state：需要在提交前
+ * 比较「两次新密码是否一致」，而那一比发生在点击那一刻，读 ref 与读 state 等价，
+ * 但受控写法能让「两次不一致」的提示在输入时就消失（错误文案清空）。
+ * 焦点落在「取消」：改密码不该因为敲回车就提交（与危险操作确认框同一取向）。
+ */
+function PasswordDialog({ password }: { password: { busy: boolean; error: string } | null }) {
+  const cancelRef = React.useRef<HTMLButtonElement | null>(null)
+  const [oldValue, setOldValue] = React.useState('')
+  const [newValue, setNewValue] = React.useState('')
+  const [repeat, setRepeat] = React.useState('')
+  const open = password !== null
+  const busy = password?.busy === true
+
+  // 关窗即清空三个输入：密码不该留在组件的 state 里等下一次打开
+  React.useEffect(() => {
+    if (!open) {
+      setOldValue('')
+      setNewValue('')
+      setRepeat('')
+    }
+  }, [open])
+
+  const mismatch = repeat.length > 0 && newValue !== repeat
+
+  function submit(): void {
+    if (busy) return
+    if (mismatch) return
+    void submitPasswordChange(oldValue, newValue)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={next => { if (!next) closePasswordDialog() }}>
+      <DialogContent className='w-[min(440px,calc(100vw-48px))]' initialFocus={cancelRef}>
+        <DialogHeader>
+          <DialogTitle>{t('修改密码')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          {/* form 让浏览器的密码管理器能识别「旧密码 → 新密码」这一组 */}
+          <form
+            onSubmit={event => { event.preventDefault(); submit() }}
+            autoComplete='on'
+          >
+            <Label htmlFor='account-old-password' className='mb-[5px] block text-[12.5px]'>
+              {t('当前密码')}
+            </Label>
+            <Input
+              id='account-old-password'
+              type='password'
+              autoComplete='current-password'
+              placeholder={t('输入当前登录用的密码')}
+              value={oldValue}
+              disabled={busy}
+              onChange={event => setOldValue(event.target.value)}
+            />
+            <Label htmlFor='account-new-password' className='mt-3.5 mb-[5px] block text-[12.5px]'>
+              {t('新密码')}
+            </Label>
+            <Input
+              id='account-new-password'
+              type='password'
+              autoComplete='new-password'
+              placeholder={t('至少 8 位')}
+              value={newValue}
+              disabled={busy}
+              onChange={event => setNewValue(event.target.value)}
+            />
+            <Label htmlFor='account-repeat-password' className='mt-3.5 mb-[5px] block text-[12.5px]'>
+              {t('确认新密码')}
+            </Label>
+            <Input
+              id='account-repeat-password'
+              type='password'
+              autoComplete='new-password'
+              placeholder={t('再输入一次新密码')}
+              value={repeat}
+              disabled={busy}
+              onChange={event => setRepeat(event.target.value)}
+            />
+          </form>
+          <div className='mt-3 min-h-5 text-[13px] whitespace-pre-wrap text-destructive'>
+            {mismatch ? t('两次输入的新密码不一致') : (password?.error || '')}
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <div className='mr-auto' />
+          <Button ref={cancelRef} variant='outline' onClick={() => closePasswordDialog()} disabled={busy}>
+            {t('取消')}
+          </Button>
+          <Button onClick={submit} disabled={busy || mismatch || !oldValue || !newValue || !repeat}>
+            {busy ? t('正在修改…') : t('修改密码')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /**
@@ -2192,9 +2561,66 @@ function LanDialog({ confirm, register }: { confirm: LanConfirm; register: LanRe
 
 /* ─── 页面 ─────────────────────────────────── */
 
+/**
+ * 当前已装插件申报了哪些管理面板。
+ *
+ * ── 为什么设置页要问插件 ────────────────────────────────────
+ * 伪装头编辑器这类面板的**实现**在插件里（走 `admin.action`），网关只存
+ * 用户改过的键。插件没装时它既没有默认值也没有合并语义，面板点开是一屏
+ * 「读取失败」。所以按插件的申报决定渲染：没申报就整块不出现。
+ *
+ * ── 为什么不用 useSettings 的快照 ──────────────────────────
+ * 那份快照来自 `getAppSettings`（应用设置），面板声明是插件面的数据，
+ * 两者来源不同。单独拉一次 `/api/plugins` 更直白，且失败时按「没有面板」
+ * 处理 —— 宁可少画，也不要画一个读不出数的空面板。
+ *
+ * 依赖 `category`：切到「网关」分类时重拉一次，用户刚装完插件切回来
+ * 就能看到新面板。
+ */
+function useAdminPanels(category: string): Set<string> {
+  const [panels, setPanels] = React.useState<Set<string>>(() => new Set())
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const internals = (window as unknown as {
+          __TAURI_INTERNALS__?: {
+            invoke?: (command: string, args?: unknown) => Promise<unknown>
+          }
+        }).__TAURI_INTERNALS__
+        if (!internals?.invoke) return
+        const result = await internals.invoke('api_request', {
+          request: { method: 'GET', path: '/api/plugins', body: null },
+        })
+        const envelope = result as { data?: { adminPanels?: string[] } } | null
+        const list = envelope?.data?.adminPanels
+        if (!cancelled && Array.isArray(list)) setPanels(new Set(list))
+      } catch {
+        // 读不到按「没有面板」处理：隐藏比画一个空面板好
+      }
+    })()
+    return () => { cancelled = true }
+  }, [category])
+  return panels
+}
+
 function SettingsPage() {
   const snap = useSettings()
+  // 插件申报的管理面板（见 useAdminPanels 的说明）
+  const adminPanels = useAdminPanels(snap.category)
   const panesRef = React.useRef<HTMLDivElement | null>(null)
+  /**
+   * 窄屏「一级菜单 / 二级页面」的当前层。
+   *
+   * 桌面与平板（≥768px）永远是 false：左栏导航常驻、右侧直接显示选中分类，
+   * 与改动前逐像素一致 —— 这条状态只在 CSS 的 767px 断点内起作用，
+   * 桌面端由 `.settings-layout.is-detail` 的规则排除，不产生任何视觉差异。
+   *
+   * 手机上的语义：false = 分类列表（一级），true = 某个分类的设置面板（二级）。
+   * 点分类进二级、点返回回一级。初始为 false（每次进设置页都从列表开始，
+   * 不沿用上次停留的分类 —— 手机上「上次看的那一页」没有上下文，列表更符合预期）。
+   */
+  const [mobileDetail, setMobileDetail] = React.useState(false)
 
   // 切换分类后把内容栏滚回顶部（旧实现是命令式写 scrollTop）：否则上一类的滚动位置会
   // 带到新分类上，打开「更新」却停在半截。scrollReset 每次 showCategory 都递增，
@@ -2205,9 +2631,10 @@ function SettingsPage() {
   }, [snap.scrollReset])
 
   const paneClass = (cat: string): string => (snap.category === cat ? 'settings-pane active' : 'settings-pane')
+  const activeCategory = CATEGORIES.find(item => item.id === snap.category) || CATEGORIES[0]
 
   return (
-    <div className='settings-layout'>
+    <div className={mobileDetail ? 'settings-layout is-detail' : 'settings-layout'}>
       <nav className='settings-nav' id='settings-nav'>
         {CATEGORIES.map(item => (
           <button
@@ -2215,7 +2642,10 @@ function SettingsPage() {
             type='button'
             className={snap.category === item.id ? 'settings-nav-item active' : 'settings-nav-item'}
             data-cat={item.id}
-            onClick={() => selectCategory(item.id)}
+            onClick={() => {
+              selectCategory(item.id)
+              setMobileDetail(true)
+            }}
           >
             {/* 分类图标（icons.js）：与主侧栏同款 17px 图标盒，颜色随 currentColor
                 （选中态自动变主题色） */}
@@ -2225,21 +2655,30 @@ function SettingsPage() {
         ))}
       </nav>
 
+      {/* 二级页顶部返回栏：只在手机（≤767px）且已进入某一分类时显示，
+          桌面由 CSS 排除。文案里的分类名跟着当前分类走，让用户知道自己在哪。
+          图标复用 caretRight 并水平翻转（icons.js 里没有专用的 back 箭头，
+          为这一个按钮新增图标不值得）。 */}
+      <div className='settings-back-bar'>
+        <button type='button' className='settings-back-btn' onClick={() => setMobileDetail(false)}>
+          <span className='ico' dangerouslySetInnerHTML={{ __html: iconHtml('caretRight', 17) }} />
+          {t('返回')}
+        </button>
+        <span className='settings-back-title'>{activeCategory.label}</span>
+      </div>
+
       <div className='settings-panes' ref={panesRef}>
         <div className={paneClass('general')} data-cat='general'>
           <GeneralPane snap={snap} />
         </div>
-        {/* AI 助手：三块面板（对话模型 / 系统提示词 / 工具勾选）。它自带一份独立的
-            加载与保存（/api/assistant/config），不经过 settings-state 的快照 —— 见
-            assistant-settings-pane.tsx 的模块头 */}
-        <div className={paneClass('assistant')} data-cat='assistant'>
-          <AssistantSettingsPane />
-        </div>
+        {/* AI 助手的配置已搬到助手页自己的「助手设置」抽屉
+            （assistant-settings-drawer.tsx）—— 换模型 / 调工具都是聊天当中会做的
+            事，留在设置页意味着每次都要离开对话再切回来。 */}
         <div className={paneClass('display')} data-cat='display'>
           <DisplayPane />
         </div>
         <div className={paneClass('gateway')} data-cat='gateway'>
-          <GatewayPane snap={snap} />
+          <GatewayPane snap={snap} panels={adminPanels} />
         </div>
         <div className={paneClass('routing')} data-cat='routing'>
           <RoutingPane snap={snap} />
@@ -2253,12 +2692,24 @@ function SettingsPage() {
         <div className={paneClass('security')} data-cat='security'>
           <SecurityPane snap={snap} />
         </div>
+        <div className={paneClass('account')} data-cat='account'>
+          <AccountPane snap={snap} />
+        </div>
         <div className={paneClass('data')} data-cat='data'>
           <DataPane snap={snap} />
         </div>
         <div className={paneClass('feedback')} data-cat='feedback'>
           <FeedbackPane />
         </div>
+        {/*
+          「版本信息」同样由独立岛接管（system-info-pane.tsx，选择器
+          `.settings-pane[data-cat="system"]`）。约束与下面「更新」那条完全一样：
+          必须是**空的**、且永远保持同一个元素 —— 那个岛在自己的模块加载期就把
+          React root 建在这个 div 上，React 这边只要不去动它的子树，渲染结果就留得住。
+          拆成独立岛而不是塞进本文件：本文件已经 2300 多行，而这块与设置项
+          没有任何状态交集（它自己拉 `/api/system-info`）。
+        */}
+        <div className={paneClass('system')} data-cat='system' />
         {/*
           「更新」的面板（原「关于」，id 仍是 about）由另一个岛（update-panel.tsx）接管：
           它按这个选择器找挂载点，找到就把 React root 建在这个 div 上。所以这里必须是
@@ -2271,6 +2722,9 @@ function SettingsPage() {
 
       <RetentionConfirmDialog confirm={snap.retentionConfirm} />
       <DbBackupConfirmDialog confirm={snap.dbBackupConfirm} />
+      {/* 恢复进度弹窗：**不可关闭**，直到恢复收口（见该文件的说明） */}
+      <DbRestoreDialog />
+      <PasswordDialog password={snap.account.password} />
       <LanDialog confirm={snap.lanConfirm} register={snap.lanRegister} />
     </div>
   )

@@ -4,13 +4,13 @@
 
 **Transforme o estado de login de vários clientes de desktop de IA em um gateway de API compatível com OpenAI local**
 
-[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | **Português (BR)**
+[English](../README.md) | [简体中文](./README.zh-CN.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | **Português (BR)**
 
 [![license](https://img.shields.io/badge/license-MIT%20%2B%20Aviso-green)](../LICENSE)
-[![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![release](https://img.shields.io/github/v/release/aimod-cc/Agent2API?include_prereleases)](https://github.com/aimod-cc/Agent2API/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
-[![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![stars](https://img.shields.io/github/stars/aimod-cc/Agent2API?style=flat&color=yellow)](https://github.com/aimod-cc/Agent2API/stargazers)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/Agent2API/releases/latest)
 
 [✨ Principais recursos](#-principais-recursos) • [💬 Comunidade e suporte](#-comunidade-e-suporte) • [🤝 Provedores compatíveis](#-provedores-compatíveis) • [🚀 Início rápido](#-início-rápido) • [📦 Instalação e implantação](./install.pt-BR.md) • [📸 Capturas de tela](#-capturas-de-tela) • [🔧 Desenvolvimento e build](#-desenvolvimento-e-build) • [📜 Aviso de uso](#-aviso-de-uso)
 
@@ -23,7 +23,7 @@ O Agent2API reúne as contas já conectadas de vários clientes de IA em um úni
 ## ✨ Principais recursos
 
 - 🔌 **Compatível com OpenAI** — aponte o `base_url` do seu cliente para o gateway: Chat, Responses e Messages são todos suportados
-- 🏪 **17 provedores integrados** — WorkBuddy, Raccoon, CatPaw, Qoder, Trae e outros funcionam de imediato, além de provedores personalizados via passthrough
+- 🏪 **22 provedores integrados** — WorkBuddy, Raccoon, CatPaw, Qoder, Trae e outros funcionam de imediato, além de provedores personalizados via passthrough
 - 🔁 **Credenciais que se renovam sozinhas** — tokens são renovados antes de expirar, os próximos do vencimento podem ser atualizados em lote e o catálogo de modelos se mantém atual
 - 🪂 **Rotação de várias contas** — contas entram na fila por prioridade, um 429 passa para a próxima e contas em cooldown são puladas sem espera
 - 🛡️ **Proxies de saída** — cada conta pode ter seu próprio IP de saída; o fingerprint enviado imita o cliente oficial
@@ -48,7 +48,9 @@ O Agent2API reúne as contas já conectadas de vários clientes de IA em um úni
 
 ## 💬 Comunidade e suporte
 
-- **Grupo QQ**: grupo de chat do Agent2API, número `1127656296` (pesquise o número no QQ para entrar); dúvidas e feedback são bem-vindos.
+- **Grupos do QQ**: grupos de chat do Agent2API — **o grupo 1 (`1127656296`) está quase lotado, prefira o grupo 2 (`1130894674`)**; pesquise o número no QQ para entrar.
+- **Grupo do Telegram**: <https://t.me/+9gM8YPvgRL02NGRl>
+- **Servidor do Discord**: <https://discord.gg/z9GzSJMWp>
 - **💖 Doação**: se o Agent2API ajuda você, fique à vontade para [pagar um café ao autor](./SPONSOR.md); doações são voluntárias e não desbloqueiam nada.
 - **🤝 Patrocínio / negócios**: quer patrocinar o projeto ou divulgar seu produto aqui? Envie um e-mail para [541675139@qq.com](mailto:541675139@qq.com).
 
@@ -77,6 +79,9 @@ Panorama dos recursos de proxy reverso por plataforma (✓ suportado · ✗ não
 | OfficeAce (Huawei Cloud, OfficeClaw) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | OrcaTerm (Tencent Cloud) | ✓ | ✓ | ✓ | ✓ | — | — |
 | Zhipu Qingyan | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ModelScope (MoDa, China / global) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| AtomCode (AtomGit / GitCode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LobsterAI (NetEase Youdao, Youdao Lobster) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | Provedores personalizados | ✓ | — | ✓ | — | — | — |
 
 > Nota: em Lista de modelos, ✓ significa busca automática online (algumas plataformas também mantêm uma tabela estática interna como fallback); o ZCode tem apenas a tabela estática interna. ✗ em Renovação automática do token significa que a plataforma não tem um fluxo de renovação disponível (a conta continua funcionando enquanto as credenciais forem válidas). O check-in do Qoder é somente na versão da China.
@@ -121,6 +126,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 ```
 
 Em qualquer forma, abra o painel depois (`http://127.0.0.1:3065/`; use o IP do host nas formas servidor e Docker), registre o administrador e crie uma chave na página "Gateway Keys". Teste de conectividade: `curl http://127.0.0.1:3065/health`
+
+**Celular**: abra `http://<IP do gateway>:3065/m` no navegador (dá para "Adicionar à tela inicial" e virar um PWA em tela cheia). Para um ícone próprio, instale o `Agent2API-<versão>.apk` (Android) ou `Agent2API-<versão>.ipa` (iOS, não assinado — reassine você mesmo) do Release. Detalhes: [Instalação e implantação → Celular](install.pt-BR.md#celular).
 
 ## 📸 Capturas de tela
 
@@ -176,7 +183,7 @@ O `.dmg` do macOS **só pode ser compilado no macOS** (`npm --prefix desktop-tau
 
 ### Apenas para aprendizado e discussão
 
-Este projeto é um exercício prático de proxy reverso HTTP, passthrough de streaming SSE, adaptação de protocolos de múltiplos upstreams e empacotamento desktop (Tauri), e destina-se **apenas a aprendizado e pesquisa pessoal**. Não é um produto oficial e não tem qualquer vínculo, endosso ou patrocínio de Tencent e WorkBuddy / CodeBuddy, Meituan e CatPaw, SenseTime e 小浣熊, Zhipu e AutoClaw / autoglm, Alibaba e Qoder / Accio, Huawei Cloud e CodeArts / OfficeAce, ByteDance e Trae, iFlytek e Loomy, Baidu Wenku e KukuAI, 长亭科技 e MonkeyCode, Command Code, ou Google e Antigravity.
+Este projeto é um exercício prático de proxy reverso HTTP, passthrough de streaming SSE, adaptação de protocolos de múltiplos upstreams e empacotamento desktop (Tauri), e destina-se **apenas a aprendizado e pesquisa pessoal**. Não é um produto oficial e não tem qualquer vínculo, endosso ou patrocínio de Tencent e WorkBuddy / CodeBuddy, Meituan e CatPaw, SenseTime e 小浣熊, Zhipu e AutoClaw / autoglm, Alibaba e Qoder / Accio, Huawei Cloud e CodeArts / OfficeAce, ByteDance e Trae, iFlytek e Loomy, Baidu Wenku e KukuAI, 长亭科技 e MonkeyCode, Command Code, Google e Antigravity, Alibaba e ModelScope (MoDa), GitCode / AtomGit e AtomCode, ou NetEase Youdao e LobsterAI (Youdao Lobster).
 
 ### Sobre o comportamento de proxy reverso
 
@@ -202,17 +209,17 @@ Uma ressalva: a LICENSE traz um **Aviso de uso** após o texto da MIT, cujo item
 
 ## ⭐ Star History
 
-<a href="https://star-history.com/#aimod-cc/agent2api&Date">
+<a href="https://star-history.com/#aimod-cc/Agent2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
   </picture>
 </a>
 
 <div align="center">
 
-**[Baixe a versão mais recente](https://github.com/aimod-cc/agent2api/releases/latest)** • **[Reporte um problema](https://github.com/aimod-cc/agent2api/issues)**
+**[Baixe a versão mais recente](https://github.com/aimod-cc/Agent2API/releases/latest)** • **[Reporte um problema](https://github.com/aimod-cc/Agent2API/issues)**
 
 Se este projeto for útil para você, uma ⭐️ Star é muito bem-vinda!
 

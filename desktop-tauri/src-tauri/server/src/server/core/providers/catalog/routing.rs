@@ -69,6 +69,11 @@ pub(super) fn builtin_target(
 }
 
 /// 原始能力查询不应用开关，供管理 API 展开旧版全局规则。
+///
+/// 自定义家的那一段同样**不应用开关**：它回答「谁登记了这个名字」，而
+/// `mappings` 里的别名也是登记过、可被请求的名字（与模型 ID 同列）。
+/// 只看 `models[]` 会让「按映射名测这一家」被判成「清单里没有这个模型」——
+/// 而按别名请求恰恰是自定义家最常见的用法（见 `custom_providers` 的模块头）。
 pub fn providers_for_model(model: &str) -> Vec<String> {
     let model = model.trim();
     if model.is_empty() {
@@ -87,9 +92,44 @@ pub fn providers_for_model(model: &str) -> Vec<String> {
     }).map(|(kind, _)| kind_id(kind).to_string()).collect();
     result.extend(custom_providers::list().into_iter().filter_map(|provider| {
         let models = provider.get("models")?.as_array()?;
-        models.iter().any(|entry| model_id(entry).eq_ignore_ascii_case(model))
+        let declared = models.iter().any(|entry| model_id(entry).eq_ignore_ascii_case(model));
+        // 映射别名也算「这一家认识这个名字」：别名是对外可请求的名字，
+        // 判定口径与 `carriers_of_model` 的「能力」那一半一致。
+        let mapped = provider
+            .get("mappings")
+            .and_then(Value::as_array)
+            .is_some_and(|mappings| {
+                mappings.iter().any(|mapping| {
+                    mapping
+                        .get("alias")
+                        .and_then(Value::as_str)
+                        .is_some_and(|alias| alias.eq_ignore_ascii_case(model))
+                })
+            });
+        (declared || mapped)
             .then(|| provider.get("id").and_then(Value::as_str).unwrap_or("").to_string())
     }));
+    // 插件家：清单由它们在握手 / 刷新时申报。不加这一段，「按映射名建到插件家」
+    // 与「模型规则页里选插件家」都会被判成「这家不认识这个名字」。
+    for id in crate::server::core::plugin_host::installed_ids() {
+        let Some(adapter) = crate::server::core::plugin_host::lookup(&id) else {
+            continue;
+        };
+        let declared = adapter
+            .list_models()
+            .iter()
+            .any(|entry| model_id(entry).eq_ignore_ascii_case(model));
+        let mapped = model_rules::current()
+            .mappings
+            .iter()
+            .any(|mapping| {
+                mapping.provider.as_deref() == Some(id.as_str())
+                    && mapping.alias.eq_ignore_ascii_case(model)
+            });
+        if declared || mapped {
+            result.push(id);
+        }
+    }
     result
 }
 
@@ -100,6 +140,28 @@ pub fn forwarding_providers(model: &str) -> Vec<String> {
         builtin_target(&rules, *kind, &manifest_for(*kind), model).is_some()
     }).map(|kind| kind_id(kind).to_string()).collect();
     result.extend(custom_providers::carriers_of_model(model));
+    // 插件家：名字改写由插件自己做（它知道自己的目录），网关这边只要能回答
+    // 「这个名字归这家」即可。判据与 `providers_for_model` 的插件段一致。
+    for id in crate::server::core::plugin_host::installed_ids() {
+        if !rules.default_enabled(&id, model) {
+            continue;
+        }
+        let Some(adapter) = crate::server::core::plugin_host::lookup(&id) else {
+            continue;
+        };
+        let declared = adapter
+            .list_models()
+            .iter()
+            .any(|entry| model_id(entry).eq_ignore_ascii_case(model));
+        let mapped = rules.mappings.iter().any(|mapping| {
+            mapping.provider.as_deref() == Some(id.as_str())
+                && mapping.alias.eq_ignore_ascii_case(model)
+                && mapping.enabled
+        });
+        if declared || mapped {
+            result.push(id);
+        }
+    }
     result
 }
 

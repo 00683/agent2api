@@ -91,6 +91,8 @@ export type SharedWindow = {
     toast?: (message: string, kind?: 'err' | 'ok' | 'warn') => void
     refresh?: () => Promise<unknown> | unknown
     getState?: () => { accounts?: { accounts?: AccountRecord[] } } | null | undefined
+    /** 切页（app.js 的出口）：空态里「去安装插件包」用它跳到插件页 */
+    showPage?: (page: string) => void
   }
   /** 网页登录引擎（web-login.js）：本子系统只调 create / refresh / cancelIfActive */
   wbWebLogin?: {

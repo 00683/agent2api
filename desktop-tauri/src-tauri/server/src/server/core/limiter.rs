@@ -44,6 +44,7 @@ use crate::server::core::providers::{kind_id, ProviderKind};
 use crate::server::core::usage_records::{default_low_balance_mode, DEFAULT_LOW_BALANCE_THRESHOLD};
 use crate::server::db::Db;
 use crate::server::logging;
+use agent2api_provider_protocol as proto;
 
 /// Cline 免费池的 provider id（与 `usage_records::CLINE_FREE_PROVIDER` 同源推导）。
 const CLINE_FREE_PROVIDER: &str = kind_id(ProviderKind::ClineFree);
@@ -198,6 +199,13 @@ fn parse_rules(value: Option<&Value>) -> Option<Vec<LimiterRule>> {
 /// 各 provider 的**缺省限制规则**（记录上没有 `limiters` 也没有显式 `lowBalance`
 /// 配置时用）。
 ///
+/// ── 判据顺序：插件申报优先，注册表兜底 ──────────────────────
+/// 缺省规则是「这一家的额度形态长什么样」的结论，属于 provider 知识，所以
+/// 插件在握手时申报（`AccountFeatures::default_limiters`）。这里先问插件：
+/// 申报了就照它执行（含「明确声明为空」这一档），没申报才走下面的内置表 ——
+/// 于是没升级的旧插件照旧工作，升级后行为由插件自己说了算。
+///
+/// 内置表的三条（**只有旧插件会走到**）：
 /// - **CodeArts → Token 自然日 1000 万，跳过**：这一家的余额读数常判不出
 ///   （免费版账号的统计里没有积分类计量表、`available` 为 null，额度全在福利
 ///   token 池），缺省的余额规则形同虚设；按自然日 Token 消耗判定才兜得住
@@ -206,6 +214,9 @@ fn parse_rules(value: Option<&Value>) -> Option<Vec<LimiterRule>> {
 ///   缺省的理由不变。
 /// - **其余 provider → 余额 < 1 跳过**（历史缺省不变）。
 pub fn default_rules(provider: &str) -> Vec<LimiterRule> {
+    if let Some(declared) = declared_rules(provider) {
+        return declared;
+    }
     if provider == CODEARTS_PROVIDER {
         return vec![LimiterRule {
             kind: LimiterKind::Token,
@@ -227,6 +238,50 @@ pub fn default_rules(provider: &str) -> Vec<LimiterRule> {
         reset: LimiterReset::Fixed,
         enabled: true,
     }]
+}
+
+/// 插件申报的缺省规则（`None` = 这一家没申报，调用方走内置表）。
+///
+/// 协议里的 `DefaultLimiter` 与这里的 `LimiterRule` 是同一件事的两份表达：
+/// 前者是过线形态（字段少、枚举封闭），后者是网关内部形态（带 `reset`
+/// 这类展示口径）。转换只在这一处，别处不要再写一遍。
+fn declared_rules(provider: &str) -> Option<Vec<LimiterRule>> {
+    let features = crate::server::core::plugin_host::account_features_of(provider)?;
+    let declared = features.default_limiters?;
+    Some(
+        declared
+            .into_iter()
+            .filter(|rule| rule.threshold.is_finite() && rule.threshold > 0.0)
+            .map(|rule| {
+                let (kind, reset) = match rule.kind {
+                    proto::DefaultLimiterKind::Balance => {
+                        (LimiterKind::Balance, LimiterReset::Fixed)
+                    }
+                    proto::DefaultLimiterKind::Token => {
+                        // `period_seconds == 0` = 自然日；否则是固定周期窗口
+                        let reset = if rule.period_seconds == 0 {
+                            LimiterReset::Daily
+                        } else {
+                            LimiterReset::Fixed
+                        };
+                        (LimiterKind::Token, reset)
+                    }
+                };
+                let action = match rule.action {
+                    proto::DefaultLimiterAction::Skip => LimiterAction::Skip,
+                    proto::DefaultLimiterAction::Disable => LimiterAction::Disable,
+                };
+                LimiterRule {
+                    kind,
+                    action,
+                    threshold: rule.threshold,
+                    period: i64::from(rule.period_seconds),
+                    reset,
+                    enabled: true,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// 记录字段上**没有** `limiters` 键时的推导：有显式 `lowBalance`（用户 / 旧版

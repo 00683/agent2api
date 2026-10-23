@@ -14,6 +14,7 @@ Every form is managed from the **browser panel** afterwards (accounts, gateway k
 - [Docker](#docker)
 - [Verification and client setup](#verification-and-client-setup)
 - [LAN access](#lan-access)
+- [Mobile](#mobile)
 
 ## Which form to pick
 
@@ -182,7 +183,7 @@ Environment variables (all optional):
 | `AGENT2API_ALLOW_NO_KEY` | Set to `1` to serve `/v1` without any key — private networks only |
 | `AGENT2API_CAPTCHA_ENABLED` | Login-page human verification widget: `1` enabled (default), `0` disabled |
 | `AGENT2API_SELF_UPDATE` | In-container update entry: `1` enabled by default (the panel offers "Download and update"); set `0` to upgrade manually only |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | Advanced: point update checks/downloads at your own source. The first swaps the repository (defaults to the upstream `aimod-cc/agent2api`; forks should override it), the second swaps the API root (default `https://api.github.com`, must return a GitHub-shaped release JSON). With a custom source set, the download allowlist additionally admits only **that source's own host** (scheme follows the source: an `http://` source also allows plaintext downloads — for local drills / internal mirrors only) |
+| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | Advanced: point update checks/downloads at your own source. The first swaps the repository (defaults to the upstream `aimod-cc/Agent2API`; forks should override it), the second swaps the API root (default `https://api.github.com`, must return a GitHub-shaped release JSON). With a custom source set, the download allowlist additionally admits only **that source's own host** (scheme follows the source: an `http://` source also allows plaintext downloads — for local drills / internal mirrors only) |
 
 Build from source: clone the repo and run `docker compose up -d --build` (the image contains only the gateway and the panel, no Rust toolchain).
 
@@ -229,3 +230,100 @@ print(resp.choices[0].message.content)
 By default the gateway only listens on `127.0.0.1`. After turning on "Settings → General → LAN access" it listens on all adapters, and devices on the LAN just point their API base URL at this machine's IP (the UI shows the full address) to share the accounts. For safety, enabling it requires registering a panel administrator first: the management API then demands an admin session or a gateway key, and with no key enabled the forwarding API refuses service too (the enable flow adds a "default" key automatically). The web panel can optionally be exposed to the LAN as well (off by default). Changes take effect after a restart.
 
 The desktop installers (Windows / macOS) already ship the web panel's `ui/` folder: once you turn on "expose the web management panel to the LAN" as well, devices on the LAN can open the same address in a browser to get the management UI — the same interface as the Docker form. **The desktop window itself never goes through web login** (there is no login page in the app): it authenticates with this machine's first gateway key, so flipping that switch never asks you to sign in from the desktop app. The web login page only appears when a browser opens the panel.
+
+## Mobile
+
+There are three forms — pick what you need:
+
+| Form | How to install | Good for |
+| --- | --- | --- |
+| **Browser / PWA** | Open `/m` in a phone browser; optionally "Add to Home Screen" | Quick look, nothing to install, the easiest option on iPhone |
+| **Android APK** | Install `Agent2API-<version>.apk` | Home-screen icon, full screen, multiple servers |
+| **iOS IPA** | Install `Agent2API-<version>.ipa` (unsigned — you re-sign it) | Home-screen icon, full screen |
+
+All three run the same UI code. The difference is who serves the page: the PWA is served by the gateway (so "also expose the web management panel" must be on), while the APK / IPA ship the UI inside the package (so they can start the UI offline and do not need that switch).
+
+### Prerequisites (by form)
+
+**Desktop (Windows / macOS / Linux)**: both switches, one without the other will not work.
+
+1. "Settings → General → LAN access" — lets devices on the LAN reach the gateway. The enable flow asks you to register a panel administrator first and adds a key named "default" automatically.
+2. "Settings → General → LAN access → also expose the web management panel" — serves the `ui/` static folder. **Required for the browser / PWA form** (`/m` is served by the gateway, so it returns 404 while this switch is off). **The APK / IPA do not need it** (the UI is inside the package), but they still need switch 1 — otherwise the gateway only listens on `127.0.0.1` and the phone cannot reach it.
+
+Both require a restart to take effect.
+
+**Server / Docker**: no extra switches — both forms already listen on all adapters and serve `ui/` by default (`AGENT2API_UI_DIR=/app/ui` is hard-coded in the Dockerfile). You only need the container's or service's port to be reachable from the LAN. If you manually set `AGENT2API_HOST=127.0.0.1`, change it to `0.0.0.0`; if `AGENT2API_UI_DIR` points to a missing directory the panel returns 404 while the API keeps working.
+
+### Open it on the phone (browser / PWA)
+
+`http://<LAN IP of the machine running the gateway>:3065/m`
+
+On desktop, that is the address shown in the settings pane above (for example `192.168.1.23`) — replace the trailing `/v1` with `/m`. For Docker / server use the host machine's LAN IP and the mapped port.
+
+The first visit redirects to the login page; sign in with the panel administrator and it returns you to the mobile UI automatically. If no administrator exists yet, the login page asks you to create one.
+
+### Install the APK (Android)
+
+On first launch you get a "Servers" screen. Three steps:
+
+1. Tap "Add" and enter the gateway's `IP or domain:port` (e.g. `192.168.1.23:3065`). The scheme may be `http://` or `https://` (http is assumed if omitted); without a port, http gets 3065 and https uses the standard 443;
+2. Tap "Connect & save" — it probes the gateway first, so a wrong address or a gateway without LAN access is reported right there;
+3. A login page appears. Enter this gateway's administrator account and password (if none exists yet, it becomes "Create admin account").
+
+**Multiple servers**: tap "Add" again. Each server keeps its own sign-in — switching over does not require signing in again, and neither does switching back. The entry point is "Settings → Servers"; tap a row to switch to it. **The login page also has a "Switch server" link**, so after signing out (or being signed out) you don't have to log in first just to reach that list.
+
+**Known limitations of the APK**:
+
+- Without a scheme it uses a cleartext `http://` LAN address. The risk is "sniffable on the same LAN"; the gateway itself still requires administrator login. To remove it, give the gateway TLS (a reverse proxy or tunnel works) and enter an `https://` address — the scheme is preserved as typed, and an invalid certificate makes the probe fail immediately.
+- The UI follows the APK version, not the gateway. If a gateway upgrade adds new screens, you need a newer APK to see them; pure data changes are unaffected.
+
+### Install the IPA (iOS)
+
+`Agent2API-<version>.ipa` in the Release is **unsigned by default** — Apple does not let developers hand out installable apps freely, so an unsigned package has to be re-signed once with your own Apple ID. Three routes:
+
+| Route | Requires | Validity |
+| --- | --- | --- |
+| **AltStore / SideStore / Sideloadly** | A computer (first time) + a free Apple ID | 7 days, re-sign afterwards |
+| **Apple Developer Program** | $99/year, your own certificate and provisioning profile | 1 year |
+| **App Store / TestFlight** | $99/year + review | Long term |
+
+To sideload: drop the `.ipa` into AltStore (or SideStore), re-sign with your Apple ID, install. Free accounts are capped at 3 apps at a time and must be re-signed every 7 days.
+
+**If you only want to check the gateway from an iPhone, just open `/m` in Safari and "Add to Home Screen"** — no IPA needed. It looks nearly identical to a native app and saves you the re-signing chore.
+
+**Known limitations of the IPA**:
+
+- **In-app updates can only link out**: iOS does not allow an app to download and install executable code, so "Software update" in settings shows a "Get it" button that opens the Release page instead of downloading like Android does. The PWA form updates through the Service Worker — just refresh.
+- Cleartext `http://` gateways: `Info.plist` already relaxes ATS and declares the local-network usage. The first connection triggers an "allow local network" prompt — you must accept it, otherwise every request fails with no visible explanation.
+- Everything else matches the APK: the UI follows the package version, and http is the default scheme.
+
+### Add to home screen (browser / PWA)
+
+Optional — gives you full screen with no address bar. The mobile UI offers the entry point under "Settings → Install as app":
+
+- **Android / Chrome**: tap "Add to Home Screen" in settings (opens the system install dialog); or use the menu → "Add to Home screen" / "Install app"
+- **iOS / Safari**: Safari has no install API, so the settings page spells out the steps — Share → "Add to Home Screen"
+
+Opening it from the home screen icon lands directly on the mobile home page. When already running in a standalone window, the settings page shows "Installed".
+
+When a new version is available, a "Restart & update" bar floats at the bottom: after a gateway upgrade the new UI is already downloaded, and one tap switches to it (ignoring it is fine too — it takes effect on the next open).
+
+> **Why no store package**: the mobile UI always talks to a gateway running on **another machine** (the gateway needs to read that machine's client logins and write its config files — it cannot run on a phone). It is fundamentally "remote access to an HTTP service", and the browser is the right carrier: same-origin auth, no install, and it upgrades together with the gateway. The PWA form adds full screen and a home-screen icon, so it feels like a native app; the APK / IPA package that same UI to get a standalone icon and an offline shell.
+>
+> **Service Worker (offline shell) only works over `https` or `localhost`**: LAN access uses `http://<IP>`, where browsers do not provide SW, so the mobile UI will not open while offline. That is a browser security restriction, not a missing feature — in normal use the gateway is online, so it does not matter.
+
+### What it can and cannot do
+
+| Can | Cannot (use the desktop app) |
+| --- | --- |
+| Reports, account status, balances, request logs, runtime logs | Add accounts (QR / paste token / import client login) |
+| Enable/disable accounts, refresh credentials, delete accounts | Edit an account's credentials, proxy or rate-limit rules |
+| One-tap check-in, view check-in history | Claim onboarding rewards and plans one by one |
+| Enable/disable models, filter by provider | Edit model mappings, reasoning levels, capability flags |
+| Copy gateway keys, enable/disable keys | Create keys, set provider/model allowlists |
+| Enable/disable proxies, test connectivity | Add proxies, manage subscriptions, download the kernel |
+| Enable/disable scheduled tasks, change intervals | Change port, routing, retry, timeouts, data retention |
+| Assistant quick queries (balances / duplicate models / today's usage / rate-limited accounts) | Free-form assistant chat and tool calling |
+| View Agent takeover status, restore | Rewrite client configs (a phone cannot read local files) |
+
+The desktop sidebar has an "Open on phone" entry at the bottom that leads to the same page.

@@ -41,8 +41,6 @@
 use serde_json::{json, Value};
 
 use crate::server::core::account_store::AccountStore;
-use crate::server::core::providers::adapter::adapter_for;
-use crate::server::core::providers::{kind_from_id, kind_id, ProviderKind};
 use crate::server::logging;
 
 /// 逐条结果的状态取值（**字符串本身就是给前端与日志看的契约**）
@@ -101,7 +99,10 @@ pub async fn refresh_expiring_accounts(store: &AccountStore) -> Vec<Value> {
     // 于是返回顺序与账号列表一致，而不是「先一堆跳过、后面才是刷新的」。
     // 界面上逐条对照时，顺序一致省掉一次按 id 重排。
     let mut slots: Vec<Option<Value>> = vec![None; accounts.len()];
-    let mut pending: Vec<(usize, String, ProviderKind)> = Vec::new();
+    // 待刷新项带着适配器本身（而不是 `ProviderKind`）：插件家没有枚举值，
+    // 而这里已经查过一次表，再查一次是白费
+    let mut pending: Vec<(usize, String, String, std::sync::Arc<dyn crate::server::core::providers::adapter::ProviderAdapter>)> =
+        Vec::new();
     for (index, account) in accounts.iter().enumerate() {
         let id = account
             .get("id")
@@ -120,11 +121,14 @@ pub async fn refresh_expiring_accounts(store: &AccountStore) -> Vec<Value> {
         // 账号页对禁用账号同样显示有效期，漏刷会让它一直挂着「已过期」，
         // 正是本次要修的那类问题；而刷新本身不改启用状态，没有副作用。
         // 未注册的 provider id（手改文件塞进来的）没有适配器可问，如实跳过
-        let Some(kind) = kind_from_id(provider) else {
+        // ── 用 `adapter_by_id` 而不是 `kind_from_id` ────────────────
+        // 插件家的 id 不在枚举里，但它们**有续期能力**（`supports_refresh`
+        // 由握手带回）。只认枚举会让插件家的凭证永远不自动续期 —— 症状是
+        // 用户看到账号「已过期」而网关什么都不做。
+        let Some(adapter) = crate::server::core::providers::adapter::adapter_by_id(provider) else {
             slots[index] = Some(skipped(&id, provider, "未注册的提供商"));
             continue;
         };
-        let adapter = adapter_for(kind);
         if !adapter.supports_refresh() {
             slots[index] = Some(skipped(
                 &id,
@@ -139,7 +143,20 @@ pub async fn refresh_expiring_accounts(store: &AccountStore) -> Vec<Value> {
             slots[index] = Some(skipped(&id, provider, "凭证未过期或临期"));
             continue;
         }
-        pending.push((index, id, kind));
+        // ── 已被上游注销的账号不再重试（issue #215）──────────────
+        // 上游把会话连同 refresh token 一起作废（12153）之后，再刷多少次都不会
+        // 好。没有这道闸时，凭证维护每轮都会重试、每轮都失败 —— 日志刷屏，
+        // 真正需要关注的失败反而被淹掉。标记由刷新链路落（见
+        // `AuthService::mark_needs_relogin`），用户重新登录时清掉。
+        if store.needs_relogin(&id) {
+            slots[index] = Some(skipped(
+                &id,
+                provider,
+                "refresh token 已被上游作废，需要重新登录该账号",
+            ));
+            continue;
+        }
+        pending.push((index, id, provider.to_string(), adapter));
     }
 
     if pending.is_empty() {
@@ -156,9 +173,7 @@ pub async fn refresh_expiring_accounts(store: &AccountStore) -> Vec<Value> {
         "[Accounts]",
         &format!("检测到 {} 个临期账号，开始自动刷新凭证…", pending.len()),
     );
-    for (index, id, kind) in pending {
-        let adapter = adapter_for(kind);
-        let provider = kind_id(kind);
+    for (index, id, provider, adapter) in pending {
         // 走适配器而不是别处：这条已经是四家统一的刷新入口
         // （小浣熊 / AutoClaw 会按来源比较-再写回账号记录，workbuddy 走
         //  `AuthService::refresh_account`），这里不需要知道任何一家的协议。

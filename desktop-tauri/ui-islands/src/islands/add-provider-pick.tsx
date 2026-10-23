@@ -99,10 +99,28 @@ export const PROVIDER_ICONS: Record<string, string> = {
   // （`cloudcache.tencent-cloud.com/qcloud/orcaterm/pwa/icon/orcaterm_192x192.png`，
   // 与客户端 / 官网显示的应用图标为同一形象）
   orcaterm: 'assets/providers/orcaterm.png',
-  // 智谱清言：取自客户端安装包 `resources/app.asar` 内的应用图标
+// 智谱清言：取自客户端安装包 `resources/app.asar` 内的应用图标
   // （`assets/icon.png`，512×512，与系统里显示的应用图标为同一形象；
   // 归一成 256×256 入库 —— 与 officeace 同一处置）
   chatglm: 'assets/providers/chatglm.png',
+  // ModelScope（魔搭）：取自官网 favicon（`https://modelscope.cn/favicon.ico`，
+  // 内含 128×128 的一帧，归一成 256×256 入库 —— 与站点标签页上显示的是同一形象；
+  // 国内 / 国际版共用这一张，同 AutoClaw / MonkeyCode 的形态）
+  modelscope: 'assets/providers/modelscope.png',
+  'modelscope-intl': 'assets/providers/modelscope.png',
+  // AtomCode（AtomGit / GitCode）：取自官网首页的产品图标
+  // （`https://cdn-news.gitcode.com/news/atomcode-icon1.png`，524×524 RGBA，
+  // 归一成 256×256 入库 —— 与官网首页 / 客户端显示的应用图标为同一形象）。
+  // ⚠️ 官网的 `<link rel="icon">` 指向的是 GitCode **平台**的 favicon
+  // （`cdn-static.gitcode.host/static/images/logo-favicon.png`），不是本产品的形象，
+  // 所以没有采用它。
+  atomcode: 'assets/providers/atomcode.png',
+  // LobsterAI（网易有道「有道龙虾」）：图标取自 sibling 仓库 cpa-jethub-plugins 里
+  // 已核过的品牌图标（`internal/jethub/brandicons/brandicons.go` 的 `LobsterAI`
+  // 常量 —— 那正是产品站点从有道共享 CDN 引用的同一枚，不是有道自家的 favicon）。
+  // 该处是 24×24 的 SVG，已栅格化成 256×256 RGBA 入库（与 orcaterm / officeace
+  // 同一处置）。
+  lobsterai: 'assets/providers/lobsterai.png',
 }
 
 /**
@@ -187,19 +205,23 @@ function providerCards(accountType: AccountType): CardItem[] {
     id === WORKBUDDY_PROVIDER
       ? WORKBUDDY_ENTRY_LABEL
       : t(shared().wbProviders?.labelOf?.(id) || fallback)
-  // 摘要还没到时先放 WorkBuddy 一张：弹窗不能因为一次状态未就绪就空着。
-  // 名字与注册表无关（走上面那条中性口径）—— 兜底文案与真实文案不一致的话，
-  // 网络慢的那一次会让用户以为界面变了样。
-  const cards: CardItem[] = list.length
-    ? list.map(item => {
-      const id = String(item.id || '')
-      return {
-        id,
-        label: labelOf(id, String(item.label || item.id || '')),
-        count: Number(item.count) || 0,
-      }
-    })
-    : [{ id: WORKBUDDY_PROVIDER, label: WORKBUDDY_ENTRY_LABEL, count: accountCountOf(WORKBUDDY_PROVIDER) }]
+  // 摘要为空**不再兜底放 WorkBuddy 一张**（2026-10 改）：
+  // 以前那张兜底卡的理由是「弹窗不能因为一次状态未就绪就空着」，但本版本
+  // 转发与账号实现全在插件里，没装插件时它点了必然 503 —— 兜底一张点不动的卡
+  // 比空着更糟（用户以为功能坏了）。空列表的处置交给渲染处：显示
+  // 「先去安装提供商插件包」，并给一个跳转入口。
+  //
+  // 「摘要还没到」那一瞬也走空态：`add-account-modal` 的 reset 已经会在
+  // 列表为空时补拉一次再重画（见那里的 `providers?.load?.().then(bump)`），
+  // 所以空态最多闪一下。这个代价比留一张必然失败的卡小得多。
+  const cards: CardItem[] = list.map(item => {
+    const id = String(item.id || '')
+    return {
+      id,
+      label: labelOf(id, String(item.label || item.id || '')),
+      count: Number(item.count) || 0,
+    }
+  })
   // WorkBuddy 国际版**不进这张卡列表**：它已经由国内版那张卡里的「账号版本」
   // 分段覆盖（同一个 WorkBuddyBlock 的两个选项），两处入口会让用户以为要走两条
   // 流程，而落到国际版卡片时那个块根本不会渲染（`add-account-modal` 按
@@ -321,6 +343,13 @@ export function PickStep({
   const hit = cards.filter(item => !keyword || item.label.toLowerCase().includes(keyword))
   // 有关键词时「新建」那张卡收起来 —— 用户在找的是一家
   const newCard = accountType === TYPE_CUSTOM && !keyword
+  // Agent 段有没有内容：没装插件时后端摘要里一家都没有，这一段就是空的。
+  // 空段不该出现在分段控件里 —— 点进去只有一句「去装插件」，等于把
+  // 「还没装插件」这个状态做成一个可点的分类，用户会以为是功能缺失。
+  const hasAgentCards = React.useMemo(
+    () => providerCards(TYPE_PROXY).length > 0,
+    [version],
+  )
 
   return (
     // 分段与列表同一块：两者是同一个问题的两面（「给什么形态的上游加账号」→
@@ -333,13 +362,16 @@ export function PickStep({
           aria-label={t('账号类型')}
           className={ADD_SEG_CLASS}
           options={[
-            { value: TYPE_PROXY, label: 'Agent' },
+            // Agent 段只在内置家真的存在时出现（判据见 hasAgentCards）
+            ...(hasAgentCards ? [{ value: TYPE_PROXY, label: 'Agent' }] : []),
             { value: TYPE_PRESET, label: t('预置 API') },
             { value: TYPE_CUSTOM, label: t('自定义') },
             // 「导入」分段暂时收起（见 IMPORT_SEGMENT_ENABLED）：整段不生成
             ...(IMPORT_SEGMENT_ENABLED ? [{ value: TYPE_IMPORT, label: t('导入') }] : []),
           ]}
-          value={accountType}
+          // Agent 段被隐藏时不能把选中值留在它上面：分段控件会显示一个
+          // 不存在的选中项，列表也永远空着。回落到「预置 API」。
+          value={!hasAgentCards && accountType === TYPE_PROXY ? TYPE_PRESET : accountType}
           onValueChange={value => onAccountTypeChange(typeValueOf(value))}
         />
         <span id='add-search-wrap' className='add-provider-search ml-auto max-w-[340px] min-w-0 flex-[1_1_200px]'>
@@ -371,6 +403,21 @@ export function PickStep({
         {hit.map(item => <ProviderCard key={item.id} item={item} onPick={onPick} />)}
         {!hit.length && keyword ? (
           <div className='add-provider-empty'>{t('没有匹配「{keyword}」的提供商', { keyword: search.trim() })}</div>
+        ) : null}
+        {/* 一个都没有、也没在搜索 = 还没装插件包。这是**正常状态**（本版本的
+            转发与账号实现都在插件里），所以文案要指路而不是报错；给一个直达
+            插件页的按钮，省得用户自己去左侧菜单找。 */}
+        {!hit.length && !keyword && accountType === TYPE_PROXY ? (
+          <div className='add-provider-empty'>
+            <p className='mb-2'>{t('还没有可用的提供商。各家提供商的转发与账号实现都在插件包里，装好之后这里就会出现。')}</p>
+            <button
+              type='button'
+              className='text-primary underline underline-offset-2'
+              onClick={() => shared().wbApp?.showPage?.('plugins')}
+            >
+              {t('去安装提供商插件包')}
+            </button>
+          </div>
         ) : null}
       </div>
     </DialogSection>

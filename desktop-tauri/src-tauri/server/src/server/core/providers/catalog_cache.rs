@@ -33,7 +33,7 @@
 //!
 //! ── 值的形态 ────────────────────────────────────────────────
 //! ```json
-//! { "raccoon": { "models": [ … ], "fetchedAt": 1758000000000 } }
+//! { "workbuddy": { "models": [ … ], "fetchedAt": 1758000000000 } }
 //! ```
 //! `models` 存的是**各家内存状态的形态**（即落地后的形态），恢复时原样装回。
 //! 不在这里做任何字段映射：映射只属于各家的落地函数，两处各写一份迟早分叉，
@@ -68,69 +68,45 @@ pub const SCOPE_WORKBUDDY: &str = "workbuddy";
 /// WorkBuddy 国际版（`/v3/config`；另一个站点、另一份清单，见
 /// `providers::workbuddy::region`）
 pub const SCOPE_WORKBUDDY_INTL: &str = "workbuddyIntl";
-/// 小浣熊（`/model_catalog`）
-pub const SCOPE_RACCOON: &str = "raccoon";
-/// Qoder 国际版
-pub const SCOPE_QODER_GLOBAL: &str = "qoderGlobal";
-/// Qoder 中国版
-pub const SCOPE_QODER_CN: &str = "qoderCn";
 /// CatPaw（`/api/agent/maas/model-types`）
 pub const SCOPE_CATPAW: &str = "catpaw";
 /// AutoClaw 国内版
 pub const SCOPE_AUTOCLAW_CN: &str = "autoclawCn";
 /// AutoClaw 国际版
 pub const SCOPE_AUTOCLAW_INTL: &str = "autoclawIntl";
-/// Cline（两个池共用一份远程清单）
-pub const SCOPE_CLINE: &str = "cline";
-/// Accio 国际版
-pub const SCOPE_ACCIO_GLOBAL: &str = "accioGlobal";
-/// Accio 国内版
-pub const SCOPE_ACCIO_CN: &str = "accioCn";
 /// CodeArts（华为云 snap-access；三源合并成一份清单，所以一个 scope）
 pub const SCOPE_CODEARTS: &str = "codearts";
-/// Trae SOLO（`/api/ide/v1/get_detail_param`）
-pub const SCOPE_TRAE: &str = "trae";
 /// Loomy（讯飞；`GET {集成网关}/api/v1/models`，OpenAI 格式目录）
 pub const SCOPE_LOOMY: &str = "loomy";
 /// MonkeyCode 国内版（`GET {站点}/api/v1/users/models`）
 pub const SCOPE_MONKEYCODE_CN: &str = "monkeycodeCn";
 /// MonkeyCode 国际版（两个站点各一份清单，缓存分开）
 pub const SCOPE_MONKEYCODE_INTL: &str = "monkeycodeIntl";
-/// Command Code（`GET /provider/v1/models`；单一域名、无地区之分，单格即可）
-pub const SCOPE_COMMANDCODE: &str = "commandcode";
 /// Antigravity（`POST {base}/v1internal:fetchAvailableModels`；没有地区参数
 /// —— `sandbox`/`daily`/`prod` 是环境不是地区，所以单格，见
 /// `providers::antigravity::models` 的模块头）
 pub const SCOPE_ANTIGRAVITY: &str = "antigravity";
 
-/// OfficeAce（华为云果办 / OfficeClaw）的模型目录缓存槽
-pub const SCOPE_OFFICEACE: &str = "officeace";
+/// AtomCode（AtomGit / GitCode）的模型目录缓存槽
+pub const SCOPE_ATOMCODE: &str = "atomcode";
 
-/// 智谱清言（`chatglm.cn`）的模型目录缓存槽
-pub const SCOPE_CHATGLM: &str = "chatglm";
+/// LobsterAI（网易有道「有道龙虾」）的模型目录缓存槽
+pub const SCOPE_LOBSTERAI: &str = "lobsterai";
 
 /// 全部 scope（事实来源：`cached_scopes` 按它遍历；新增一家时加在这里）。
 pub const ALL_SCOPES: &[&str] = &[
     SCOPE_WORKBUDDY,
     SCOPE_WORKBUDDY_INTL,
-    SCOPE_RACCOON,
-    SCOPE_QODER_GLOBAL,
-    SCOPE_QODER_CN,
     SCOPE_CATPAW,
     SCOPE_AUTOCLAW_CN,
     SCOPE_AUTOCLAW_INTL,
-    SCOPE_CLINE,
-    SCOPE_ACCIO_GLOBAL,
-    SCOPE_ACCIO_CN,
     SCOPE_CODEARTS,
-    SCOPE_TRAE,
     SCOPE_LOOMY,
     SCOPE_MONKEYCODE_CN,
     SCOPE_MONKEYCODE_INTL,
-    SCOPE_COMMANDCODE,
     SCOPE_ANTIGRAVITY,
-    SCOPE_OFFICEACE,
-    SCOPE_CHATGLM,
+    SCOPE_ATOMCODE,
+    SCOPE_LOBSTERAI,
 ];
 
 /// 一份清单缓存

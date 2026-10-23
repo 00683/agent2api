@@ -39,7 +39,6 @@ use serde_json::{json, Value};
 
 use crate::server::core::account_store::AccountStore;
 use crate::server::core::limiter;
-use crate::server::core::providers::adapter::adapter_for;
 use crate::server::core::usage_records;
 
 use crate::server::logging;
@@ -213,14 +212,18 @@ async fn query_usage_inner(
             .map_err(|error| UsageFailure::Request(error.message, error.code));
     }
     // 注册表里没有的 id（前端比后端新、或手改过的账号文件）：明确报「未知的
-    // 提供商」，不猜成任何一家（与全仓的 provider 口径一致）
-    let Some(kind) = crate::server::core::providers::kind_from_id(provider_id) else {
+    // 提供商」，不猜成任何一家（与全仓的 provider 口径一致）。
+    //
+    // ── 插件家在这里分流 ────────────────────────────────────────
+    // 它们的 id 不在枚举里，但**在运行时注册表里** —— 用 `adapter_by_id`
+    // 同时覆盖两类，而不是只认 `kind_from_id`（那会让插件家的余额查询
+    // 报「未知的提供商」，而界面上明明有那张卡片）。
+    let Some(adapter) = crate::server::core::providers::adapter::adapter_by_id(provider_id) else {
         return Err(UsageFailure::Request(
             format!("未知的提供商 {provider_id}，无法查询余额"),
             None,
         ));
     };
-    let adapter = adapter_for(kind);
     match adapter.query_usage(store, id).await {
         Ok(usage) => Ok(usage),
         Err(error) => {
@@ -268,8 +271,10 @@ fn supports_usage(account: &Value) -> bool {
     if crate::server::core::custom_providers::is_custom_provider_id(provider_id) {
         return crate::server::core::providers::custom::balance::supports_usage(provider_id);
     }
-    crate::server::core::providers::kind_from_id(provider_id)
-        .map(|kind| adapter_for(kind).supports_usage())
+    // 用 `adapter_by_id` 而不是 `kind_from_id`：插件家的 id 不在枚举里，
+    // 但它们同样声明了 `supports_usage`（见上面那条注释）。
+    crate::server::core::providers::adapter::adapter_by_id(provider_id)
+        .map(|adapter| adapter.supports_usage())
         .unwrap_or(false)
 }
 

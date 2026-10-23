@@ -49,8 +49,8 @@ use crate::server::core::task_state::{self, Claim, TaskState};
 use crate::server::logging;
 
 use super::{
-    api_base, client, pick_asset_by_name, pick_installer, server_bundle_name, version,
-    UpdateError, UpdateManager, CURRENT_VERSION,
+    api_base, client, pick_android_apk, pick_asset_by_name, pick_installer, server_bundle_name,
+    version, UpdateError, UpdateManager, CURRENT_VERSION,
 };
 
 /// GitHub API 探测请求的总超时（下载走 `None`，见 `mod.rs` 的同名说明）。
@@ -239,7 +239,7 @@ impl UpdateManager {
     /// 请求，带 ETag 也照样计入限额，反而多一层状态要维护。真正省额度的是
     /// 排期（本模块）与「带上 GITHUB_TOKEN」（`client::github_headers`）。
     async fn fetch_release(&self, current_version: &str) -> Result<(Option<Value>, i64), (UpdateError, i64)> {
-        let repository = self.repository();
+        let repository = self.resolve_repository().await;
         // 通道在**每次检查**时现读（拨完开关下一次检查就换路，不重启进程）
         let beta = config::update_beta();
         // 「留在 beta 频道」的判据：开关开着 **且** 当前跑的就是 beta 版。
@@ -327,6 +327,9 @@ fn release_json(payload: &Value, repository: &str) -> Value {
         "pageUrl": if page_url.is_empty() { format!("https://github.com/{repository}/releases") } else { page_url },
         "prerelease": payload.get("prerelease").and_then(Value::as_bool) == Some(true),
         "asset": pick_installer(payload.get("assets")),
+        // 手机端（APK）的安装包。与 `asset` 并列而不是二选一：网关可能同时被
+        // 电脑和手机访问，两边各自挑自己那份，谁都不该把对方的那条藏起来。
+        "androidAsset": pick_android_apk(payload.get("assets")),
         "serverBundle": bundle_asset.unwrap_or(Value::Null),
         "serverChecksums": bundle_checksums.unwrap_or(Value::Null),
     })

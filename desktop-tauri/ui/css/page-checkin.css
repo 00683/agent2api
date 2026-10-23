@@ -48,7 +48,11 @@
 .ck-stat-foot { margin-top: 4px; font-size: 12px; color: var(--text-3); }
 .ck-stat .ck-stat-bar { margin-top: 8px; }
 /* 无数据（还没读到快照）时的占位灰 */
+/* 数据还没到：显示灰色 `—` / `无` 而不是伪造一个 0。
+   两种写法都要有 —— 直接挂在 `.ck-stat-value` 上（整值缺失），
+   以及它内部的一个 span（值里只有一部分没到，例如「— / 9」）。 */
 .ck-stat-value.ck-pending { color: var(--text-3); }
+.ck-stat-value .ck-pending { color: var(--text-3); }
 
 /* ── 任务面板列（签到中心 tab；单列，三块面板纵向排）── */
 .ck-main { min-width: 0; display: grid; gap: 0; }
@@ -61,7 +65,9 @@
   .ck-stats { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* ── 每日签到：提供商行 ── */
+/* ── 提供商行（成长任务那一块）──
+   与 `.ck-row` 同一形态，但多了「整行可点展开」与「展开区」两个语义 ——
+   定时条目行是不可展开的，所以两种外壳各留一份。 */
 .ck-prov-row { border-bottom: 1px solid var(--hairline); }
 .ck-prov-row:last-child { border-bottom: 0; }
 .ck-prov-main {
@@ -69,25 +75,17 @@
   align-items: center;
   gap: 12px;
   padding: 11px 16px;
-  cursor: pointer;
-  user-select: none;
+  cursor: default;
 }
-.ck-prov-main:hover { background: var(--row-hover); }
-.ck-prov-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--control-bg);
-  color: var(--text-2);
-  overflow: hidden;
-}
-.ck-prov-logo img { width: 100%; height: 100%; object-fit: contain; }
+.ck-prov-main[role='button'] { cursor: pointer; user-select: none; }
+.ck-prov-main[role='button']:hover { background: var(--row-hover); }
+.ck-prov-row.open .ck-prov-main { background: var(--row-hover); }
+.ck-prov-detail { padding: 2px 16px 12px 58px; }
+
+/* ── 行内三段文字（定时条目行在用）──
+   `.ck-row-*` 与 `.ck-prov-*` 是同一套形态的两个名字：前者给「可展开的行」
+   （每日签到 / 新手福利），后者给「开关 + 三段文字 + 右侧操作」（定时条目）。
+   行外壳 `.ck-row` / `.ck-row-main` 见文件末尾的页面骨架那一段。 */
 .ck-prov-info { flex: 1; min-width: 0; }
 .ck-prov-name {
   font-weight: 600;
@@ -99,11 +97,6 @@
 }
 .ck-prov-desc { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 .ck-prov-right { display: flex; align-items: center; gap: 10px; flex: none; }
-.ck-prov-count { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.ck-chev { color: var(--text-3); transition: transform 0.15s; flex: none; }
-.ck-prov-row.open .ck-chev { transform: rotate(90deg); }
-.ck-prov-detail { display: none; padding: 2px 16px 12px 58px; }
-.ck-prov-row.open .ck-prov-detail { display: block; }
 /* 范围外账号的折叠说明（每日签到卡底部） */
 .ck-fold-note {
   padding: 9px 16px;
@@ -166,6 +159,18 @@
   border-bottom: 1px solid var(--hairline);
 }
 .ck-welfare-row:last-child { border-bottom: 0; }
+
+/* 成长任务展开区底部的三个动作（开学季 / 抽奖 / 猫猫旅行）：
+   它们不属于任务树，所以不从 `ck-task-line` 拼，单独给一行 */
+.ck-grow-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--hairline);
+}
 
 /* ── 自动签到设置卡 ── */
 .ck-set-line {
@@ -347,23 +352,8 @@ body.ck-chain-dragging { cursor: grabbing; user-select: none; }
 .ck-range-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-mini-warn { margin-top: 6px; font-size: 11.5px; color: var(--warn); }
 
-/* ── 签到记录：明细表 ── */
-.ck-records-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--hairline);
-}
-/* 筛选行：时间档位 / 结果 / 提供商在左，关键词与读数在右（中间的 .spacer 把两侧顶开）。
-   除搜索框外一律不压缩（分段控件与下拉被挤扁就没法读了）—— 弹性只留给搜索框，
-   它的宽度与收缩下限写在 JSX 的工具类上（组件库 Input 自带 w-full，且工具类是分层
-   + !important 的，页面 CSS 里的 width / flex-basis 压不过它，见 checkin-records-tab.tsx
-   那处注释）；这条 `> *` 只是给不支持工具类那几个控件的兜底，两处不冲突 */
-.ck-records-filters > * { flex-shrink: 0; }
-/* 读数在换行后也靠右（一行放得下时由 .spacer 顶开，两者不冲突） */
-.ck-records-filters > .panel-sub { margin-left: auto; }
+/* ── 签到记录：明细表 ──
+   筛选条本身定义在文件末尾的页面骨架那一段（`.ck-filters`），这里只管表。 */
 .ck-records-scroll { overflow-x: auto; }
 
 /* 列宽。table-layout: fixed 下按 colgroup 分配：时间列是**定宽 px**（它装的是
@@ -420,3 +410,196 @@ body.ck-chain-dragging { cursor: grabbing; user-select: none; }
   align-items: center;
   gap: 10px;
 }
+
+/* ─────────────────────────────────────────────
+   下面这一组是**页面骨架**：行、徽标、输入框尺寸、说明块。
+
+   早先它们住在插件页自己的 `page.css` 里（iframe 形态下那份样式进不来，
+   只能随页面一起打包）。页面迁回客户端之后，这些类与其它页的 `.panel`
+   / `.panel-head` 是同一层的东西，所以回到 `ui/css/` 里 —— 于是整页的
+   行高、间距、字色与账号页、模型管理页逐字相同。
+   ───────────────────────────────────────────── */
+
+/* 页面容器：不额外加左右留白（`.content` 已经给了），只兜住内部间距 */
+.ck-page { min-width: 0; }
+.ck-main { min-width: 0; display: grid; gap: 0; }
+/* `.panel` 自带 margin-bottom，用相邻选择器统一成 14px，避免叠成 28px */
+.ck-main > .panel { margin-bottom: 0; }
+.ck-main > .panel + .panel { margin-top: 14px; }
+
+.ck-tabs-spacer { flex: 1; }
+/* 顶栏刷新：与其它页顶栏的文字按钮同一档（不高过 SegmentedControl 的 24px 太多） */
+.ck-refresh {
+  padding: 0 8px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ck-refresh:hover { background: var(--control-hover); color: var(--text); }
+
+/* 自动签到徽标：三档色由 data-tone 给 */
+.ck-auto-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-xs);
+  background: var(--control-bg);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ck-auto-badge[data-tone='ok'] {
+  border-color: var(--success-bd);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.ck-auto-badge[data-tone='warn'] {
+  border-color: var(--warning-bd);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* 错误条里的「重试」：文字按钮，与页面里其它次要动作同一档 */
+.ck-error-retry {
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── 可展开的行 ── */
+.ck-row { border-bottom: 1px solid var(--hairline); }
+.ck-row:last-child { border-bottom: 0; }
+.ck-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  cursor: default;
+}
+.ck-row-main[role='button'] { cursor: pointer; user-select: none; }
+.ck-row-main[role='button']:hover { background: var(--row-hover); }
+.ck-row.open > .ck-row-main { background: var(--row-hover); }
+.ck-row-info { flex: 1; min-width: 0; }
+.ck-row-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.ck-row-desc { margin-top: 2px; font-size: 12px; color: var(--text-3); }
+.ck-row-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.ck-row-count { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ck-row-detail { padding: 2px 16px 12px 58px; }
+
+/* 展开箭头：展开时转 90°（与账号页同一观感） */
+.ck-chev {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-3);
+  transition: transform .15s;
+}
+.ck-chev.open { transform: rotate(90deg); }
+/* 整行可点时的箭头要单独接点击（不能连带切换整行） */
+.ck-chev-hit { display: inline-flex; cursor: pointer; }
+
+/* 提供商徽标：与账号页 `.prov-logo` 同一组取值 */
+.ck-badge {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--control-bg);
+  overflow: hidden;
+}
+.ck-badge img { width: 100%; height: 100%; object-fit: contain; }
+
+/* ── 设置行（标签 + 内容）── */
+.ck-sub { font-size: 11.5px; color: var(--text-3); }
+.ck-inline { display: inline-flex; align-items: center; gap: 2px; }
+.ck-right { text-align: right; }
+/* 内容要横排的行自己加这个类（`.ck-set-v` 默认是块级，见旧实现） */
+.ck-set-row { display: flex; align-items: center; gap: 8px; }
+/* 卡内正文留白（旧实现用 Tailwind 的 p-4 = 16px） */
+.ck-panel-pad { padding: 16px; }
+
+/* ── 输入类控件的宽度约束 ──
+   组件库的 Input 自带 `w-full`（`!important`），所以只能压 max-width */
+.ck-sched-name { max-width: 220px; }
+.ck-sched-time-input { max-width: 96px; }
+.ck-chain-input { max-width: 260px; }
+.ck-travel-times { max-width: 320px; }
+.ck-input-select { min-width: 118px; width: auto; }
+.ck-input-search { flex: 1; min-width: 140px; max-width: 260px; }
+/* 下拉框是原生 `<select>`（与组件库 Select 的视觉差异很小，且它是非受控的） */
+.ck-input {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  background: var(--control-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  min-width: 0;
+  outline: none;
+}
+.ck-input:hover { border-color: var(--control-border-hover); }
+.ck-input:focus { border-color: var(--primary); box-shadow: var(--ring); }
+
+/* ── 记录页的筛选条与分页 ── */
+.ck-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.ck-filters > * { flex-shrink: 0; }
+.ck-filters-count { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
+.ck-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.ck-pager-label { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* ── 空态 ── */
+.ck-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px 16px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.ck-empty-state p { margin: 0; line-height: 1.7; }
+.ck-empty-actions { display: flex; gap: 8px; }
+
+/* ── 任务行（新手福利明细）── */
+.ck-task-title { flex: 1; min-width: 0; }
+.ck-task-pts { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }

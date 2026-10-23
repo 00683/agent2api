@@ -208,7 +208,24 @@ pub const KEY_STRIP_NEWLINE_KEEPALIVE: &str = "stripNewlineKeepalive";
 /// `parse::env_captcha_enabled`）—— Docker 想从第一次启动就关掉校验的，
 /// 在 compose / `.env` 里设它即可；设置页改过一次之后以库里的值为准
 /// （优先级「配置里的值 > 环境变量」）。
+///
+/// ── 分端（2026-10 起）──────────────────────────────────────
+/// 本键是**旧版的单开关**，现在只作为两端的共同默认值：读取时优先看
+/// [`KEY_CAPTCHA_DESKTOP`] / [`KEY_CAPTCHA_WEB`]，两者都没有才回落它。
+/// 升级时两个分端键缺省即回落旧值 —— 老用户改过的开关状态不会丢。
 pub const KEY_CAPTCHA_ENABLED: &str = "captchaEnabled";
+
+/// 桌面端（Tauri 壳）的机器人校验开关。
+///
+/// 桌面形态默认**开启**（与旧单开关一致）：登录 / 注册端点对局域网里的
+/// 其他设备同样开放，ALTCHA 是同一道门槛。用户可在设置里单独关掉 ——
+/// 本机访问而嫌算力开销时，关掉只影响桌面形态。
+pub const KEY_CAPTCHA_DESKTOP: &str = "captchaDesktop";
+
+/// 网页端（headless / Docker / 浏览器面板）的机器人校验开关。
+///
+/// headless 形态默认**开启**：这是暴露在真实网络上的登录页，暴破成本最低。
+pub const KEY_CAPTCHA_WEB: &str = "captchaWeb";
 
 /// models.dev 模型元数据开关的键（config.json 键，见 `core::model_meta`）。
 ///
@@ -302,6 +319,22 @@ pub const KEY_PROMPT_GATEWAY: &str = "promptGateway";
 ///
 /// 删掉某家 = 把这个键从对象里去掉（接口侧传 `null`）= 回到官方原文。
 pub const KEY_PROMPT_GATEWAY_TEXT: &str = "promptGatewayText";
+
+/// 插件侧读「网关自带提示词开关」时用的**约定键名**（`settings.get` 的 `key`）。
+///
+/// ── 为什么插件不能直接读 `KEY_PROMPT_GATEWAY` ────────────────
+/// `settings.get` 的默认口径是「读 `plugin.<provider>.<key>` 这条**插件私有**
+/// 配置」，而提示词开关是网关自己的用户配置（存在顶层 `promptGateway` 表里、
+/// 按 provider id 索引）。给这两个键名开一条专用回答，插件就能读到同一份用户
+/// 配置 —— 否则界面上拨了开关、实际发出去的请求不变。
+pub const PLUGIN_SETTING_GATEWAY_PROMPT: &str = "gatewayPrompt";
+
+/// 插件侧读「网关自带提示词正文覆盖」时用的约定键名（与
+/// [`PLUGIN_SETTING_GATEWAY_PROMPT`] 同一处置）。
+///
+/// 回答的形状是 `{identity, stable, dynamic}`（只含用户改过的段，缺的段回
+/// `Null` 表示「用官方原文」）。
+pub const PLUGIN_SETTING_GATEWAY_PROMPT_TEXT: &str = "gatewayPromptText";
 
 /// 写入**某一家**的提示词覆盖时的载荷（`set_prompt_provider` 的入参）。
 ///

@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use serde_json::{json, Value};
 
 use crate::server::core::account_store::sql;
+use crate::server::core::account_store::store_view::Visibility;
 use crate::server::core::account_store::store::{AccountStore, AccountStoreError};
 
 impl AccountStore {
@@ -83,7 +84,7 @@ impl AccountStore {
         Ok(json!({
             "ok": true,
             "changed": changed,
-            "list": self.snapshot(&state),
+            "list": self.snapshot(&state, Visibility::UserFacing),
         }))
     }
 }

@@ -4,13 +4,13 @@
 
 **여러 AI 데스크톱 클라이언트의 로그인 상태를 하나의 로컬 OpenAI 호환 API 게이트웨이로**
 
-[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | **한국어** | [Português (BR)](./README.pt-BR.md)
+[English](../README.md) | [简体中文](./README.zh-CN.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | **한국어** | [Português (BR)](./README.pt-BR.md)
 
 [![license](https://img.shields.io/badge/license-MIT%20%2B%20고지-green)](../LICENSE)
-[![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![release](https://img.shields.io/github/v/release/aimod-cc/Agent2API?include_prereleases)](https://github.com/aimod-cc/Agent2API/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
-[![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![stars](https://img.shields.io/github/stars/aimod-cc/Agent2API?style=flat&color=yellow)](https://github.com/aimod-cc/Agent2API/stargazers)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/Agent2API/releases/latest)
 
 [✨ 핵심 기능](#-핵심-기능) • [💬 커뮤니티 및 지원](#-커뮤니티-및-지원) • [🤝 지원 공급자](#-지원-공급자) • [🚀 빠른 시작](#-빠른-시작) • [📦 설치와 배포](./install.ko.md) • [📸 화면 미리보기](#-화면-미리보기) • [🔧 개발 및 빌드](#-개발-및-빌드) • [📜 사용 고지](#-사용-고지)
 
@@ -23,7 +23,7 @@ Agent2API는 여러 AI 데스크톱 클라이언트에 로그인된 계정을 �
 ## ✨ 핵심 기능
 
 - 🔌 **OpenAI 호환** —— 클라이언트에 `base_url`만 넣으면 바로 사용. Chat / Responses / Messages 세 가지 프로토콜 모두 지원
-- 🏪 **내장 공급자 17곳** —— WorkBuddy, 小浣熊, CatPaw, Qoder, Trae 등 바로 사용 가능하며 사용자 지정 공급자도 지원
+- 🏪 **내장 공급자 22곳** —— WorkBuddy, 小浣熊, CatPaw, Qoder, Trae 등 바로 사용 가능하며 사용자 지정 공급자도 지원
 - 🔁 **자격 증명 자동 갱신** —— 토큰은 만료 전 자동 교체, 만료 임박분은 일괄 갱신, 모델 카탈로그도 함께 최신화
 - 🪂 **다중 계정 로테이션** —— 우선순위대로 큐잉, 429는 다음 계정으로, 한도 쿨다운 중엔 기다리지 않고 건너뜀
 - 🛡️ **아웃바운드 프록시** —— 계정마다 전용 출구 IP 지정, 아웃바운드 핑거프린트는 공식 클라이언트로 위장
@@ -48,7 +48,9 @@ Agent2API는 여러 AI 데스크톱 클라이언트에 로그인된 계정을 �
 
 ## 💬 커뮤니티 및 지원
 
-- **QQ 그룹**: Agent2API 교류 그룹, 그룹 번호 `1127656296`(QQ에서 번호를 검색해 참여하세요). 질문과 피드백은 그룹에서 환영합니다.
+- **QQ 그룹**: Agent2API 교류 그룹 —— **그룹 1(`1127656296`)은 곧 정원이 차므로 그룹 2(`1130894674`)에 먼저 참여해 주세요** (QQ에서 번호를 검색해 참여하세요).
+- **Telegram 그룹**: <https://t.me/+9gM8YPvgRL02NGRl>
+- **Discord 서버**: <https://discord.gg/z9GzSJMWp>
 - **💖 후원**: Agent2API가 도움이 되셨다면 [작성자에게 커피 한 잔](./SPONSOR.md)도 환영합니다. 후원은 자발적이며 아무 기능도 해제되지 않습니다.
 - **🤝 스폰서 / 비즈니스**: 프로젝트를 후원하거나 여기에 제품을 소개하고 싶다면 [541675139@qq.com](mailto:541675139@qq.com)으로 메일 주세요.
 
@@ -77,6 +79,9 @@ Agent2API는 여러 AI 데스크톱 클라이언트에 로그인된 계정을 �
 | OfficeAce(Huawei Cloud, OfficeClaw) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | OrcaTerm(Tencent Cloud) | ✓ | ✓ | ✓ | ✓ | — | — |
 | 智谱清言(Zhipu Qingyan) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ModelScope(魔搭, 중국판 / 국제판) | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| AtomCode(AtomGit / GitCode) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LobsterAI(NetEase Youdao, 有道龙虾) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | 사용자 지정 프로바이더 | ✓ | — | ✓ | — | — | — |
 
 > 참고: 모델 목록의 ✓는 온라인 자동 가져오기를 지원한다는 뜻입니다(일부 플랫폼은 내장 정적 목록도 함께 사용). ZCode는 내장 정적 목록만 제공합니다. 토큰 자동 갱신의 ✗는 해당 플랫폼에 사용 가능한 갱신 수단이 없다는 뜻입니다(계정은 자격 증명이 유효한 동안 정상적으로 사용 가능). Qoder 출석은 중국판에서만 지원됩니다.
@@ -121,6 +126,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 ```
 
 어느 형태든 설치 후 패널(`http://127.0.0.1:3065/`. 서버와 Docker 는 호스트 IP 로 바꿔서)을 열어 관리자 계정을 등록하고, "게이트웨이 키" 페이지에서 키를 만드세요. 연결 확인: `curl http://127.0.0.1:3065/health`
+
+**모바일**: 브라우저에서 `http://<게이트웨이 IP>:3065/m`를 열면 됩니다("홈 화면에 추가"로 전체 화면 PWA 가능). 독립 아이콘이 필요하면 Release의 `Agent2API-<버전>.apk`(Android) 또는 `Agent2API-<버전>.ipa`(iOS, 미서명 — 직접 재서명 필요)를 설치하세요. 자세한 내용: [설치 및 배포 → 모바일](install.ko.md#모바일).
 
 ## 📸 화면 미리보기
 
@@ -176,7 +183,7 @@ macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있습니다**(`npm --prefi
 
 ### 학습과 교류 목적에 한정
 
-이 프로젝트는 HTTP 리버스 프록시, SSE 스트리밍 패스스루, 다중 업스트림 프로토콜 적응, 데스크톱 패키징(Tauri) 같은 기술 주제를 익히기 위한 실습 프로젝트이며, **개인 학습과 연구 목적으로만** 제공됩니다. 공식 제품이 아니며 Tencent 및 WorkBuddy / CodeBuddy, Meituan 및 CatPaw, SenseTime 및 小浣熊, Zhipu 및 AutoClaw / autoglm, Alibaba 및 Qoder / Accio, Huawei Cloud 및 CodeArts / OfficeAce, ByteDance 및 Trae, iFlytek 및 Loomy, Baidu Wenku 및 KukuAI, 长亭科技 및 MonkeyCode, Command Code, Google 및 Antigravity 와 아무런 관련이 없고, 그 승인이나 후원도 받지 않았습니다.
+이 프로젝트는 HTTP 리버스 프록시, SSE 스트리밍 패스스루, 다중 업스트림 프로토콜 적응, 데스크톱 패키징(Tauri) 같은 기술 주제를 익히기 위한 실습 프로젝트이며, **개인 학습과 연구 목적으로만** 제공됩니다. 공식 제품이 아니며 Tencent 및 WorkBuddy / CodeBuddy, Meituan 및 CatPaw, SenseTime 및 小浣熊, Zhipu 및 AutoClaw / autoglm, Alibaba 및 Qoder / Accio, Huawei Cloud 및 CodeArts / OfficeAce, ByteDance 및 Trae, iFlytek 및 Loomy, Baidu Wenku 및 KukuAI, 长亭科技 및 MonkeyCode, Command Code, Google 및 Antigravity, Alibaba 및 ModelScope(魔搭), GitCode / AtomGit 및 AtomCode, NetEase Youdao 및 LobsterAI(有道龙虾) 와 아무런 관련이 없고, 그 승인이나 후원도 받지 않았습니다.
 
 ### 리버스 프록시 동작에 대하여
 
@@ -202,17 +209,17 @@ macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있습니다**(`npm --prefi
 
 ## ⭐ Star History
 
-<a href="https://star-history.com/#aimod-cc/agent2api&Date">
+<a href="https://star-history.com/#aimod-cc/Agent2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
   </picture>
 </a>
 
 <div align="center">
 
-**[최신 버전 내려받기](https://github.com/aimod-cc/agent2api/releases/latest)** • **[문제 보고](https://github.com/aimod-cc/agent2api/issues)**
+**[최신 버전 내려받기](https://github.com/aimod-cc/Agent2API/releases/latest)** • **[문제 보고](https://github.com/aimod-cc/Agent2API/issues)**
 
 이 프로젝트가 도움이 되었다면 ⭐️ Star 를 눌러 주세요!
 

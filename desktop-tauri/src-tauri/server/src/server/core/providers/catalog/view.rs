@@ -78,17 +78,69 @@ pub fn models_response(store: &AccountStore, scope: Option<&KeyScope>) -> Value 
         .collect();
     let builtin_count = data.len();
     super::super::custom::append_models_response(store, scope, &mut data);
-    // 自定义家贡献了条目时，这份列表就不再是单/多家内置的来源了 ——
+    // ── 插件家（运行时装进来的那些）────────────────────────────
+    // `active_manifests` 的键是 `ProviderKind`（编译期枚举），装不进运行期
+    // 才出现的 id。少了这一段，装了插件、模型也刷到了，`/v1/models` 里却
+    // 看不到它的任何模型 —— 客户端点名插件模型时还会被入口校验判成
+    // 「模型不存在」（见 `pipeline::resolve_model`）。追加在末尾，内置家的
+    // 条目顺序因此逐字不变。
+    append_plugin_models(store, scope, &mut data);
+    // 自定义家 / 插件家贡献了条目时，这份列表就不再是单/多家内置的来源了 ——
     // 与「多家内置」同一个词（aggregate），下游据此知道列表是拼出来的。
     let source = if data.len() > builtin_count { "aggregate" } else { source };
     list_response_from(data, source, refreshed_at)
 }
 
+/// 把已装入插件的模型并进对外清单（返回追加的条数）。
+///
+/// ── 判据与内置家同源 ────────────────────────────────────────
+/// 内置家要「有可用账号」才广告（`provider_available`），插件家同样：
+/// 没有账号时广告出去只会让客户端选到一条转发必然 503 的模型。
+fn append_plugin_models(
+    store: &AccountStore,
+    scope: Option<&KeyScope>,
+    data: &mut Vec<Value>,
+) -> usize {
+    let mut claimed: HashSet<String> = data.iter().map(|item| model_id(item).to_lowercase()).collect();
+    let before = data.len();
+    for id in crate::server::core::plugin_host::installed_ids() {
+        if !key_scope::allows_provider(scope, &id) {
+            continue;
+        }
+        if store.accounts_for_provider(&id).is_empty() {
+            continue;
+        }
+        let Some(adapter) = crate::server::core::plugin_host::lookup(&id) else {
+            continue;
+        };
+        for model in adapter.list_models() {
+            let id_text = model_id(&model);
+            if id_text.is_empty() || !key_scope::allows_model(scope, &id_text) {
+                continue;
+            }
+            if !claimed.insert(id_text.to_lowercase()) {
+                continue;
+            }
+            data.push(list_item(&model, &id));
+        }
+    }
+    data.len() - before
+}
+
 /// 一家可用提供商都没有时（没加账号），入口校验要跳过「广告里有才放行」与
 /// Key 白名单两条判定，把「没有可用账号」那句更可操作的错误留给转发层 ——
 /// 与改造前的两条例外逐字同源（见 `pipeline::resolve_model` 的说明）。
+///
+/// 插件家同样算「可用」：只有插件家账号时若这里报 false，入口校验会整段跳过
+/// —— 那意味着任何模型名都被放行到转发层，与「装了插件却像是没装」是同一个
+/// 症状的另一面。
 pub fn has_available_providers(store: &AccountStore) -> bool {
-    !active_manifests(store).is_empty()
+    if !active_manifests(store).is_empty() {
+        return true;
+    }
+    crate::server::core::plugin_host::installed_ids()
+        .into_iter()
+        .any(|id| !store.accounts_for_provider(&id).is_empty())
 }
 
 pub fn advertised_model_ids(store: &AccountStore) -> Vec<String> {
@@ -131,7 +183,116 @@ pub fn models_by_provider(store: &AccountStore) -> Value {
         names.sort_by_key(|name| name.to_lowercase());
         map.insert(provider, json!(names));
     }
+    // 插件家（网关 Key 的「可用模型」多选按 provider 分组读这张表）
+    for id in crate::server::core::plugin_host::installed_ids() {
+        let Some(adapter) = crate::server::core::plugin_host::lookup(&id) else {
+            continue;
+        };
+        let mut names: Vec<String> = adapter.list_models().iter().map(model_id).collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        map.insert(id, json!(names));
+    }
     Value::Object(map)
+}
+
+/// 管理视图里的一行模型（`models` 数组的一项）+ 它对应的默认映射。
+///
+/// ── 为什么抽成函数 ──────────────────────────────────────────
+/// 内置家与插件家的清单来源完全不同（编译期枚举 vs 运行时注册表），但**行
+/// 形状必须一致** —— 前端按同一套键渲染。两处各写一份的后果是插件家的行
+/// 少几个键（能力位 / 可见性 / 刷新时刻），界面上表现为「这一家的列全是空」。
+///
+/// `provider` 是 `&str`（不是 `ProviderKind`）：插件家没有枚举值。
+#[allow(clippy::too_many_arguments)]
+fn push_managed_model(
+    rules: &model_rules::ModelRules,
+    models: &mut Vec<Value>,
+    mappings: &mut Vec<Value>,
+    attached: &mut HashSet<usize>,
+    claimed: &mut HashSet<(String, String)>,
+    provider: &str,
+    source: &str,
+    refreshed_at: i64,
+    item: Value,
+) {
+    let id = model_id(&item);
+    if id.is_empty() {
+        return;
+    }
+    if !claimed.insert((provider.to_string(), id.to_lowercase())) {
+        return; // 同家同 id 的重复条目（见 `manage_view` 里 claimed 的说明）
+    }
+    let default = rules.binding(provider, &id, &id);
+    let enabled = rules.default_enabled(provider, &id);
+    mappings.push(json!({
+        "alias": id, "target": id, "provider": provider, "enabled": enabled,
+        "reasoning": default.and_then(|mapping| mapping.reasoning.clone()),
+        "isDefault": true, "dangling": false, "carried": true,
+    }));
+    let mut aliases = Vec::new();
+    for (index, mapping) in rules.mappings.iter().enumerate() {
+        if !mapping.target.eq_ignore_ascii_case(&id)
+            || !mapping.provider.as_deref().map_or(true, |owner| owner == provider)
+        { continue; }
+        attached.insert(index);
+        if mapping.alias.eq_ignore_ascii_case(&id)
+            || aliases.iter().any(|alias: &String| alias.eq_ignore_ascii_case(&mapping.alias))
+        { continue; }
+        let Some(effective) = rules.binding(provider, &mapping.alias, &id) else { continue };
+        aliases.push(mapping.alias.clone());
+        mappings.push(json!({
+            "alias": effective.alias, "target": id, "provider": provider,
+            "enabled": effective.enabled, "reasoning": effective.reasoning,
+            "isDefault": false, "dangling": false, "carried": true,
+        }));
+    }
+    let source = if rules.custom.iter().any(|custom| custom.matches(provider, &id)) {
+        "manual"
+    } else { source };
+    // 覆盖键列表从**本次快照**里查（不调 model_rules::current() —— 那会
+    // 每行重新解析一遍配置，几百行的清单就是几百次解析）
+    let cap_overrides: Vec<String> = rules
+        .capabilities
+        .iter()
+        .find(|entry| entry.matches(provider, &id))
+        .map(|entry| capability::overridden_keys(&entry.values))
+        .unwrap_or_default();
+    models.push(json!({
+        "id": id, "name": item.get("name"), "credits": item.get("credits"),
+        "isDefault": item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+        "provider": provider, "providerLabel": super::super::label_of(provider),
+        "source": source, "enabled": enabled, "aliases": aliases,
+        "capabilities": capability::effective(&item),
+        "capOverrides": cap_overrides,
+        // 每个能力键的**来源**（`upstream` / `modelsdev` / `user`，见
+        // `core::model_meta` 的模块头）。管理页据它把「上游实测」「社区
+        // 库补的」「用户改的」三档分开显示 —— 没有它，六个键看起来一样
+        // 可信，而它们的可信度差着量级。缺失（没有这个键）= 那一项没有
+        // 任何来源（未声明）。
+        "capSources": item.get("capSources"),
+        // 模型**自己能配哪些思考档位**（出口键名，由 `core::model_meta`
+        // 在清单成型处归一：这家自己声明的 > models.dev 的 effort 列表）。
+        // 与上面 `mappings[].reasoning`（用户给某条映射**指定**的档位）
+        // 是两件事：这里回答「这个模型支持哪些档」，那里回答「这条映射
+        // 用哪一档」。缺失（null）= 该模型未声明，界面据此回落通用档位表。
+        "reasoningLevels": item.get("reasoningLevels"),
+        "reasoningDefaultLevel": item.get("reasoningDefaultLevel"),
+        // 这一家的清单是什么时候拉到的（毫秒；0 = 从未成功拉过）。
+        // 缓存恢复的清单与刚拉的清单**都是 `remote`**，时效只能靠这个
+        // 时间戳说明（见 `providers::catalog_cache` 的模块头）。
+        "refreshedAt": refreshed_at,
+        // **可见性**：这个模型在官方客户端里是否会被列出。
+        //
+        // `"shown"` / `"hidden"` / `"undeclared"` 三态，由各家 `models.rs`
+        // 在自己的解析层算出（判据各不相同：Antigravity 按世代、Qoder 读
+        // 上游 `enable`、Raccoon 读 `visible`、CodeArts 读 `display_enabled`）。
+        // 聚合层不重新判断 —— 它不认识各家的规则，只负责透传。
+        //
+        // 缺失（`null`）= 这家没有可见性判据（当前是除上面四家之外的所有
+        // provider）。界面据此显示 `—`，**不**把它当成「可见」或「不可见」：
+        // 「这家没这个信息」和「这家说它不可见」是两件事。
+        "visibility": item.get("visibility").cloned().unwrap_or(Value::Null),
+    }));
 }
 
 /// 每条原始 ID 都返回一个默认绑定；历史的同名映射合并进默认绑定，避免两个开关
@@ -164,82 +325,40 @@ pub fn manage_view(store: &AccountStore) -> Value {
         let (remote, refreshed_at) = refresh_meta(kind);
         let source = if remote { "remote" } else { "builtin" };
         for item in manifest {
-            let id = model_id(&item);
-            if id.is_empty() { continue; }
-            if !claimed.insert((provider.to_string(), id.to_lowercase())) {
-                continue; // 同家同 id 的重复条目（见 claimed 的说明）
-            }
-            let default = rules.binding(provider, &id, &id);
-            let enabled = rules.default_enabled(provider, &id);
-            mappings.push(json!({
-                "alias": id, "target": id, "provider": provider, "enabled": enabled,
-                "reasoning": default.and_then(|mapping| mapping.reasoning.clone()),
-                "isDefault": true, "dangling": false, "carried": true,
-            }));
-            let mut aliases = Vec::new();
-            for (index, mapping) in rules.mappings.iter().enumerate() {
-                if !mapping.target.eq_ignore_ascii_case(&id)
-                    || !mapping.provider.as_deref().map_or(true, |owner| owner == provider)
-                { continue; }
-                attached.insert(index);
-                if mapping.alias.eq_ignore_ascii_case(&id)
-                    || aliases.iter().any(|alias: &String| alias.eq_ignore_ascii_case(&mapping.alias))
-                { continue; }
-                let Some(effective) = rules.binding(provider, &mapping.alias, &id) else { continue };
-                aliases.push(mapping.alias.clone());
-                mappings.push(json!({
-                    "alias": effective.alias, "target": id, "provider": provider,
-                    "enabled": effective.enabled, "reasoning": effective.reasoning,
-                    "isDefault": false, "dangling": false, "carried": true,
-                }));
-            }
-            let source = if rules.custom.iter().any(|custom| custom.matches(provider, &id)) {
-                "manual"
-            } else { source };
-            // 覆盖键列表从**本次快照**里查（不调 model_rules::current() —— 那会
-            // 每行重新解析一遍配置，几百行的清单就是几百次解析）
-            let cap_overrides: Vec<String> = rules
-                .capabilities
-                .iter()
-                .find(|entry| entry.matches(provider, &id))
-                .map(|entry| capability::overridden_keys(&entry.values))
-                .unwrap_or_default();
-            models.push(json!({
-                "id": id, "name": item.get("name"), "credits": item.get("credits"),
-                "isDefault": item.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
-                "provider": provider, "providerLabel": super::super::label_of(provider),
-                "source": source, "enabled": enabled, "aliases": aliases,
-                "capabilities": capability::effective(&item),
-                "capOverrides": cap_overrides,
-                // 每个能力键的**来源**（`upstream` / `modelsdev` / `user`，见
-                // `core::model_meta` 的模块头）。管理页据它把「上游实测」「社区
-                // 库补的」「用户改的」三档分开显示 —— 没有它，六个键看起来一样
-                // 可信，而它们的可信度差着量级。缺失（没有这个键）= 那一项没有
-                // 任何来源（未声明）。
-                "capSources": item.get("capSources"),
-                // 模型**自己能配哪些思考档位**（出口键名，由 `core::model_meta`
-                // 在清单成型处归一：这家自己声明的 > models.dev 的 effort 列表）。
-                // 与上面 `mappings[].reasoning`（用户给某条映射**指定**的档位）
-                // 是两件事：这里回答「这个模型支持哪些档」，那里回答「这条映射
-                // 用哪一档」。缺失（null）= 该模型未声明，界面据此回落通用档位表。
-                "reasoningLevels": item.get("reasoningLevels"),
-                "reasoningDefaultLevel": item.get("reasoningDefaultLevel"),
-                // 这一家的清单是什么时候拉到的（毫秒；0 = 从未成功拉过）。
-                // 缓存恢复的清单与刚拉的清单**都是 `remote`**，时效只能靠这个
-                // 时间戳说明（见 `providers::catalog_cache` 的模块头）。
-                "refreshedAt": refreshed_at,
-                // **可见性**：这个模型在官方客户端里是否会被列出。
-                //
-                // `"shown"` / `"hidden"` / `"undeclared"` 三态，由各家 `models.rs`
-                // 在自己的解析层算出（判据各不相同：Antigravity 按世代、Qoder 读
-                // 上游 `enable`、Raccoon 读 `visible`、CodeArts 读 `display_enabled`）。
-                // 聚合层不重新判断 —— 它不认识各家的规则，只负责透传。
-                //
-                // 缺失（`null`）= 这家没有可见性判据（当前是除上面四家之外的所有
-                // provider）。界面据此显示 `—`，**不**把它当成「可见」或「不可见」：
-                // 「这家没这个信息」和「这家说它不可见」是两件事。
-                "visibility": item.get("visibility").cloned().unwrap_or(Value::Null),
-            }));
+            push_managed_model(
+                &rules, &mut models, &mut mappings, &mut attached, &mut claimed,
+                provider, source, refreshed_at, item,
+            );
+        }
+    }
+    // ── 插件家（运行时装进来的那些）────────────────────────────
+    // 与 `models_response` 同一理由：管理页是「清单的可视检查」，插件家的模型
+    // 若不出现在这里，用户就无法启停 / 改名 / 配映射 —— 而它们已经能转发了。
+    // 追加在末尾，内置家的行序（前端按 provider 匹配）逐字不变。
+    //
+    // ── 「有没有启用账号」这道过滤不能漏 ────────────────────────
+    // 内置家走 `active_manifests` → `provider_available`（`accounts_for_provider`
+    // 要求 `enabled && has_credentials`），所以「全部账号被禁用」的家在管理页
+    // 里是**不出现**的。插件家若不过同一道关，装了插件之后所有家都会列出来 ——
+    // 用户看到的是「模型管理里冒出十几家我根本没账号的提供商」，而内置家时代
+    // 它们本来会隐藏。这正是 `models_response` 的 `append_plugin_models` 已经
+    // 守着的同一条判据（见那里的注释：「没有账号时广告出去只会让客户端选到
+    // 一条转发必然 503 的模型」），两处必须同源，否则「对外清单」与「管理页
+    // 清单」对不上，用户没法解释为什么这里有一家、那里没有。
+    for id in crate::server::core::plugin_host::installed_ids() {
+        if store.accounts_for_provider(&id).is_empty() {
+            continue;
+        }
+        let Some(adapter) = crate::server::core::plugin_host::lookup(&id) else {
+            continue;
+        };
+        let mut manifest = adapter.list_models();
+        manifest.sort_by_key(|item| !rules.default_enabled(&id, &model_id(item)));
+        for item in manifest {
+            push_managed_model(
+                &rules, &mut models, &mut mappings, &mut attached, &mut claimed,
+                &id, "remote", 0, item,
+            );
         }
     }
     for (index, mapping) in rules.mappings.iter().enumerate() {

@@ -4,13 +4,13 @@
 
 **複数の AI デスクトップクライアントのログイン状態を、ローカルの OpenAI 互換 API ゲートウェイに**
 
-[简体中文](../README.md) | [English](./README.en.md) | [繁體中文](./README.zh-Hant.md) | **日本語** | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
+[English](../README.md) | [简体中文](./README.zh-CN.md) | [繁體中文](./README.zh-Hant.md) | **日本語** | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
 
 [![license](https://img.shields.io/badge/license-MIT%20%2B%20告知-green)](../LICENSE)
-[![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![release](https://img.shields.io/github/v/release/aimod-cc/Agent2API?include_prereleases)](https://github.com/aimod-cc/Agent2API/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
-[![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![stars](https://img.shields.io/github/stars/aimod-cc/Agent2API?style=flat&color=yellow)](https://github.com/aimod-cc/Agent2API/stargazers)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/Agent2API/releases/latest)
 
 [✨ 主な機能](#-主な機能) • [💬 コミュニティとサポート](#-コミュニティとサポート) • [🤝 対応プロバイダー](#-対応プロバイダー) • [🚀 クイックスタート](#-クイックスタート) • [📦 インストールとデプロイ](./install.ja.md) • [📸 画面プレビュー](#-画面プレビュー) • [🔧 開発とビルド](#-開発とビルド) • [📜 使用に関する告知](#-使用に関する告知)
 
@@ -23,7 +23,7 @@ Agent2API は、複数の AI デスクトップクライアントでログイン
 ## ✨ 主な機能
 
 - 🔌 **OpenAI 互換** —— クライアントに `base_url` を設定するだけ。Chat / Responses / Messages の 3 プロトコルに対応
-- 🏪 **17 社の組み込みプロバイダー** —— WorkBuddy、小浣熊、CatPaw、Qoder、Trae などがすぐ使え、カスタムプロバイダーにも対応
+- 🏪 **22 社の組み込みプロバイダー** —— WorkBuddy、小浣熊、CatPaw、Qoder、Trae などがすぐ使え、カスタムプロバイダーにも対応
 - 🔁 **認証情報の自動更新** —— トークンは期限前に自動更新、期限切れ間近のものは一括更新、モデルカタログも追従
 - 🪂 **マルチアカウントのローテーション** —— 優先度順にキューイングし、429 は次のアカウントへ。レート制限中は待たずにスキップ
 - 🛡️ **外向きプロキシ** —— アカウントごとに出口 IP を割り当て、送信フィンガープリントは公式クライアントを装う
@@ -48,7 +48,9 @@ Agent2API は、複数の AI デスクトップクライアントでログイン
 
 ## 💬 コミュニティとサポート
 
-- **QQ グループ**: Agent2API の交流グループ、グループ番号 `1127656296`（QQ で番号を検索して参加できます）。質問やフィードバックはグループへどうぞ。
+- **QQ グループ**: Agent2API の交流グループ —— **グループ 1（`1127656296`）はまもなく満員のため、グループ 2（`1130894674`）への参加をお願いします**（QQ で番号を検索して参加できます）。
+- **Telegram グループ**: <https://t.me/+9gM8YPvgRL02NGRl>
+- **Discord サーバー**: <https://discord.gg/z9GzSJMWp>
 - **💖 支援**: Agent2API がお役に立ったら、[作者にコーヒーをおごる](./SPONSOR.md)のも歓迎です。支援は任意で、機能の解放などはありません。
 - **🤝 スポンサー / ビジネス**: スポンサーになりたい、またはここに製品を掲載したい場合は [541675139@qq.com](mailto:541675139@qq.com) までメールでご連絡ください。
 
@@ -77,6 +79,9 @@ Agent2API は、複数の AI デスクトップクライアントでログイン
 | OfficeAce（Huawei Cloud、OfficeClaw） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | OrcaTerm（Tencent Cloud） | ✓ | ✓ | ✓ | ✓ | — | — |
 | 智谱清言（Zhipu Qingyan） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ModelScope（魔搭、中国版 / 国際版） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| AtomCode（AtomGit / GitCode） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LobsterAI（NetEase Youdao「有道龙虾」） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | カスタムプロバイダー | ✓ | — | ✓ | — | — | — |
 
 > 注：モデル一覧の ✓ はオンラインでの自動取得に対応することを意味します（一部のプラットフォームは内蔵の静的テーブルも併用）。ZCode は内蔵の静的テーブルのみです。トークン自動更新の ✗ は、そのプラットフォームに利用可能な更新の仕組みがないことを意味します（アカウントは有効期間内はそのまま利用できます）。Qoder のチェックインは中国版のみです。
@@ -121,6 +126,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 ```
 
 どの形態でも、導入後にパネル（`http://127.0.0.1:3065/`。サーバーと Docker はホストの IP に読み替え）を開いて管理者アカウントを登録し、「ゲートウェイキー」ページでキーを作成してください。疎通確認: `curl http://127.0.0.1:3065/health`
+
+**モバイル**: ブラウザーで `http://<ゲートウェイIP>:3065/m` を開けば使えます（「ホーム画面に追加」で全画面 PWA に）。独立したアイコンが欲しい場合は、Release の `Agent2API-<バージョン>.apk`（Android）または `Agent2API-<バージョン>.ipa`（iOS、未署名・自己再署名が必要）をインストールしてください。詳細: [インストールとデプロイ → モバイル](install.ja.md#モバイル)。
 
 ## 📸 画面プレビュー
 
@@ -176,7 +183,7 @@ macOS の `.dmg` は **macOS 上でしかビルドできません**（`npm --pre
 
 ### 学習・交流目的に限る
 
-本プロジェクトは、HTTP リバースプロキシ、SSE ストリーミングのパススルー、複数アップストリームのプロトコル適応、デスクトップパッケージング（Tauri）といった技術テーマを学ぶための実践プロジェクトであり、**個人の学習・研究目的のみ**を対象としています。公式製品ではなく、Tencent および WorkBuddy / CodeBuddy、Meituan および CatPaw、SenseTime および小浣熊、Zhipu および AutoClaw / autoglm、Alibaba および Qoder / Accio、Huawei Cloud および CodeArts / OfficeAce、ByteDance および Trae、iFlytek および Loomy、Baidu Wenku および KukuAI、長亭科技 および MonkeyCode、Command Code、Google および Antigravity のいずれとも一切の関係がなく、その承認やスポンサーシップも受けていません。
+本プロジェクトは、HTTP リバースプロキシ、SSE ストリーミングのパススルー、複数アップストリームのプロトコル適応、デスクトップパッケージング（Tauri）といった技術テーマを学ぶための実践プロジェクトであり、**個人の学習・研究目的のみ**を対象としています。公式製品ではなく、Tencent および WorkBuddy / CodeBuddy、Meituan および CatPaw、SenseTime および小浣熊、Zhipu および AutoClaw / autoglm、Alibaba および Qoder / Accio、Huawei Cloud および CodeArts / OfficeAce、ByteDance および Trae、iFlytek および Loomy、Baidu Wenku および KukuAI、長亭科技 および MonkeyCode、Command Code、Google および Antigravity、Alibaba および ModelScope（魔搭）、GitCode / AtomGit および AtomCode、NetEase Youdao および LobsterAI（有道龙虾）のいずれとも一切の関係がなく、その承認やスポンサーシップも受けていません。
 
 ### リバースプロキシの挙動について
 
@@ -202,17 +209,17 @@ macOS の `.dmg` は **macOS 上でしかビルドできません**（`npm --pre
 
 ## ⭐ Star History
 
-<a href="https://star-history.com/#aimod-cc/agent2api&Date">
+<a href="https://star-history.com/#aimod-cc/Agent2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
   </picture>
 </a>
 
 <div align="center">
 
-**[最新版をダウンロード](https://github.com/aimod-cc/agent2api/releases/latest)** • **[問題を報告](https://github.com/aimod-cc/agent2api/issues)**
+**[最新版をダウンロード](https://github.com/aimod-cc/Agent2API/releases/latest)** • **[問題を報告](https://github.com/aimod-cc/Agent2API/issues)**
 
 このプロジェクトが役に立ったら、⭐️ Star をもらえるとうれしいです！
 

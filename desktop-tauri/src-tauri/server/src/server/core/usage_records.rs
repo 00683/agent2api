@@ -337,6 +337,13 @@ const CODEARTS_PROVIDER: &str = crate::server::core::providers::kind_id(
 /// 这个函数只描述**旧 `lowBalance` 字段**的缺省视图；限制器上线后真正的缺省
 /// 规则（含 CodeArts 的 Token 自然日规则）在 `limiter::default_rules`。
 ///
+/// ── 判据顺序：插件申报优先 ──────────────────────────────────
+/// 「这一家的缺省怎么处理」属于 provider 知识，插件在握手时申报（经
+/// `AccountFeatures::default_limiters`）。旧字段只能表达「跳过 / 不处理」两档，
+/// 所以映射是：申报里**有一条余额规则且动作是跳过** → `skip`，否则 → `off`
+/// （Token 规则、空规则集都表达不了，显示 off 比显示一个不会生效的「跳过」诚实）。
+///
+/// 没申报（旧插件）才走下面的内置表：
 /// - **Cline 免费池（`cline-free`）→ `off`（不处理）**：免费池的 credit 长期
 ///   贴着 0 走、用超了还是负数（欠费是常态），跳过档的缺省阈值 1 会把几乎
 ///   整个池从选路里剔掉。免费池能不能用交给上游裁决（真没钱时 402 自会按
@@ -347,6 +354,15 @@ const CODEARTS_PROVIDER: &str = crate::server::core::providers::kind_id(
 /// - **其余 provider → `skip`（跳过）**：没钱让路、有钱照常、余额回升自动
 ///   恢复，不需要任何人善后（历史缺省，不变）。
 pub fn default_low_balance_mode(provider: &str) -> &'static str {
+    if let Some(declared) = crate::server::core::plugin_host::account_features_of(provider) {
+        if let Some(rules) = declared.default_limiters {
+            let balance_skip = rules.iter().any(|rule| {
+                rule.kind == agent2api_provider_protocol::DefaultLimiterKind::Balance
+                    && rule.action == agent2api_provider_protocol::DefaultLimiterAction::Skip
+            });
+            return if balance_skip { "skip" } else { "off" };
+        }
+    }
     if provider == CLINE_FREE_PROVIDER || provider == CODEARTS_PROVIDER {
         "off"
     } else {
@@ -512,8 +528,10 @@ fn migrate_legacy_snapshot() {
 }
 
 /// 启动时把表里的成功读数装进内存事实表（选路的初始视野）。
-fn reload_facts() {
-    let facts: HashMap<String, BalanceFact> = load_all()
+///
+/// 云同步下载后会重装一次（表被整体替换，事实表必须跟着换）—— 因此本函数
+/// 是 `pub(crate)` 而不是私有：`cloud_sync::download_locked` 是唯一的外部调用点。
+pub(crate) fn reload_facts() {    let facts: HashMap<String, BalanceFact> = load_all()
         .into_iter()
         .filter(|(_, record)| record.usage.is_some())
         .filter_map(|(id, record)| {

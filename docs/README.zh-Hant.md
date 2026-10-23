@@ -4,13 +4,13 @@
 
 **把多家 AI 桌面客戶端的登入狀態，變成一個本地 OpenAI 相容 API 閘道**
 
-[简体中文](../README.md) | [English](./README.en.md) | **繁體中文** | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
+[English](../README.md) | [简体中文](./README.zh-CN.md) | **繁體中文** | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Português (BR)](./README.pt-BR.md)
 
 [![license](https://img.shields.io/badge/license-MIT%20%2B%20附加聲明-green)](../LICENSE)
-[![release](https://img.shields.io/github/v/release/aimod-cc/agent2api?include_prereleases)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![release](https://img.shields.io/github/v/release/aimod-cc/Agent2API?include_prereleases)](https://github.com/aimod-cc/Agent2API/releases/latest)
 [![docker pulls](https://img.shields.io/docker/pulls/aimodcc/agent2api)](https://hub.docker.com/r/aimodcc/agent2api)
-[![stars](https://img.shields.io/github/stars/aimod-cc/agent2api?style=flat&color=yellow)](https://github.com/aimod-cc/agent2api/stargazers)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/agent2api/releases/latest)
+[![stars](https://img.shields.io/github/stars/aimod-cc/Agent2API?style=flat&color=yellow)](https://github.com/aimod-cc/Agent2API/stargazers)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Docker-blue)](https://github.com/aimod-cc/Agent2API/releases/latest)
 
 [✨ 核心特性](#-核心特性) • [💬 社群與支援](#-社群與支援) • [🤝 支援的供應商](#-支援的供應商) • [🚀 快速開始](#-快速開始) • [📦 安裝與部署](./install.zh-Hant.md) • [📸 介面預覽](#-介面預覽) • [🔧 開發與建置](#-開發與建置) • [📜 使用聲明](#-使用聲明)
 
@@ -23,7 +23,7 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 ## ✨ 核心特性
 
 - 🔌 **OpenAI 相容** —— 客戶端填上 `base_url` 就能用，Chat / Responses / Messages 三種協定都支援
-- 🏪 **內建 17 家供應商** —— WorkBuddy、小浣熊、CatPaw、Qoder、Trae 等開箱即用，也支援自訂供應商
+- 🏪 **內建 22 家供應商** —— WorkBuddy、小浣熊、CatPaw、Qoder、Trae 等開箱即用，也支援自訂供應商
 - 🔁 **憑證自動續期** —— Token 到期自動換新，臨期憑證可批次刷新，模型目錄也不會過期
 - 🪂 **多帳號輪轉** —— 依優先順序排隊，429 自動換帳號，限額冷卻期內不空等
 - 🛡️ **出口代理** —— 每個帳號可配獨立出口，出站指紋按官方客戶端偽裝
@@ -48,7 +48,9 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 
 ## 💬 社群與支援
 
-- **QQ 群**：Agent2API 交流群，群號 `1127656296`（在 QQ 裡搜尋群號即可加入）；使用疑難與問題回饋都在這裡。
+- **QQ 群**：Agent2API 交流群 —— **群 1（`1127656296`）即將滿員，請優先加群 2（`1130894674`）**；在 QQ 裡搜尋群號即可加入。
+- **Telegram 群**：<https://t.me/+9gM8YPvgRL02NGRl>
+- **Discord 群**：<https://discord.gg/z9GzSJMWp>
 - **💖 贊助**：如果 Agent2API 幫到了你，歡迎[請作者喝杯咖啡](./SPONSOR.md)；贊助完全自願，不解鎖任何功能。
 - **🤝 贊助 / 商務合作**：想贊助本專案，或想讓你的產品出現在這裡？寄信到 [541675139@qq.com](mailto:541675139@qq.com)。
 
@@ -77,6 +79,9 @@ Agent2API 把多家 AI 桌面客戶端裡已登入的帳號接到一起，共用
 | OfficeAce（華為雲果辦 / OfficeClaw） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | OrcaTerm（騰訊雲遨馳終端） | ✓ | ✓ | ✓ | ✓ | — | — |
 | 智譜清言 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ModelScope（魔搭，中國版 / 國際版） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
+| AtomCode（AtomGit / GitCode） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LobsterAI（網易有道「有道龍蝦」） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | 自訂供應商 | ✓ | — | ✓ | — | — | — |
 
 > 註：模型清單的 ✓ 表示支援遠端自動拉取，部分平台另有內建靜態清單備援；ZCode 僅有內建靜態清單。Token 續期欄 ✗ 表示該平台沒有可用的續期介面（帳號在有效期內不受影響）。Qoder 簽到僅中國版可用。
@@ -121,6 +126,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 ```
 
 三種形態裝完後都開啟面板（`http://127.0.0.1:3065/`，伺服器端與 Docker 換成主機 IP）註冊管理員帳號，再在「閘道 Key」頁建一把 Key。連線性自測：`curl http://127.0.0.1:3065/health`
+
+**手機端**：瀏覽器開啟 `http://<閘道IP>:3065/m` 即可（可「加入主畫面」變成全螢幕 PWA）；想要獨立圖示就裝 Release 裡的 `Agent2API-<版本>.apk`（Android）或 `Agent2API-<版本>.ipa`（iOS，未簽名，需自行重簽）。細節見[安裝與部署 → 手機端](install.zh-Hant.md#手機端)。
 
 ## 📸 介面預覽
 
@@ -176,7 +183,7 @@ macOS 的 `.dmg` **只能在 macOS 上建置**（`npm --prefix desktop-tauri run
 
 ### 僅供學習與交流
 
-本專案是一個用於學習 HTTP 反向代理、SSE 串流透傳、多上游協定適配與桌面端打包（Tauri）等技術主題的實踐專案，**僅供個人學習與研究使用**。它不是官方產品，與騰訊公司及 WorkBuddy / CodeBuddy、美團及 CatPaw、商湯及小浣熊、智譜及 AutoClaw / autoglm、阿里巴巴及 Qoder / Accio、華為雲及 CodeArts / OfficeAce、字節跳動及 Trae、科大訊飛及 Loomy、百度文庫及 KukuAI、長亭科技及 MonkeyCode、Command Code、Google 及 Antigravity 均無任何關聯，未獲得其授權、認可或贊助。
+本專案是一個用於學習 HTTP 反向代理、SSE 串流透傳、多上游協定適配與桌面端打包（Tauri）等技術主題的實踐專案，**僅供個人學習與研究使用**。它不是官方產品，與騰訊公司及 WorkBuddy / CodeBuddy、美團及 CatPaw、商湯及小浣熊、智譜及 AutoClaw / autoglm、阿里巴巴及 Qoder / Accio、華為雲及 CodeArts / OfficeAce、字節跳動及 Trae、科大訊飛及 Loomy、百度文庫及 KukuAI、長亭科技及 MonkeyCode、Command Code、Google 及 Antigravity、阿里巴巴及 ModelScope（魔搭）、GitCode / AtomGit 及 AtomCode、網易有道及 LobsterAI（有道龍蝦）均無任何關聯，未獲得其授權、認可或贊助。
 
 ### 關於反向代理行為
 
@@ -202,17 +209,17 @@ macOS 的 `.dmg` **只能在 macOS 上建置**（`npm --prefix desktop-tauri run
 
 ## ⭐ Star History
 
-<a href="https://star-history.com/#aimod-cc/agent2api&Date">
+<a href="https://star-history.com/#aimod-cc/Agent2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/agent2api&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=aimod-cc/Agent2API&type=Date" />
   </picture>
 </a>
 
 <div align="center">
 
-**[下載最新版](https://github.com/aimod-cc/agent2api/releases/latest)** • **[問題回饋](https://github.com/aimod-cc/agent2api/issues)**
+**[下載最新版](https://github.com/aimod-cc/Agent2API/releases/latest)** • **[問題回饋](https://github.com/aimod-cc/Agent2API/issues)**
 
 如果這個專案對你有幫助，歡迎點一個 ⭐️ Star！
 

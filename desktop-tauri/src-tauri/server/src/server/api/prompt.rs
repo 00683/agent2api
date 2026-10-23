@@ -56,8 +56,8 @@ use crate::server::ServerState;
 const KEY_CLEAR_DEGRADE: &str = "clearDegrade";
 
 /// GET /api/prompt —— 当前模式 / 生效文本来源 / 降级状态
-pub async fn get_prompt(State(_state): State<ServerState>) -> Response {
-    ok_json(prompt_json(&config::current()))
+pub async fn get_prompt(State(state): State<ServerState>) -> Response {
+    ok_json(prompt_json(&config::current(), &state).await)
 }
 
 /// PUT /api/prompt —— body `{promptMode?, promptFile?, promptText?, promptProviders?,
@@ -70,7 +70,7 @@ pub async fn get_prompt(State(_state): State<ServerState>) -> Response {
 /// 时会带上 `promptFile: null`，若把 `null` 也当成清除，点一下「立即解除」就会把
 /// 用户配好的路径悄悄抹掉。
 /// 校验全部通过才写盘：模式非法、或新模式要用的文件读不到 → 400 且什么都不改。
-pub async fn put_prompt(State(_state): State<ServerState>, body: Bytes) -> Response {
+pub async fn put_prompt(State(state): State<ServerState>, body: Bytes) -> Response {
     let payload = match parse_body(&body) {
         Ok(value) => value,
         Err(error) => return errors::management_error(400, error.message),
@@ -495,14 +495,14 @@ pub async fn put_prompt(State(_state): State<ServerState>, body: Bytes) -> Respo
         }
         logging::log("[Config]", &format!("系统提示词已更新: {detail}"));
     }
-    ok_json(prompt_json(&after))
+    ok_json(prompt_json(&after, &state).await)
 }
 
 /// 响应体（GET 与 PUT 共用；前端直接用响应刷新界面，不必再 GET 一次）。
 ///
 /// 键名对前端是**契约**（`settings-panel.js` 逐字对齐），因此都用常量标识符
 /// 而不是手写字符串（与 `retry_json` 同一手法）。
-fn prompt_json(config: &config::RuntimeConfig) -> Value {
+async fn prompt_json(config: &config::RuntimeConfig, state: &ServerState) -> Value {
     let settings: &PromptSettings = config.prompt_settings();
     json!({
         KEY_PROMPT_MODE: settings.mode.as_str(),
@@ -535,7 +535,7 @@ fn prompt_json(config: &config::RuntimeConfig) -> Value {
         // 当初始值），所以这一项只回存下来的那份 —— 与配置里的形状逐字一致。
         KEY_PROMPT_GATEWAY_TEXT: gateway_text_json(settings),
         // 可配置的家（界面下拉用）：只想配一个没账号的家也允许
-        "promptProviderOptions": provider_options(),
+        "promptProviderOptions": provider_options(state).await,
     })
 }
 
@@ -591,31 +591,52 @@ fn gateway_text_json(settings: &PromptSettings) -> Value {
 ///   · `gatewayChars` = 那段装配的字符数（只读子行的「约 N 字符」）；
 ///   · `gatewayBlocks` = 那段装配的**正文模板**（三段；Environment 段带
 ///     `{cwd}` 这类占位符）。编辑器拿它当初始值与「恢复官方原文」的目标。
-fn provider_options() -> Value {
-    Value::Array(
-        providers::PROVIDERS
-            .iter()
-            .map(|meta| {
-                json!({
-                    "id": meta.id,
-                    "label": meta.label,
-                    "gatewayNote": providers::gateway_prompt_note(meta.id),
-                    "gatewayChars": providers::gateway_prompt_chars(meta.id),
-                    "gatewayBlocks": providers::gateway_prompt_blocks(meta.id)
-                        .map(|blocks| blocks_json(&blocks)),
-                })
-            })
-            .collect(),
-    )
+///
+/// ── 三个值现在由**插件**回答 ────────────────────────────────
+/// 提示词的正文与「上游为什么要求它」的说明都是上游协议知识，随实现搬到
+/// 提供商插件了（今天只有 ZCode 一家有）。网关这边问插件的 `prompt.info`
+/// 管理动作；插件不在时三项都是 null/0，界面于是不显示那一行 —— 那比如实
+/// 报错好，也比编一份过时的原文好（用户一保存就等于把它钉死了）。
+async fn provider_options(state: &ServerState) -> Value {
+    let mut items = Vec::with_capacity(providers::PROVIDERS.len());
+    for meta in providers::PROVIDERS.iter() {
+        let info = plugin_prompt_info(state, meta.id).await;
+        items.push(json!({
+            "id": meta.id,
+            "label": meta.label,
+            "gatewayNote": info.as_ref().and_then(|info| info.get("gatewayNote")).cloned()
+                .unwrap_or(Value::Null),
+            "gatewayChars": info.as_ref().and_then(|info| info.get("gatewayChars")).cloned()
+                .unwrap_or(Value::Null),
+            "gatewayBlocks": info.as_ref().and_then(|info| info.get("gatewayBlocks")).cloned()
+                .unwrap_or(Value::Null),
+        }));
+    }
+    Value::Array(items)
 }
 
-/// 三段正文的 JSON 形态（段名就是 `GatewayBlocks::FIELDS`）
-fn blocks_json(blocks: &GatewayBlocks) -> Value {
-    let mut map = serde_json::Map::new();
-    for field in GatewayBlocks::FIELDS {
-        map.insert(field.to_string(), Value::String(blocks.get(field).to_string()));
+/// 问插件要这一家的提示词信息（`None` = 这家没有自带提示词 / 插件不在）。
+///
+/// ── 为什么对每一家都问一次 ──────────────────────────────────
+/// 「哪几家有自带提示词」这个事实本身也在插件里（它取决于实现，不取决于
+/// 注册表）。让网关维护一份名单会立刻漂移 —— 插件加了一家，界面就少一行。
+/// 一次 RPC 换一句「没有」，代价可以忽略（这个端点只在进设置页时调一次）。
+async fn plugin_prompt_info(state: &ServerState, provider: &str) -> Option<Value> {
+    let adapter = crate::server::core::providers::adapter::adapter_by_id(provider)?;
+    let info = adapter
+        .admin_action(state.store(), "", "prompt.info", &Value::Null)
+        .await
+        .ok()?;
+    // 什么都没给（空对象）等于「这家没有自带提示词」
+    let object = info.as_object()?;
+    if object
+        .get("gatewayNote")
+        .and_then(Value::as_str)
+        .map_or(true, |note| note.trim().is_empty())
+    {
+        return None;
     }
-    Value::Object(map)
+    Some(info)
 }
 
 /// 400 文案里列出的合法模式

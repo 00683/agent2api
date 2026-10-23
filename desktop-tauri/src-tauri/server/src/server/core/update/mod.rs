@@ -26,6 +26,9 @@
 //! （reqwest 的 bytes_stream 本身就是 async，每条 chunk 的落盘量很小）。
 
 mod check;
+// 更新源索引：从索引仓库的 `app.json` 读「构建产物放在哪个仓库」。
+// 与插件商店共用信任根仓库、两个文件（见模块头）。
+mod index;
 // 公网出网的候选出口实现（`fetch_public`）也被 `core::model_meta`（models.dev
 // 元数据刷新）复用：那条链路回答的是「这台机器的公网怎么出去」，与访问哪个
 // 公网站点无关，为它复制一份候选解析只会多一处会漂移的知识。因此对本 crate
@@ -49,8 +52,9 @@ use crate::server::logging;
 
 pub use version::{
     api_base, assert_downloadable, compare_versions, custom_api_base, desktop_shell,
-    installer_kind, pick_asset_by_name, pick_installer, safe_file_name, server_bundle_name,
-    set_desktop_shell, UpdateError, DEFAULT_REPO, GITHUB_API, MAX_INSTALLER_BYTES,
+    installer_kind, pick_android_apk, pick_asset_by_name, pick_installer, safe_file_name,
+    server_bundle_name, set_desktop_shell, UpdateError, DEFAULT_REPO, GITHUB_API,
+    MAX_INSTALLER_BYTES,
 };
 /// 「更新设置」弹窗的 GitHub 令牌接口（api::update 走这两条；加解密本体
 /// 只在 token 模块内部，见它的模块头）
@@ -58,6 +62,15 @@ pub use token::{set_token, status_json};
 
 /// 请求 GitHub 的 UA（Node 版字面量，随项目改名同步）
 const USER_AGENT: &str = "agent2api-local-proxy";
+
+/// 两次「读更新源索引」之间的最小间隔：30 分钟。
+///
+/// 索引只是一行「构建产物在哪个仓库」，几乎不变；而更新检查可能几分钟一轮。
+/// 每轮都读一次 raw.githubusercontent.com 纯属白打（顺带消耗限额）。30 分钟
+/// 意味着「换了构建仓库」最迟半小时内被所有在线用户拿到，代价可接受。
+///
+/// 读失败也等这么久再试：失败多半是网络不通，立刻重试只会连着失败。
+const INDEX_RETRY_MS: i64 = 30 * 60 * 1000;
 
 /// 本应用的当前版本号（编译期取自 Cargo.toml，发布流程与 tauri.conf.json
 /// 同步更新）。壳的 `checkUpdate` 命令用的是运行时 package_info —— 两者常态
@@ -118,6 +131,16 @@ struct Inner {
     /// 最近一次拉到的 Release（内存缓存）
     latest: Option<Value>,
     repository: String,
+    /// `repository` 来自 `WORKBUDDY_UPDATE_REPO` 环境变量（显式覆盖）。
+    ///
+    /// 为真时**不读索引**：用户的覆盖绝不能被索引悄悄改回官方仓库。
+    repository_explicit: bool,
+    /// `repository` 是从索引里解析出来的（`true`）还是内置默认值（`false`）。
+    /// 只用于日志口径。
+    repository_from_index: bool,
+    /// 上次尝试解析索引的时刻（毫秒，0 = 还没试过）。与 [`INDEX_RETRY_MS`]
+    /// 一起做节流。
+    index_checked_at: i64,
     download_dir: PathBuf,
     /// 容器内更新已应用、但进程还没重启（只活在内存里，重启即自然清零）。
     ///
@@ -138,17 +161,20 @@ impl UpdateManager {
     /// 仓库解析顺序与 Node 版一致：参数 > `WORKBUDDY_UPDATE_REPO` > DEFAULT_REPO
     /// （`String(repo || env || DEFAULT).trim()`）。
     pub fn new(directory: PathBuf) -> Self {
-        let repository = std::env::var("WORKBUDDY_UPDATE_REPO")
+        let explicit = std::env::var("WORKBUDDY_UPDATE_REPO")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_REPO.to_string());
+            .filter(|value| !value.is_empty());
+        let repository = explicit.clone().unwrap_or_else(|| DEFAULT_REPO.to_string());
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 task: None,
                 cancel_flag: None,
                 latest: None,
                 repository,
+                repository_explicit: explicit.is_some(),
+                repository_from_index: false,
+                index_checked_at: 0,
                 download_dir: directory.join("updates"),
                 pending_restart: false,
             })),
@@ -165,6 +191,62 @@ impl UpdateManager {
     /// 仓库名（`owner/repo`）
     pub fn repository(&self) -> String {
         self.lock().repository.clone()
+    }
+
+    /// 解析本次检查要用的仓库，必要时先读一次索引。
+    ///
+    /// ── 优先级 ──────────────────────────────────────────────────
+    /// 1. `WORKBUDDY_UPDATE_REPO` 环境变量：显式覆盖，最高优先，**且不读索引**
+    ///    —— 内网镜像 / 离线演练要能完全绕开官方源；
+    /// 2. 索引里的 `app.repo`（见 [`index::resolve_app_repo`]）；
+    /// 3. 内置 [`DEFAULT_REPO`]。
+    ///
+    /// ── 为什么带节流 ────────────────────────────────────────────
+    /// 定时检查可能几分钟一轮，而索引是一份几乎不变的几百字节文件。每次都读
+    /// 只是白打 raw.githubusercontent.com（顺带消耗它的限额）。所以读成功后
+    /// [`INDEX_RETRY_MS`] 内不再读；**读失败**也一样等这么久再试 —— 失败多半
+    /// 是网络不通，立刻重试只会连着失败。
+    ///
+    /// 注意节流只影响「多久读一次」，不影响「解析后的值」：一旦读到过，就用它
+    /// 覆盖 `repository` 并一直用下去（进程重启后重新读）。
+    async fn resolve_repository(&self) -> String {
+        let (current, explicit, last_checked) = {
+            let guard = self.lock();
+            (
+                guard.repository.clone(),
+                guard.repository_explicit,
+                guard.index_checked_at,
+            )
+        };
+        // 环境变量显式指定：不读索引，用户说了算
+        if explicit {
+            return current;
+        }
+        // 节流：读成功后这个间隔内不再读；读失败同样等这么久 —— 失败多半是
+        // 网络不通，立刻重试只会连着失败
+        let now = logging::now_ms();
+        if last_checked != 0 && now.saturating_sub(last_checked) < INDEX_RETRY_MS {
+            return current;
+        }
+        // 到点：读一次索引（读不到会静默回落内置默认值，见 index 模块头）
+        let resolved = index::resolve_app_repo().await;
+        let from_index = resolved != DEFAULT_REPO;
+        if let Ok(mut guard) = self.inner.lock() {
+            // 「换过地址」说一次就够，不必每轮都记（这是 verbose 档）
+            if guard.repository != resolved {
+                logging::verbose(
+                    "[Update]",
+                    &format!(
+                        "更新源仓库改为 {resolved}（{}）",
+                        if from_index { "来自索引" } else { "内置默认值" }
+                    ),
+                );
+            }
+            guard.repository = resolved.clone();
+            guard.repository_from_index = from_index;
+            guard.index_checked_at = now;
+        }
+        resolved
     }
 
     /// 下载目录（`{config_dir}/updates`）—— 与壳侧 `update::download_dir()` 同源
@@ -246,6 +328,12 @@ impl UpdateManager {
                 .and_then(Value::as_bool)
                 == Some(true),
             "asset": asset.clone().unwrap_or(Value::Null),
+            // ── 手机端（APK）────────────────────────────────────
+            // 与 `asset` 并列：网关同时服务电脑和手机，两边各取所需。
+            // 手机端拿这个 GitHub 下载地址自己去下（手机自己出网，不经网关中转）。
+            // 该版本没挂 apk 时是 null，手机端据此藏起「立即更新」。
+            "androidAsset": downloadable(latest.as_ref().and_then(|value| value.get("androidAsset")))
+                .unwrap_or(Value::Null),
             // ── 容器内更新（Linux / Docker）──────────────────────
             // selfUpdate 说的是「这个部署能不能原地更新」（平台 + 环境开关），
             // serverAsset 说的是「这一版有没有可下的包」—— 两者分开，面板才能

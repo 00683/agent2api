@@ -82,6 +82,10 @@ function applyTheme(mode) {
   // （侧边栏三键与设置页），谁改了都要让另一处跟上 —— 事件单向广播，
   // 两边都不去读对方的状态。detail 是本函数最初收到的 mode 原值。
   window.dispatchEvent(new CustomEvent('wb:theme', { detail: mode }));
+  // 插件页（iframe，独立文档）收不到上面这个事件，也读不到 localStorage ——
+  // 主题由这里单独推一次，否则用户切了深浅色、插件页还停在原来的配色。
+  // 没停在插件页时 querySelector 返回 null，`pushPanelTheme` 自己早退。
+  pushPanelTheme(pluginPageHost()?.querySelector('iframe')?.contentWindow);
 }
 
 // ─── 界面缩放 ────────────────────────────────
@@ -129,36 +133,414 @@ function applyZoom(percent) {
 // ─── 页面导航 ────────────────────────────────
 
 const PAGE_KEY = 'workbuddy-desktop-page';
-const PAGES = ['assistant', 'overview', 'accounts', 'checkin', 'gateway', 'proxies', 'keys', 'docs', 'logs', 'tasks', 'requests', 'settings'];
+const PAGES = ['assistant', 'overview', 'accounts', 'checkin', 'gateway', 'agent', 'proxies', 'keys', 'docs', 'logs', 'tasks', 'requests', 'plugins', 'settings'];
 /** 页签中文名：顶栏面包屑用。overview 的用户可见名是「报表」、gateway 的是「模型管理」
- *  （内部标识保持不变：localStorage 记忆、showPage 与 CSS 的 [data-page] 选择器都依赖它） */
+ *  （内部标识保持不变：localStorage 记忆、showPage 与 CSS 的 [data-page] 选择器都依赖它）
+ *
+ *  `checkin` 是**内置页**（见 index.html 的说明）：页面归网关，签到能力归插件。 */
 const PAGE_LABELS = {
   assistant: wbI18n.t('AI 助手'),
   overview: wbI18n.t('报表'),
   accounts: wbI18n.t('账号'),
   checkin: wbI18n.t('签到中心'),
   gateway: wbI18n.t('模型管理'),
+  agent: 'Agent',
   proxies: wbI18n.t('网络代理'),
   keys: wbI18n.t('网关 Key'),
   docs: wbI18n.t('文档'),
   logs: wbI18n.t('日志'),
   tasks: wbI18n.t('定时任务'),
   requests: wbI18n.t('请求日志'),
+  plugins: wbI18n.t('插件'),
   settings: wbI18n.t('设置'),
 };
 
 /** 当前页（子模块据此判断是否需要重新加载） */
 let currentPage = 'overview';
 
+/**
+ * 插件申报的页面（`plugin:<pack>:<page>` → `{ label, url }`）。
+ *
+ * ── 与 PAGES 的关系 ─────────────────────────────────────────
+ * `PAGES` 是编译期内置页的清单（`showPage` 的白名单、`data-page` 选择器都按它）。
+ * 插件页是**运行期**才知道的：装了什么包、包里申报了哪些页面，只有问过网关
+ * 才知道。所以它们单独存在这张表里，`showPage` 与 `renderSidebar` 两处都查
+ * 一次 —— 内置页走原路径，插件页走 iframe。
+ *
+ * ── 没装插件时 ──────────────────────────────────────────────
+ * 这张表是空的，侧边栏里没有插件页，`PAGES` 的行为与改造前逐字一致。
+ */
+const pluginPages = new Map();
+
+/** 插件页菜单键的前缀（与 `sidebar-layout.js` 的 `PLUGIN_PREFIX` 同值） */
+const PLUGIN_PAGE_PREFIX = 'plugin:';
+
+/**
+ * 从 `/api/plugins` 的响应里收下插件页，并让侧边栏跟上。
+ *
+ * `packs[].ui[]` 是每个包申报的页面（`{ id, title, icon, url, order }`），
+ * 这里拼成 `plugin:<pack>:<page>` 形式的菜单键 —— 包 id 与页面 id 都在键里，
+ * 于是「哪个包贡献了哪一页」一眼可见，卸载某个包时也只影响它自己的那几项。
+ */
+/**
+ * 已由**内置页**接管的插件页面 id。
+ *
+ * ── 为什么要有这张表 ────────────────────────────────────────
+ * 「签到中心」原先由插件申报（`pack.json` 的 `ui`），现在页面搬回客户端、成了
+ * 内置页（`PAGES` 里的 `checkin`）。但**已发布的插件包仍带着那条申报** ——
+ * 不拦的话，侧边栏会同时出现「签到中心」（内置）与「签到中心」（插件的
+ * iframe），两个菜单项指向两个前端，正是这次迁移要消灭的东西。
+ *
+ * 于是按页面 id 去重：内置页已经覆盖的能力，插件的同名申报不再进菜单。
+ * 插件包里的静态资源仍然可访问（`/plugins/<pack>/ui/...`），所以这不影响任何
+ * 还在引用它的地方；等新页面稳定、旧资产一次性清掉时，这张表一起删。
+ */
+const BUILTIN_PAGE_IDS = new Set(['checkin'])
+
+function adoptPluginPages(data) {
+  const packs = Array.isArray(data?.packs) ? data.packs : [];
+  const next = new Map();
+  for (const pack of packs) {
+    // 停用的包：页面也不该出现（与「插件不在，这家就不存在」同一原则）
+    if (pack?.enabled === false) continue;
+    const pages = Array.isArray(pack?.ui) ? pack.ui : [];
+    for (const page of pages) {
+      if (!page || typeof page.id !== 'string' || !page.id) continue;
+      if (typeof page.url !== 'string' || !page.url) continue;
+      // 内置页已接管这个能力：不再重复注册一个 iframe 菜单项
+      if (BUILTIN_PAGE_IDS.has(page.id)) continue;
+      const key = `${PLUGIN_PAGE_PREFIX}${pack.id}:${page.id}`;
+      next.set(key, {
+        key,
+        label: String(page.title || page.id),
+        url: page.url,
+        icon: typeof page.icon === 'string' && page.icon ? page.icon : 'plugins',
+        // 插件申报的默认归属分组：侧边栏据此决定「首次补进布局时放哪一组」
+        // （见 sidebar-layout 的 normalizeLayout）。没申报就是空串。
+        group: typeof page.group === 'string' ? page.group : '',
+        order: Number(page.order) || 0,
+      });
+    }
+  }
+  const changed = next.size !== pluginPages.size
+    || [...next.keys()].some(key => !pluginPages.has(key))
+    || [...next].some(([key, page]) => {
+      const prev = pluginPages.get(key);
+      return !prev || prev.url !== page.url || prev.label !== page.label || prev.group !== page.group;
+    });
+  if (!changed) return;
+  pluginPages.clear();
+  for (const [key, page] of next) pluginPages.set(key, page);
+  // 交给侧边栏模型（它负责「新菜单补进哪一组」与落盘校验）
+  window.wbSidebarLayout?.setDynamicMenus?.([...pluginPages.values()]);
+  renderSidebar();
+  // 当前正停在某个插件页、而它刚被卸载：退回默认页，别让用户对着一块空白
+  if (currentPage.startsWith(PLUGIN_PAGE_PREFIX) && !pluginPages.has(currentPage)) {
+    showPage('overview', { persist: false });
+  }
+}
+
+/**
+ * 拉一次插件清单（装 / 卸 / 启停之后、以及启动时各调一次）。
+ *
+ * 失败静默：插件页是增强项，拉不到就当作「一个都没有」，侧边栏照常显示
+ * 内置页 —— 为它弹一条错误提示只会让「没装插件」看起来像故障。
+ */
+async function refreshPluginPages() {
+  try {
+    const data = await api.getPlugins();
+    adoptPluginPages(data);
+  } catch {
+    /* 读不到 = 没有插件页 */
+  }
+}
+
+/**
+ * 侧边栏布局（分组 / 顺序 / 显隐）：数据口径全部在 ui/sidebar-layout.js，
+ * 这里只负责「按它把 #nav 画出来」与「设置页改完后重画」。
+ *
+ * 每次重画都是整块重建 #nav 的子节点 —— 与账号表「整表重建」同一取舍：
+ * 布局变更频率极低（用户手动调一次），增量更新换不来任何收益，却要维护
+ * 「哪个节点对应哪个菜单」的映射。三颗角标是**按 id 重建**的，所以重画之后
+ * 它们的显示状态会回到初始（隐藏），需要立刻补一次重绘（见 syncNavBadges）。
+ */
+function sidebarApi() {
+  return window.wbSidebarLayout;
+}
+
+/** 当前生效的布局（每次都从 localStorage 读：设置页改完只需派事件，不必传值） */
+function readSidebarLayout() {
+  return sidebarApi()?.readLayout?.() || null;
+}
+
+/**
+ * 画导航。
+ *
+ * 契约（与 index.html 里那段注释同源，改这里必须一起看）：
+ *   · 菜单键 = data-page，与 PAGES / PAGE_LABELS 逐字一致；
+ *   · 角标 id 固定三颗：nav-count-requests / -logs / -update；
+ *   · 分组标题用 .nav-group-label（≤900px 由 layout.css 整列隐藏）。
+ * 图标不在这里注入：画完调 paintIcons()，它按 data-icon 从 icons.js 取图形。
+ */
+function renderSidebar() {
+  const nav = $('nav');
+  const api = sidebarApi();
+  if (!nav || !api) return;
+
+  const layout = api.readLayout();
+  const groups = api.renderGroups(layout);
+
+  // 一个菜单都不剩：留一句提示，否则侧边栏只剩品牌与底部，像加载失败
+  if (!groups.length) {
+    nav.innerHTML = `<div class="nav-empty" data-i18n="侧边栏没有显示任何菜单。到「设置 → 显示 → 侧边栏菜单」里打开需要的项。">${esc(wbI18n.t('侧边栏没有显示任何菜单。到「设置 → 显示 → 侧边栏菜单」里打开需要的项。'))}</div>`;
+    return;
+  }
+
+  const parts = [];
+  for (const group of groups) {
+    parts.push(`<div class="nav-group-label">${esc(api.groupLabel(group.label))}</div>`);
+    for (const menu of group.items) {
+      parts.push(navItemHtml(menu));
+    }
+  }
+  nav.innerHTML = parts.join('');
+  paintIcons();
+  // 选中态与角标跟着重画：showPage 只负责「当前页」，重画后它认得的节点已经换了
+  markActiveNav();
+  syncNavBadges();
+}
+
+/** 一颗导航项。角标只给三个菜单，id 必须与 app.js 里的取用点逐字一致 */
+function navItemHtml(menu) {
+  const label = esc(wbI18n.t(menu.label));
+  const badge = menu.key === 'requests'
+    ? '<span class="count" id="nav-count-requests" style="display:none">0</span>'
+    : menu.key === 'logs'
+      ? '<span class="count" id="nav-count-logs" style="display:none">0</span>'
+      : menu.key === 'settings'
+        ? `<span class="count" id="nav-count-update" style="display:none">${esc(wbI18n.t('新'))}</span>`
+        : '';
+  return `<button class="nav-item" data-page="${menu.key}" data-icon="${menu.icon}">`
+    + '<span class="ico"></span>'
+    + `<span class="label">${label}</span>${badge}</button>`;
+}
+
+/** 把选中态标到当前页那一项上（showPage 与 renderSidebar 共用） */
+function markActiveNav() {
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.page === currentPage);
+  });
+}
+
+/**
+ * 重画之后补一次角标。
+ *
+ * 三颗角标的数据都由轮询维护在模块级变量里（runningRequests / unreadFailures /
+ * lastUpdateInfo / 未读日志水位），重画把 DOM 换掉之后新节点是「隐藏 + 0」，
+ * 必须按现有内存值重新点一次，否则用户改完布局要等下一轮轮询（最长 20 秒）
+ * 才重新看到提示。查询本身不发 —— 这里只用已经拿到的数。
+ *
+ * `navBadgesReady` 是必须的：首次渲染发生在模块顶部（那时还不能被桥调用中断），
+ * 而那些计数用的是 `let`（TDZ）—— 提前读会抛 ReferenceError，把整段脚本带崩。
+ * 首次渲染只画结构就够了（角标本来就该是隐藏的），等这些变量都初始化完再置位。
+ */
+let navBadgesReady = false;
+
+function syncNavBadges() {
+  if (!navBadgesReady) return;
+  paintRequestsBadge();
+  paintLogsBadgeFromMemory();
+  syncUpdateBadge();
+}
+
+/**
+ * 插件页的宿主 section（`index.html` 里 `data-page="__plugin__"`）。
+ *
+ * 它不是 `PAGES` 里的页面 —— 插件页的键是运行期才有的，不可能写进静态白名单。
+ * 显隐由下面两个函数直接管：切进插件页时建 iframe，切走时整块清掉。
+ */
+function pluginPageHost() {
+  return document.querySelector('.page[data-page="__plugin__"]');
+}
+
+/**
+ * 插件页的绝对地址。
+ *
+ * 插件清单里的 `url` 是网关侧的相对路径（`/plugins/<pack>/ui/<entry>`）。
+ * **不能直接喂给 iframe**：桌面端的页面来自 Tauri 的自定义协议
+ * （`tauri://localhost` 之类），相对路径会解析到壳自己的资源目录 —— iframe
+ * 里是一片 404，而网关那边一条请求都收不到。所以要用网关基址拼绝对地址：
+ *   · web 模式（面板由网关托管）：`gatewayBase` 就是地址栏的 origin；
+ *   · 桌面模式：`gatewayBase` 是 `http://127.0.0.1:<真实端口>`（见 port-panel）。
+ * 基址取不到时退回相对路径 —— 那在 web 模式下仍然正确。
+ */
+function pluginPageUrl(page) {
+  const base = window.wbPortPanel?.gatewayBase?.() || '';
+  if (!base || !page.url.startsWith('/')) return page.url;
+  return base.replace(/\/+$/, '') + page.url;
+}
+
+/**
+ * 切到某个插件页：在宿主 section 里建（或复用）一个 iframe。
+ *
+ * ── 为什么每次都重建而不是复用同一个 iframe ─────────────────
+ * 两个插件页是两个独立的 SPA，共用一个 iframe 就得让它们互相清理状态。
+ * 重建的成本是一次静态资源加载（`no-store`，本来也不缓存），换来的是
+ * 「切页即干净」—— 与「切走时清空」是同一条纪律的两面。
+ *
+ * ── 令牌怎么给 ──────────────────────────────────────────────
+ * iframe 加载的是网关地址，跨源、带不上 cookie。所以 `load` 之后用
+ * `postMessage` 把面板令牌递进去（不用 URL 参数：那会进 referrer 与历史）。
+ * 插件页面按 `agent2api:panel-credentials` 这条消息取令牌。
+ */
+function showPluginPage(key, { persist = true } = {}) {
+  const page = pluginPages.get(key);
+  const host = pluginPageHost();
+  if (!page || !host) return;
+  currentPage = key;
+  document.querySelectorAll('.page').forEach(section => {
+    section.classList.toggle('active', section.dataset.page === '__plugin__');
+  });
+  markActiveNav();
+  const crumb = $('crumb-page');
+  if (crumb) crumb.textContent = page.label;
+  { const t = document.getElementById('nav-toggle'); if (t) t.checked = false; }
+  if (persist) localStorage.setItem(PAGE_KEY, key);
+  window.wbColSettings?.close?.();
+  // 整块换掉：上一页的 iframe 连同它的定时器一起消失
+  host.innerHTML = '';
+  const frame = document.createElement('iframe');
+  frame.className = 'plugin-page-frame';
+  frame.dataset.pluginPage = key;
+  frame.setAttribute('title', page.label);
+  frame.src = pluginPageUrl(page);
+  frame.addEventListener('load', () => {
+    // 令牌与主题在每次 load 后各递一次（页面重新加载 / 插件热更新后同样需要）。
+    // 页面自己也会主动要一次（见 onPluginMessage）—— 两条路互为兜底。
+    void pushPanelToken(frame.contentWindow);
+    pushPanelTheme(frame.contentWindow);
+  });
+  host.appendChild(frame);
+}
+
+/** 离开插件页：清掉 iframe（它的定时器跟着停，不再持续打网关） */
+function clearPluginPage() {
+  const host = pluginPageHost();
+  if (host) host.innerHTML = '';
+}
+
+/**
+ * 把面板凭证 postMessage 给插件页面。
+ *
+ * `target` 是 iframe 的 `contentWindow`（不是 iframe 元素本身）：页面主动
+ * 索取时手上只有 `event.source`，那正是它的 contentWindow。
+ *
+ * ── 为什么复用 `directCredentials` ─────────────────────────
+ * 它已经处理了两端的差别：桌面壳给第一把 Key、网页面板给 `x-panel-token` +
+ * `Authorization`，未注册管理员的部署给用户输入的网关 Key。插件页面要的正是
+ * 「能调管理 API 的那组头」，与助手页直连网关用的是同一份（见 bridge.rs 的
+ * 同名方法说明）。为插件页另开一条「取令牌」的桥会让这套判定长出第二份。
+ *
+ * 读不到时什么都不做 —— 插件页面自己会退化成「只用同源 cookie」。
+ */
+async function pushPanelToken(target) {
+  if (!target) return;
+  try {
+    const headers = await api.directCredentials?.();
+    if (!headers) return;
+    // `*` 作为 targetOrigin 是刻意的：iframe 的源是网关地址，而网关地址可能是
+    // 局域网 IP 的任意端口（用户自己配的），壳侧算不出它。消息体里只有凭证，
+    // 接收方是我们自己托管的插件页面 —— 与「把凭证给 iframe」这个前提同级。
+    target.postMessage({ type: 'agent2api:panel-credentials', headers }, '*');
+  } catch {
+    /* 没有凭证就不传 */
+  }
+}
+
+/**
+ * 把当前主题模式 postMessage 给插件页面。
+ *
+ * ── 为什么要传 ──────────────────────────────────────────────
+ * 主题选择存在宿主的 localStorage（`workbuddy-desktop-theme`），iframe 是
+ * 独立文档，读不到它；而 `prefers-color-scheme` 只在宿主把窗口主题交回系统
+ * 时才跟着变 —— 用户显式选了深色、系统却是浅色时，iframe 里读到的仍是浅色。
+ * 所以模式必须由宿主递进去，页面写到自己的 `<html data-theme>` 上，交给
+ * `/plugins/theme.css`（网关出的宿主令牌原文）里那套选择器生效。
+ *
+ * ── 为什么传的是三态而不是算好的 light/dark ─────────────────
+ * `system` 必须原样传：只有让 iframe 自己走 `prefers-color-scheme`，它才能
+ * 在「系统主题运行中变化」时跟着变（见 tokens.css 末尾那段 @media）。宿主
+ * 这里若先算成 light/dark，用户切系统主题时插件页就停在上一次的结果上。
+ */
+function pushPanelTheme(target) {
+  if (!target || typeof target.postMessage !== 'function') return;
+  const mode = localStorage.getItem('workbuddy-desktop-theme') || 'system';
+  try {
+    target.postMessage({ type: 'agent2api:panel-theme', theme: mode }, '*');
+  } catch {
+    /* 目标已销毁：下次打开会再推一次 */
+  }
+}
+
+/**
+ * 监听插件页发回来的请求（`window.addEventListener('message', …)` 注册在下面）。
+ *
+ * 三条消息：
+ *   · `agent2api:request-credentials` —— 插件页主动索取凭证。页面在脚本里就
+ *     发（早于 iframe 的 load），因为宿主的 `load` 钩子可能比页面的首轮请求
+ *     晚（桌面壳的 `directCredentials` 要过一次 IPC）。两条路都留着：主动要
+ *     是主路径，`load` 那次是页面重新加载后的补发。
+ *   · `agent2api:request-theme` —— 插件页主动索取主题模式。与凭证同一套时序
+ *     理由：页面首帧就要正确的深浅，不能等宿主的 `load`。
+ *   · `agent2api:open-zcode-plans` —— 插件页的「活动福利」行要打开宿主的套餐
+ *     明细弹窗（`wbZcodePlans` 是 React 岛，iframe 里拿不到）。让插件页自己
+ *     重画一份弹窗等于把那个界面复制一遍，两份会各自漂移。
+ */
+function onPluginMessage(event) {
+  const data = event.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'agent2api:request-credentials') {
+    // 回给发消息的那个 frame（可能是插件页，也可能是将来的其它嵌入方）
+    const source = event.source;
+    if (source && typeof source.postMessage === 'function') {
+      void pushPanelToken(source);
+    }
+    return;
+  }
+  if (data.type === 'agent2api:request-theme') {
+    pushPanelTheme(event.source);
+    return;
+  }
+  if (data.type !== 'agent2api:open-zcode-plans') return;
+  const accountId = typeof data.accountId === 'string' ? data.accountId : '';
+  if (!accountId) return;
+  window.wbZcodePlans?.open?.({ id: accountId, name: typeof data.name === 'string' ? data.name : undefined });
+}
+window.addEventListener('message', onPluginMessage);
+
 function showPage(name, { persist = true } = {}) {
-  const page = PAGES.includes(name) ? name : 'overview';
+  // 插件页走单独一条路：它不是 `<section class="page" data-page>` 里的内置页，
+  // 而是一个 iframe（页面由插件包提供、网关托管，见 adoptPluginPages）。
+  if (typeof name === 'string' && name.startsWith(PLUGIN_PAGE_PREFIX) && pluginPages.has(name)) {
+    showPluginPage(name, { persist });
+    return;
+  }
+  // 老版本的「签到中心」菜单键是 `plugin:<pack>:checkin`（那时页面在插件包里）。
+  // 升级后那条申报被内置页接管、不再注册，于是 localStorage 里存的这个键会
+  // 认不出来 —— 用户停在签到页升级完，重启会掉到「报表」。这里把它接上。
+  let target = name;
+  if (typeof target === 'string' && target.startsWith(PLUGIN_PAGE_PREFIX) && target.endsWith(':checkin')) {
+    target = 'checkin';
+  }
+  const page = PAGES.includes(target) ? target : 'overview';
   currentPage = page;
+  // 离开插件页时把宿主容器清空：iframe 里的页面会一直跑着定时器，
+  // 留着等于在后台持续打网关
+  clearPluginPage();
   document.querySelectorAll('.page').forEach(section => {
     section.classList.toggle('active', section.dataset.page === page);
   });
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.page === page);
-  });
+  markActiveNav();
   const crumb = $('crumb-page');
   if (crumb) crumb.textContent = PAGE_LABELS[page] || page;
   // 移动端：切页后收起侧边栏抽屉。#nav-toggle 是纯 CSS 开关（见 css/mobile.css），
@@ -193,13 +575,19 @@ function showPage(name, { persist = true } = {}) {
   if (page === 'tasks') {
     window.wbTasksPanel?.load?.();
   }
-  // 签到中心自持数据（聚合快照 + 惰性查询缓存），切进去时拉一次最新
-  if (page === 'checkin') {
-    void window.wbCheckinPanel?.load?.();
-  }
-  // 切到设置页时拉一次启动设置与网关地址（面板内部自持状态，这里只做转发）
   if (page === 'settings') {
     window.wbSettingsPanel?.load?.();
+  }
+  // 切到签到中心时重拉一次快照：用户可能刚在账号页加/删了账号，或者刚在
+  // 「插件」页装完插件（签到能力正是从那儿来的）。页面岛自己也会在首次挂载时
+  // 拉一次，但那是「进程内第一次」—— 之后每次切进来都要刷新。
+  if (page === 'checkin') {
+    window.wbCheckin?.load?.();
+  }
+  // 提供商插件页自持包列表与宿主状态，切进去时拉一次最新（用户可能刚在
+  // 另一个窗口里手工换过包，或者宿主崩溃重启过）
+  if (page === 'plugins') {
+    void window.wbPluginsPage?.load?.();
   }
   // 切到模型管理页时整页刷新一次：内置清单可能被上游刷新过，自定义家可能刚在
   // 账号页被加过 / 改过 / 删过（提供商记录与它的模型清单），而这一页的数据是
@@ -207,6 +595,11 @@ function showPage(name, { persist = true } = {}) {
   // 这里只转发 —— 它自己保证「切页这次刷新一定落地」。
   if (page === 'gateway') {
     void window.wbModelsPanel?.refreshAll?.();
+  }
+  // Agent 页自持客户端清单与配置，切进去时拉一次最新（配置文件可能被
+  // 客户端自己改过、也可能刚在别的窗口里被别的工具改过）
+  if (page === 'agent') {
+    void window.wbAgentPanel?.load?.();
   }
   // 网络代理页自持清单（代理池），切进去时拉一次最新：别的窗口 / 别的页面
   // （账号弹窗里改过引用）都可能让它变过。面板内部保证「这次刷新一定落地」
@@ -217,6 +610,9 @@ function showPage(name, { persist = true } = {}) {
   // 切走的这段时间里缓存已经过期，不补一下会先看到几秒前的旧数字
   if (page === 'accounts') {
     void window.wbAccountsView?.syncConnections?.();
+    // 代理列的下拉读的是与「网络代理」页共用的那份池缓存：那一页的写操作会就地
+    // 更新它，但池也可能在应用外被改过（另一个窗口 / 手工改库），切回来时重读一次
+    void window.wbAccountsView?.refreshProxyPool?.();
   }
   // 网关 Key 页持有数据，切进去时拉一次最新（模型管理页在上面已经拉过）
   if (page === 'keys') {
@@ -292,8 +688,9 @@ function renderTopbarStatus() {
     requests: () => mirror('req-badge'),
     // 定时任务页的徽标由 tasks-panel 自己渲染（「N / M 个已开启」），直接镜像
     tasks: () => mirror('tasks-badge'),
-    // 签到中心的徽标由 checkin-page 自己渲染（自动签到开启状态），直接镜像
-    checkin: () => mirror('checkin-badge'),
+    // 签到中心在插件页的 iframe 里，它的徽标（自动签到开启状态）画在页面内部
+    // 的标签条上 —— 宿主这边没有可镜像的元素。跨源 iframe 也读不到它的 DOM，
+    // 所以顶栏不给这一页徽标（其它页照常）。
     settings: () => (gatewayUp ? chip(wbI18n.t('网关运行中'), 'ok', true) : chip(wbI18n.t('未就绪'), 'bad', true))
       + (enabled ? chip(wbI18n.t('{n} 个账号启用', { n: enabled })) : ''),
     // 「已登录 / 未登录」说的是**旧式单账号登录态**（WorkBuddy 的 auth.json），
@@ -322,6 +719,14 @@ function renderTopbarStatus() {
 let lastSeenLogId = readSeenLogId();
 /** 未读错误查询是否在飞：日志面板轮询与全局轮询都会触发它，同一时刻只该有一次 */
 let unreadErrorsInFlight = false;
+/**
+ * 最近一次查到的未读错误数（0 = 没有）。
+ *
+ * 为什么要留在内存里：侧边栏重画（用户改了分组 / 顺序 / 显隐）会把角标节点整个
+ * 换掉，新节点是「隐藏 + 0」。重画之后必须按这个值重新点一次，否则要等下一轮
+ * 轮询（最长 20 秒）提示才回来。查询本身不发 —— 这里只用已经拿到的数。
+ */
+let unreadLogErrors = 0;
 
 /** 读回持久化的水位；无值 / 值被改坏一律当作「还没有水位」 */
 function readSeenLogId() {
@@ -392,6 +797,23 @@ function updateLogsBadge(stats) {
   void refreshUnreadErrors(badge);
 }
 
+/**
+ * 按内存里已有的未读数重画日志角标（不发查询）。
+ * 侧边栏重画之后由 syncNavBadges 调 —— 新节点是「隐藏 + 0」，
+ * 不补这一下，用户改完布局要等下一轮轮询才重新看到提示。
+ */
+function paintLogsBadgeFromMemory() {
+  const badge = $('nav-count-logs');
+  if (!badge) return;
+  if (currentPage === 'logs' || !unreadLogErrors) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.textContent = unreadLogErrors > 99 ? '99+' : String(unreadLogErrors);
+  badge.title = wbI18n.t('{n} 条错误日志未读，点开「日志」查看', { n: unreadLogErrors });
+  badge.style.display = '';
+}
+
 /** 查未读错误数并重画徽标。失败静默：查询偶尔失败不该反过来抹掉已有提示 */
 async function refreshUnreadErrors(badge) {
   if (unreadErrorsInFlight || lastSeenLogId === null) return;
@@ -402,13 +824,17 @@ async function refreshUnreadErrors(badge) {
     // 等待期间水位被推进（用户进了日志页），这次结果已过期，别拿旧数覆盖新状态
     if (from !== lastSeenLogId || currentPage === 'logs') return;
     const unread = Number(result?.matched) || 0;
+    unreadLogErrors = unread;
+    // 重画过的侧边栏可能已经换掉了这个 badge 节点：按 id 重新取一次，
+    // 拿旧引用去改只会改到一个已经不在文档里的元素
+    const live = $('nav-count-logs') || badge;
     if (!unread) {
-      badge.style.display = 'none';
+      live.style.display = 'none';
       return;
     }
-    badge.textContent = unread > 99 ? '99+' : String(unread);
-    badge.title = wbI18n.t('{n} 条错误日志未读，点开「日志」查看', { n: unread });
-    badge.style.display = '';
+    live.textContent = unread > 99 ? '99+' : String(unread);
+    live.title = wbI18n.t('{n} 条错误日志未读，点开「日志」查看', { n: unread });
+    live.style.display = '';
   } catch {
     // 保持上一次的显示
   } finally {
@@ -579,6 +1005,15 @@ let lastUpdateInfo = null;
  * 之后又发了更新的版本，提示该重新出现。
  */
 let seenUpdateVersion = '';
+
+/**
+ * 三颗角标的内存值都初始化完了 —— 从这里开始 syncNavBadges 才有意义。
+ *
+ * 首次 renderSidebar() 发生在模块顶部（见那里的说明：它不能被桥调用中断），
+ * 那时上面这些 `let` 还在 TDZ 里，读一下就抛 ReferenceError。置位放在
+ * 「所有角标状态声明之后」是刻意的：早一行都可能踩到 TDZ。
+ */
+navBadgesReady = true;
 
 /**
  * 按当前状态重画「设置」导航项上的更新提示。
@@ -797,6 +1232,46 @@ applyTheme(localStorage.getItem('workbuddy-desktop-theme') || 'system');
 // 尽力而为的反闪烁，若桥当时还没就绪就会静默失败，由这行补齐。
 applyZoom(storedZoom());
 
+/**
+ * 侧边栏首帧：按本机布局画出 #nav。
+ *
+ * ⚠ 位置是**契约**：必须在第一个桥调用（下面这行 `api.onStateChanged`）之前。
+ *
+ * 为什么不能再往后放：以前侧边栏是 index.html 里的静态 DOM，桥没就绪时页面
+ * 照样有导航；改成数据渲染之后，这一句要是排在桥调用后面，只要桥缺失
+ * （浏览器直开 / 注入失败）在那一行抛错，整段脚本中断，#nav 就永远是空的 ——
+ * 用户看到的是一个没有导航的窗口，比任何功能失效都糟。
+ * 它只读 localStorage、不依赖任何岛与桥，没有任何理由排在后面。
+ *
+ * 也不能挪进 DOMContentLoaded：那会让首帧闪一下空侧边栏。
+ */
+renderSidebar();
+
+/**
+ * 设置页改完布局后的重画入口。
+ *
+ * 为什么走事件而不是直接调用：设置页的编辑面板是 React 岛，它改完只知道自己
+ * 手里那份数据变了；重画侧边栏是 app.js 的职责。事件里不带数据 —— 布局的唯一
+ * 真相在 localStorage，重画时现读，避免「事件传的值」与「存盘的值」在某个
+ * 中间态对不上（比如用户连点两下）。
+ *
+ * ⚠ 与 renderSidebar 同一个理由排在桥调用之前：它只读 localStorage、只改 DOM，
+ * 不依赖桥。排到 `api.onStateChanged` 后面的话，桥缺失时这条监听根本不会注册，
+ * 用户在设置页改完布局、左侧侧边栏毫无反应 —— 而且没有任何报错。
+ *
+ * 顺带处理「当前页被隐藏了」：用户把自己正看着的那一页藏起来之后，侧边栏里
+ * 没有它的入口了，但页面还开着 —— 看起来像卡住。这时落到第一个可见页。
+ */
+window.addEventListener('wb:sidebar-layout', () => {
+  renderSidebar();
+  const api = sidebarApi();
+  const layout = api?.readLayout?.();
+  if (!layout || !api) return;
+  if (api.isVisible(layout, currentPage)) return;
+  const fallback = api.firstVisibleKey(layout);
+  if (fallback) showPage(fallback);
+});
+
 api.onStateChanged(next => {
   if (!next?.accounts && !next?.session && !next?.health) return;
   // 合并：旧 state + 新字段
@@ -814,6 +1289,9 @@ window.wbApp = {
   getState: () => state,
   runAccountAction,
   refresh,
+  // 插件页清单重拉（插件页装 / 卸 / 启停之后由插件页的岛调它）：
+  // 侧边栏的插件页菜单按这份清单生成，不重拉就会「装完了菜单里还是没有」
+  refreshPluginPages,
   renderTopbarStatus,
   updateLogsBadge,
   syncLogsBadge,
@@ -834,6 +1312,7 @@ window.wbApp = {
 // ─── 初始化 ───────────────────────────────────
 
 // 导航：点击切换页面，记住上次所在页
+// （首帧渲染在文件上方、第一个桥调用之前 —— 见那里的说明）
 $('nav').addEventListener('click', event => {
   const item = event.target.closest('.nav-item[data-page]');
   if (item) showPage(item.dataset.page);
@@ -853,7 +1332,9 @@ function paintIcons() {
   if (!icon) return;
   document.querySelectorAll('.nav-item[data-icon] .ico').forEach(slot => {
     const name = slot.closest('.nav-item').dataset.icon;
-    slot.innerHTML = icon(name, 17);
+    // 插件页申报的图标名可能不在内置表里（第三方包，图标键由它自己定）：
+    // 落到 `plugins` 那颗通用图标上，别留一个空槽（空槽看起来像加载失败）
+    slot.innerHTML = icon(name, 17) || icon('plugins', 17);
   });
   document.querySelectorAll('.brand-logo').forEach(slot => {
     slot.innerHTML = icon('brand', 32);
@@ -875,7 +1356,20 @@ paintIcons();
 // 恢复页是「设置」时，启动设置就永远停在「检测中…」（局域网开关随之显示
 // 默认值，看着像没保存）。DOMContentLoaded 在全部同步脚本执行完才触发，
 // 借它把初始切换对齐到「岛已就绪」之后，与用户手动切页完全同行为。
-const initialPage = localStorage.getItem(PAGE_KEY) || 'overview';
+//
+// 恢复前先过一道「这页还看得见吗」：用户可能在上次退出前把它（或它所在的分组）
+// 隐藏了。停在一个侧边栏里找不到入口的页面上，看起来就像页面丢了 —— 这时落到
+// 第一个可见页。一个菜单都不剩时保持原值（那种情况下用户会看到侧边栏的提示语，
+// 页面本身仍是可用的，没必要再猜一个）。
+function restoredPage() {
+  const saved = localStorage.getItem(PAGE_KEY) || 'overview';
+  const api = sidebarApi();
+  const layout = api?.readLayout?.();
+  if (!layout || !api) return saved;
+  if (api.isVisible(layout, saved)) return saved;
+  return api.firstVisibleKey(layout) || saved;
+}
+const initialPage = restoredPage();
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     showPage(initialPage, { persist: false });
@@ -927,6 +1421,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // 放在 DOMContentLoaded：islands（wbAccountsView 的注册处，见 index.html 的
   // 加载顺序）是同步脚本，此刻已经就位。
   void window.wbAccountsView?.syncBalancesSnapshot?.();
+  // 插件申报的页面 → 侧边栏动态菜单。放这里而不是模块顶部：首帧侧边栏先按
+  // 内置页画出来（不闪空白），拿到清单后再补上插件页（多一次重画）。
+  void refreshPluginPages();
 }, { once: true });
 
 // 窗口重新可见时立刻补读一次余额快照：20 秒轮询在页面隐藏期间整体跳过

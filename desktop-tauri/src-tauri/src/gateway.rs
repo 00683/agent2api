@@ -213,16 +213,31 @@ pub fn management_key() -> Option<String> {
     read_api_key()
 }
 
-fn client() -> Result<reqwest::Client, String> {
+/// 指定总超时的 Client。
+///
+/// ── 为什么云同步要单独放宽 ──────────────────────────────────
+/// 通用 60 秒是给「管理 API 小请求」定的；云同步的上传 / 下载要打外网传几 MB，
+/// 慢速云盘上 60 秒根本不够。放宽的是**这一条命令**的超时，不是全局 ——
+/// 其它管理请求仍应快速失败（卡住的面板比报错更难排查）。
+fn client_with_timeout(timeout_ms: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
+        .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))
 }
 
 fn request_builder(method: &str, path: &str, body: Option<&Value>) -> Result<reqwest::RequestBuilder, String> {
+    request_builder_with_timeout(method, path, body, REQUEST_TIMEOUT_MS)
+}
+
+fn request_builder_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout_ms: u64,
+) -> Result<reqwest::RequestBuilder, String> {
     let url = format!("http://127.0.0.1:{}{path}", proxy_port());
-    let base = client()?;
+    let base = client_with_timeout(timeout_ms)?;
     let mut builder = match method.to_uppercase().as_str() {
         "GET" => base.get(&url),
         "POST" => base.post(&url),
@@ -235,6 +250,9 @@ fn request_builder(method: &str, path: &str, body: Option<&Value>) -> Result<req
     if let Some(key) = read_api_key() {
         builder = builder.header("X-API-Key", key);
     }
+    // 面板会话令牌（注册过管理员后才有）：与 Key 并存 —— 服务端两种凭证都认，
+    // 会话存在时以它为主（Key 只服务 /v1 转发与兼容形态）。见 panel_session 模块头。
+    builder = crate::panel_session::attach(builder);
     // 与原实现一致：POST/PUT/PATCH 即使无参数也发一个空对象，
     // 后端部分路由按「有 body」判定，省略会让它们走错分支
     if let Some(payload) = body {
@@ -249,9 +267,60 @@ fn request_builder(method: &str, path: &str, body: Option<&Value>) -> Result<req
     Ok(builder)
 }
 
-/// 发一次管理请求，返回解包后的 data
+/// 发一次管理请求，返回解包后的 data。
+///
+/// ── 401 的自动续期 ──────────────────────────────────────────
+/// 面板会话的 access 只有 2 小时；过期后服务端回 401 + `panel_login_required`。
+/// 这时先用 refresh 静默换一组新令牌、把同一请求重发一次 —— 用户不该每两小时
+/// 被弹一次登录页。续期也失败（会话链真没了）才把错误交给调用方，界面据此
+/// 提示「登录已过期」。重试只做一次，不会无限循环。
 pub async fn call(method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
-    let builder = request_builder(method, path, body)?;
+    call_with_timeout(method, path, body, REQUEST_TIMEOUT_MS).await
+}
+
+/// 与 [`call`] 同形，但用指定的总超时。
+///
+/// 只服务云同步的上传 / 下载（打外网、传几 MB，60 秒不够）。超时值由调用方
+/// 给：壳命令那边是一个具名常量，不在这里写死 —— 将来若别处也需要长请求，
+/// 各自声明自己的预算，比在一个全局旋钮上调大更可控。
+pub async fn call_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    // 到期前先把令牌换掉：这一步让「access 过期 → 401 → 续期」不再发生。
+    // 只靠下面那个 401 分支的话，每次过期都必然产生一条 401（壳里后台轮询
+    // 每 20 秒一轮，服务端每 2 小时准时记一条）。失败静默，交给 401 分支兜底。
+    crate::panel_session::refresh_if_expiring().await;
+    let first = send_once(method, path, body, timeout_ms).await?;
+    if first.status == 401 && crate::panel_session::has_tokens() {
+        let detail = first.payload.get("error");
+        let needs_login = detail
+            .and_then(|error| error.get("type"))
+            .and_then(Value::as_str)
+            == Some("panel_login_required");
+        if needs_login && crate::panel_session::refresh().await {
+            return Ok(send_once(method, path, body, timeout_ms).await?.payload);
+        }
+    }
+    unwrap_envelope(&first.text, first.status)
+}
+
+/// 一次请求的原始结果（保留文本与解析值，供 401 判定与信封解包共用）。
+struct RawResponse {
+    status: u16,
+    text: String,
+    payload: Value,
+}
+
+async fn send_once(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout_ms: u64,
+) -> Result<RawResponse, String> {
+    let builder = request_builder_with_timeout(method, path, body, timeout_ms)?;
     let response = builder
         .send()
         .await
@@ -261,28 +330,61 @@ pub async fn call(method: &str, path: &str, body: Option<&Value>) -> Result<Valu
         .text()
         .await
         .map_err(|error| format!("读取响应失败: {error}"))?;
-    unwrap_envelope(&text, status)
+    let payload = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+    Ok(RawResponse {
+        status,
+        text,
+        payload,
+    })
 }
 
-/// 取原始文本（导出日志用；call 会按 JSON 解析，不适合）
+/// 取原始文本（导出日志用；call 会按 JSON 解析，不适合）。
+///
+/// 401 同样先续期再重试一次（与 [`call`] 同一取向）—— 导出日志的请求也走
+/// 管理面鉴权，access 过期时不该让用户看到一条莫名其妙的失败。
 pub async fn call_text(method: &str, path: &str) -> Result<String, String> {
+    // 与 call_with_timeout 同一取向：到期前先续期，别让这条请求去撞 401
+    crate::panel_session::refresh_if_expiring().await;
+    let first = send_text_once(method, path).await?;
+    if first.status == 401 && crate::panel_session::refresh().await {
+        let retried = send_text_once(method, path).await?;
+        if retried.status == 401 {
+            return Err("HTTP 401".to_string());
+        }
+        return Ok(retried.text);
+    }
+    if first.status == 401 {
+        return Err("HTTP 401".to_string());
+    }
+    Ok(first.text)
+}
+
+/// 一次文本请求的原始结果（保留状态码供 401 判定）。
+struct TextResponse {
+    status: u16,
+    text: String,
+}
+
+async fn send_text_once(method: &str, path: &str) -> Result<TextResponse, String> {
     let builder = request_builder(method, path, None)?;
     let response = builder
         .send()
         .await
         .map_err(|error| describe_transport_error(&error))?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status().as_u16()));
-    }
-    response
+    let status = response.status().as_u16();
+    let text = response
         .text()
         .await
-        .map_err(|error| format!("读取响应失败: {error}"))
+        .map_err(|error| format!("读取响应失败: {error}"))?;
+    Ok(TextResponse { status, text })
 }
 
 fn describe_transport_error(error: &reqwest::Error) -> String {
     if error.is_timeout() {
-        "连接本地代理超时".to_string()
+        // 「连接超时」这个说法会让人以为网关没起来。实际发生时请求往往已经
+        // 送达、后端还在跑（长操作），只是壳不再等它 —— 文案要说清这一点，
+        // 否则用户会重复点一遍，把同一个慢操作叠第二次。
+        "等待本地代理响应超时（网关可能仍在处理，请稍后查看结果）".to_string()
     } else {
         format!("无法连接本地代理（127.0.0.1:{}）: {error}", proxy_port())
     }

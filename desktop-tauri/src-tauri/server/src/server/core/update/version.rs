@@ -14,8 +14,21 @@
 
 use serde_json::Value;
 
-/// 默认仓库（本项目的上游）；fork 后可自行覆盖（Node 版 DEFAULT_REPO）
-pub const DEFAULT_REPO: &str = "aimod-cc/agent2api";
+/// 默认仓库：安装包实际发布的地方（独立构建账号下的仓库）。
+///
+/// ── 为什么不是主仓库 ────────────────────────────────────────
+/// 构建已搬到专用账号（见 `Agent2Builder/agent2api-releases` 的
+/// `release.yml`）：七个平台 job 跑一次是重负载，留在主仓库做 tag 触发容易
+/// 被判定为 Actions 滥用。因此**主仓库不再发带安装包的 Release** —— 这个
+/// 常量若仍指向主仓库，更新检查会永远「已是最新」（不报错，只是静默失效）。
+///
+/// ── 这个值是可以被远程改掉的 ────────────────────────────────
+/// 它只是**兜底**。正常情况下实际用的是索引里的 `app.repo`
+/// （见 `core::update::index`）：构建仓库换了，改索引文件即可，不必发版。
+/// 这里保留一个可用值，是为了「索引读不到也还能更新」。
+///
+/// `WORKBUDDY_UPDATE_REPO` 环境变量仍可覆盖（最高优先级，且不读索引）。
+pub const DEFAULT_REPO: &str = "Agent2Builder/agent2api-releases";
 
 /// GitHub API 根（Node 版 GITHUB_API）—— [`api_base`] 的默认值
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -567,8 +580,28 @@ pub fn pick_asset_by_name(assets: Option<&Value>, wanted: &str) -> Option<Value>
     }))
 }
 
-/// JS `String.prototype.trim` 的空白集合 = White_Space ∪ {U+FEFF}。
+/// Android APK 的资产名约定：`Agent2API-<版本>.apk`（CI 的 android job 按这个
+/// 形状重命名，安装文档里写的也是它）。
 ///
+/// 与 [`pick_installer`] 分开的原因：那条按**本机平台**挑安装包，而手机端要的
+/// 恰恰是「另一个平台」的产物 —— 网关跑在电脑上，用户却在手机上点更新。所以
+/// 这条不看 `cfg!(target_os)`，只按后缀 `.apk` 挑。
+///
+/// 多个候选（例如同时挂了 universal 与分架构包）时取第一个：当前 CI 只产一个，
+/// 等真出现多包再补优先级。
+pub fn pick_android_apk(assets: Option<&Value>) -> Option<Value> {
+    let list = assets.and_then(Value::as_array)?;
+    let chosen = list
+        .iter()
+        .find(|item| asset_name(item).to_lowercase().ends_with(".apk"))?;
+    Some(serde_json::json!({
+        "name": asset_name(chosen),
+        "size": chosen.get("size").and_then(Value::as_u64).unwrap_or(0),
+        "url": chosen.get("browser_download_url").and_then(Value::as_str).unwrap_or(""),
+    }))
+}
+
+/// JS `String.prototype.trim` 的空白集合 = White_Space ∪ {U+FEFF}。
 /// 这里为 safe_file_name 的 `.trim()` 复制一份：规则只有一行，重复的代价
 /// 小于把它提升成全局公共设施（项目里另有几处同款实现，各自模块内可见）。
 fn js_trim(value: &str) -> &str {

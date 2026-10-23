@@ -18,6 +18,7 @@ use serde_json::{json, Map, Value};
 
 use crate::server::core::account_store::sql;
 use crate::server::core::account_store::state::StoredAccount;
+use crate::server::core::account_store::store_view::Visibility;
 use crate::server::core::account_store::store::{AccountStore, AccountStoreError};
 use crate::server::core::account_store::store_crud::normalize_max_concurrent;
 use crate::server::core::account_store::store_util::truncate_chars;
@@ -135,7 +136,7 @@ impl AccountStore {
         // （批量本来就是低频、少量条目的操作）。
         let snapshot = {
             let guard = self.guard();
-            self.snapshot(&self.load(&guard))
+            self.snapshot(&self.load(&guard), Visibility::UserFacing)
         };
         // 摘要文案：与 Node 版逐字一致（enabled 与 proxy 两种说法）
         let mut summary: Vec<String> = Vec::new();
@@ -239,7 +240,7 @@ impl AccountStore {
         if targets.is_empty() {
             // 没有任何一条可删：不写库，直接给当前快照
             let state = self.load(&_guard);
-            return Ok(json!({ "removed": removed, "failed": failed, "list": self.snapshot(&state) }));
+            return Ok(json!({ "removed": removed, "failed": failed, "list": self.snapshot(&state, Visibility::UserFacing) }));
         }
         // 整批一个事务：删除要么全生效、要么一条都不删
         self.with_conn_mut(&_guard, |conn| {
@@ -250,7 +251,7 @@ impl AccountStore {
             tx.commit()
         })?;
         let state = self.load(&_guard);
-        let snapshot = self.snapshot(&state);
+        let snapshot = self.snapshot(&state, Visibility::UserFacing);
         let names: String = removed
             .iter()
             .filter_map(|item| item.get("name").and_then(Value::as_str))

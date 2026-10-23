@@ -50,6 +50,13 @@ export type RateLimitInfo = {
   status?: number | string
   code?: string | number
   resetAt?: number
+  /**
+   * **触发时刻**（毫秒）：`store_admin::mark_rate_limited` 每次落盘都会写。
+   * 与 `resetAt` 合起来才知道这条冷却是多长、走到了哪儿 —— 限流明细里那条
+   * 「冷却进度」线读的就是它。旧版本落盘的记录可能没有这个键，那时进度线不画
+   * （`progress: null`），其余读数照旧。
+   */
+  at?: number
   message?: string
 }
 
@@ -134,6 +141,16 @@ export type AccountRecord = {
   /** ZCode：这一行当前走哪条上游通道（`coding-plan` / `start-plan`，见 accounts-domain 的 ZCODE_PLAN_*） */
   zcodePlan?: string
   hasRefreshToken?: boolean
+  /**
+   * 后端判定「这个账号的登录态已被上游注销，只能重新登录」（issue #215）。
+   *
+   * 连续多次刷新都收到 `12153:refresh token is invalid` 时由刷新链路落标记。
+   * 这类账号的 refresh token 链已经死了，再刷新不会好，凭证维护也会跳过它 ——
+   * 界面必须说出来，否则用户只会看到「刷新一直失败」而不知道该怎么办。
+   */
+  needsRelogin?: boolean
+  /** 与 `needsRelogin` 成对：后端给出的原因文案（为空表示没有标记）。 */
+  needsReloginReason?: string
   hasBalanceToken?: boolean
   /**
    * 自定义账号：记录里有没有非空 `apiKey`（设置弹窗据此决定输入框的提示文案与
@@ -192,6 +209,14 @@ export type AccountRecord = {
 export type AccountsSnapshot = {
   accounts?: AccountRecord[]
   providers?: Array<{ id?: string; label?: string; count?: number }>
+  /**
+   * 因「提供商插件未安装」而被隐藏的账号（`Visibility::UserFacing` 过滤掉的
+   * 那一部分，判据见后端 `account_store::store_view::account_visible`）。
+   *
+   * 有它界面才能把「真的没有账号」和「账号在等插件」分开说 —— 后者若沿用
+   * 「暂无账号，请添加」，升级上来的用户会以为数据丢了并去重新添加。
+   */
+  hiddenAccounts?: { total?: number; byProvider?: Record<string, number> }
 }
 
 /** 余额缓存的四种形态：undefined 未查 / null 查询中 / string 失败 / 对象结果 */
@@ -200,43 +225,11 @@ export type UsageEntry = null | string | Record<string, unknown> | undefined
 /** 列的对齐档（与 table-col-settings 的 Align 同一套取值） */
 export type Align = 'left' | 'center' | 'right'
 
-/**
- * 行内明细面板的 kind。**只剩「限流明细」一种**：签到曾也有一个明细面板，
- * 已随表格化删除；账号页的签到按钮又整体迁去了「签到中心」，行内面板
- * 与签到从此互不相干。
- */
-export type PanelKind = 'limits'
-
-/* ─── Loomy 新手任务 ─────────────────────────
+/* ─── 新手任务 ───────────────────────────────
  *
- * 类型在这里、消费在签到中心（checkin-page.tsx / checkin-state.ts）：任务状态
- * 是上游查询，签到中心的快照刻意不带，按账号惰性查询后缓存。账号页曾有一个
- * 「签到后自动弹窗领取」的链路（accounts-dialog-onboarding），随账号页签到
- * 按钮一起移除 —— 签到后的自动处理由 checkin-state.ts 承接。 */
-
-/** 后端任务行的原始形状（`GET /api/accounts/{id}/onboarding` 的 tasks 数组元素） */
-export type OnboardingTaskRaw = {
-  key?: unknown
-  title?: unknown
-  group?: unknown
-  points?: unknown
-  done?: unknown
-  /** 前置没满足 ⇒ 这一条现在领不动（CodeArts 新人礼未到门槛 / 活动未开始） */
-  blocked?: unknown
-}
-
-/** 渲染用的归一形状（claiming / error 是前端运行态，后端没有） */
-export type OnboardingTask = {
-  key: string
-  title: string
-  group: string
-  points: number
-  done: boolean
-  /** 见 {@link OnboardingTaskRaw.blocked}：既不计入待领数，也不发领取 */
-  blocked: boolean
-  claiming?: boolean
-  error?: string
-}
+ * 这里的两个类型已随签到中心一起搬进插件包（包内 `ui/checkin/state.js` 自己
+ * 归一后端形状）。保留它们没有意义：签到页现在在 iframe 里，跨源，宿主的
+ * 类型系统碰不到它。 */
 
 /* ─── 全局桥 ─────────────────────────────────── */
 
@@ -296,8 +289,9 @@ export type AccountsBridge = {
   } | null | undefined>
   getProxies(): Promise<{ clash?: ClashSnapshot } | null | undefined>
   /** 代理池列表（「网络代理」页维护的命名代理）：账号代理表单的
-   *  「已保存的代理」下拉读它；写侧（增删改）只有那一页用，不在这份桥里 */
-  getProxyPool(): Promise<{ items?: PoolItem[] } | null | undefined>
+   *  「已保存的代理」下拉读它；写侧（增删改）只有那一页用，不在这份桥里。
+   *  `kernelInstalled` 决定没有端口的订阅节点说成「内核未安装」还是「未被使用」 */
+  getProxyPool(): Promise<{ items?: PoolItem[]; kernelInstalled?: boolean } | null | undefined>
   /** 测一条池条目（账号表单里选中池引用时的「测试出口」）：
    *  结果会记进那条代理的「上次测试」，与代理页那颗按钮同一个动作 */
   testProxyPoolItem(id: string): Promise<{
@@ -368,6 +362,64 @@ export type PoolItem = {
   resolveError?: string | null
   /** 引用它的账号（后端在池列表里带的） */
   usedBy?: Array<{ id?: string; name?: string; enabled?: boolean }>
+  /** 孤儿订阅节点：所属订阅已不存在（后端标注） */
+  orphan?: boolean
+}
+
+/**
+ * 订阅节点还没有监听端口 —— lazy listeners 下的**正常状态**，不是解析失败。
+ *
+ * 端口只在有账号引用（并保存）之后才由内核分配，所以「没有端口」通常就是
+ * 「没有账号在用这条」。下拉与网络代理页的地址列都按这个状态显示，别把它
+ * 报成红色失败：那会让用户以为节点坏了，去查订阅而不是去选它。
+ */
+export function isPortlessSubscription(item: PoolItem): boolean {
+  return item.source === 'subscription' && (item.port === null || item.port === undefined)
+}
+
+/**
+ * 内核装没装（池列表响应里的 `kernelInstalled`；`null` = 还不知道）。
+ *
+ * 放在这里而不是 `proxy-pool-cache.ts`：那边已经 import 本文件，反过来再
+ * import 它就成了环。写入方只有 `proxy-pool-cache`（它拿到池列表时同步
+ * 一次），读取方是所有拼下拉文案的地方 —— 都不必各自再传参数。
+ */
+let kernelInstalledCache: boolean | null = null
+
+/** 写入内核安装状态（`proxy-pool-cache` 收到池列表时调） */
+export function setKernelInstalled(value: boolean | null): void {
+  kernelInstalledCache = value
+}
+
+/** 内核装没装（`null` = 还没读到池列表，此时不该下「没装」的结论） */
+export function kernelInstalled(): boolean | null {
+  return kernelInstalledCache
+}
+
+/**
+ * 没有监听端口的订阅节点怎么说 —— 按成因分开讲，别一句话糊过去。
+ * 判据顺序就是**用户该先处理哪件事**的顺序：
+ *   · 内核没装 → 内核未安装（全局前提都没有，先下载内核）
+ *   · 所属订阅已删（孤儿）→ 订阅已移除（不会再分配了，只能删条目）
+ *   · 本页禁用中 → 已禁用（端口随禁用一起收掉，启用才会回来）
+ *   · 有账号引用、端口还没就位 → 端口准备中（内核正在重建，等一会儿）
+ *   · 没有账号引用它 → 未被使用（端口只在被引用时才开，选中它就会开）
+ *
+ * `installed` 传 `null`/`undefined` = 还不知道（池列表没读到），此时
+ * 不把「内核没装」当结论 —— 误报成「未安装」比不说更糟。
+ *
+ * 不论哪一种都**不是**「解析失败」：后端对这类条目也会带一条 resolveError
+ * （「还没有监听端口」），照它画红会让整列看着像出了事故。
+ */
+export function portlessSubscriptionLabel(
+  item: PoolItem,
+  installed: boolean | null = kernelInstalledCache,
+): string {
+  if (installed === false) return t('内核未安装')
+  if (item.orphan) return t('订阅已移除')
+  if (item.enabled === false) return t('已禁用')
+  if (item.usedBy?.length) return t('端口准备中')
+  return t('未被使用')
 }
 
 /**
@@ -381,11 +433,12 @@ export type PoolItem = {
  *
  * 取不到（解析失败 / 字段缺失）时回落 `resolved.label`，再没有就是空串。
  */
-export function poolItemAddress(item: PoolItem): string {
-  // lazy listeners：订阅节点可能还没有分配监听端口（未引用 / 引用刚保存
-  // 内核还没重建完）—— 在这里标注出来，下拉与地址列都能看到原因
-  if (item.source === 'subscription' && (item.port === null || item.port === undefined)) {
-    return t('未分配端口')
+export function poolItemAddress(item: PoolItem, installed: boolean | null = kernelInstalledCache): string {
+  // lazy listeners：没有账号引用它，内核就不给开监听端口。这里写的是**状态**
+  // 而不是「未分配端口」—— 后者会引出「怎么才能分配」的疑问，而答案（去账号
+  // 里选它）恰恰藏在这个状态里
+  if (isPortlessSubscription(item)) {
+    return portlessSubscriptionLabel(item, installed)
   }
   const resolved = item.resolved
   if (resolved?.protocol && resolved.host && resolved.port) {
@@ -396,17 +449,27 @@ export function poolItemAddress(item: PoolItem): string {
 
 /**
  * 池条目在下拉里的展示名：`香港HK-A（HTTP 127.0.0.1:7909）` /
- * `香港HK-A（HTTP 127.0.0.1:7909 · 已禁用）` / `香港HK-A（解析失败）`。
+ * `香港HK-A（HTTP 127.0.0.1:7909 · 已禁用）` / `香港HK-A（解析失败）` /
+ * `香港HK-A（未被使用）`。
  *
  * 三个地方共用（账号表代理列 / 账号弹窗的代理表单 / 更新设置的出网线路）——
  * 各写一份迟早会漂移成本次这种事（有一处忘了写地址，用户下拉里只能看到名字）。
  * 条目的来源（手动 / Clash）不在这里标：下拉里已经有地址可比对，来源在
  * 「网络代理」页的类型列上。
+ *
+ * 没有端口的订阅节点**不能**按 `resolveError` 写成「解析失败」：后端对这类
+ * 条目同样会带一条 `resolveError`（「还没有监听端口」），但它是 lazy listeners
+ * 的正常状态。误报成失败会让用户去查节点 / 订阅，而该做的是选中它。
  */
-export function poolItemLabel(item: PoolItem): string {
+export function poolItemLabel(item: PoolItem, installed: boolean | null = kernelInstalledCache): string {
   const name = item.name || item.id
-  const address = item.resolveError ? t('解析失败') : poolItemAddress(item)
-  const parts = [address, item.enabled === false ? t('已禁用') : ''].filter(Boolean)
+  const address = item.resolveError && !isPortlessSubscription(item)
+    ? t('解析失败')
+    : poolItemAddress(item, installed)
+  // 地址串已经把「已禁用」的原因说出来了（见 portlessSubscriptionLabel），
+  // 再追加一个「· 已禁用」就是同一句话说两遍
+  const parts = [address, item.enabled === false && !isPortlessSubscription(item) ? t('已禁用') : '']
+    .filter(Boolean)
   return parts.length ? t('{name}（{parts}）', { name, parts: parts.join(' · ') }) : name
 }
 
@@ -434,7 +497,11 @@ export type SharedWindow = {
     showPage?: (page: string) => void
     refresh?: () => Promise<unknown> | unknown
     runAccountAction?: (action: string, id: string) => void
-    getState?: () => { accounts?: AccountsSnapshot } | null | undefined
+    getState?: () => {
+      accounts?: AccountsSnapshot
+      /** 插件申报的账号行渲染参数（`/api/session` 的 `accountFeatures`，键为 provider id） */
+      accountFeatures?: Record<string, unknown>
+    } | null | undefined
     /** 顶栏状态区重画：余额结论会翻转「已限流」计数，应用完读数后调它跟上 */
     renderTopbarStatus?: () => void
     readonly currentPage?: string

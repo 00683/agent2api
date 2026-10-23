@@ -177,7 +177,13 @@ pub(super) struct SendBody<'a> {
 /// 的发送体只算一次），跨家则合并计数。
 /// 实时性上也有必要：命中发生在**某一家即将发送时**，那时请求还没收尾，
 /// telemetry 槽位还开着（记账点读快照在最后）。
-pub(super) fn send_body<'a>(
+///
+/// ── 为什么是 async（插件架构改动）─────────────────────────────
+/// 内部的思考档位注入要问适配器「这个等级翻译成什么字段」，而插件实现
+/// 在另一个进程里（`reasoning_patch_async`）。三处调用点（
+/// `provider_loop` 的两条发送路径）本来就在 async 函数里，改成 async 不
+/// 产生额外的状态机成本。
+pub(super) async fn send_body<'a>(
     ctx: &'a ProviderContext<'_>,
     provider_id: &str,
     account: Option<&Value>,
@@ -306,7 +312,8 @@ pub(super) fn send_body<'a>(
         &requested,
         &wire.model,
         wire.reasoning.as_deref(),
-    );
+    )
+    .await;
     // 采集「实际随上游请求发出的思考等级」（请求日志模型列的 `(等级)`）。
     // 注入值优先（映射绑定生效时的最终档位，CatPaw 已在 patch 内归并）；
     // 没注入时问承载家的 `outbound_reasoning` —— 客户端显式指定的档位走这条
@@ -322,9 +329,20 @@ pub(super) fn send_body<'a>(
 ///
 /// 未知 provider id 返回 None：与 [`apply_reasoning`] 里同一条防御 ——
 /// 选路早已校验过注册表，走到这里还查不到说明调用链坏了，什么都不做比 panic 安全。
+///
+/// ── 插件家为什么返回 None ────────────────────────────────────
+/// 这个方法在同步上下文里（发送体构建的收尾），插件实现要走 RPC，没法在这里
+/// await。它的唯一用途是**遥测**「这次实际发出去的思考等级」，缺了不影响
+/// 字节 —— 插件家记 `None`（显示层按「没记录」处理），等 P6 把
+/// `ChatPlan` 扩成带 reasoning 字段时再补。
 fn outbound_reasoning_of(provider_id: &str, body: &Value) -> Option<String> {
-    let kind = crate::server::core::providers::kind_from_id(provider_id)?;
-    crate::server::core::providers::adapter::adapter_for(kind).outbound_reasoning(body)
+    // 内置家走静态注册表（零分配）；插件家在同步上下文里无法 await，
+    // 走 `adapter_by_id` 也只是拿到本地缓存（`outbound_reasoning` 是纯读）。
+    match crate::server::core::providers::kind_from_id(provider_id) {
+        Some(kind) => crate::server::core::providers::adapter::adapter_for(kind).outbound_reasoning(body),
+        None => crate::server::core::providers::adapter::adapter_by_id(provider_id)?
+            .outbound_reasoning(body),
+    }
 }
 
 /// 请求体里的消息条数（提示词层的详细日志用；没有 messages 数组时给 0）。
@@ -451,7 +469,7 @@ fn rewrite_model(body: &mut Cow<'_, Value>, requested: &str, wire: &str, provide
 /// 来源 —— 映射绑定生效时它就是发出去的档位（CatPaw 的归并已在 patch 内完成）。
 /// 其余分支（没绑 / 关闭思考 / Skip / 请求体不是对象）一律返回 None，
 /// 由调用方改问承载家的 `outbound_reasoning`。
-fn apply_reasoning(
+async fn apply_reasoning(
     body: &mut Cow<'_, Value>,
     provider_id: &str,
     requested: &str,
@@ -474,11 +492,15 @@ fn apply_reasoning(
     // 未知 provider id 直接返回：选路早已按注册表校验过（`provider_loop` 对未知
     // id 直接 503），走到这里说明调用链坏了 —— 什么都不做比 panic 安全
     // （release 是 panic=abort）。
-    let Some(kind) = crate::server::core::providers::kind_from_id(provider_id) else {
+    //
+    // 插件家在这里**保留**：`reasoning_patch_async` 正是为它们加的异步
+    // 伴生方法（内置家转调同步实现，零成本），所以统一走 `adapter_by_id`
+    // —— 它先查内置枚举、再查插件表，两者都能拿到。
+    let Some(adapter) = crate::server::core::providers::adapter::adapter_by_id(provider_id) else {
         return None;
     };
-    let adapter = crate::server::core::providers::adapter::adapter_for(kind);
-    match adapter.reasoning_patch(level, wire_model, body.as_ref()) {
+    // 走异步伴生方法：内置家直接转调同步实现（零成本），插件家走 RPC。
+    match adapter.reasoning_patch_async(level, wire_model, body.as_ref()).await {
         crate::server::core::providers::adapter::ReasoningPatch::Set { field, value } => {
             // 先取可变对象再打日志：请求体不是 JSON 对象时写不进去（正常路径不会
             // 发生 —— chat 入口已校验过是对象），此时**不能**打「已注入」——

@@ -721,7 +721,7 @@ if (document.readyState === 'loading') {
   mountSidebarStatus()
 }
 
-window.wbPortPanel = { render, sync, portLabel, isReady }
+window.wbPortPanel = { render, sync, portLabel, isReady, gatewayBase: () => snapshot.gatewayBase }
 
 declare global {
   interface Window {
@@ -735,6 +735,12 @@ declare global {
       portLabel(): string
       /** 网关进程是否在监听，顶栏徽标用 */
       isReady(): boolean
+      /**
+       * 网关基址（含协议）。插件页的 iframe 用它拼绝对地址 —— 桌面端的页面
+       * 来自 `tauri://` 协议，`/plugins/...` 这样的相对路径会打到壳的资源
+       * 目录而不是网关。
+       */
+      gatewayBase(): string
     }
   }
 }

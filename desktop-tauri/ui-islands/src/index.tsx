@@ -1,5 +1,8 @@
 import { mountInput, observeInputs } from './input'
 import { mountSegmented } from './segmented'
+// 组件库的跨文档出口（`window.wbUiKit`）：插件页 iframe 靠它拿到同一份
+// 组件实现与同一套样式，见该文件的模块头
+import './uikit'
 // 岛样式（组件库 + Tailwind 产物）：由 Vite 抽成 ui/islands/ui.css，
 // index.html 以 <link> 引入。写在这里是为了让样式跟着这个唯一的 JS 入口一起构建。
 import './styles/islands.css'
