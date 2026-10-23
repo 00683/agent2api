@@ -170,32 +170,47 @@ else
   echo "    Release 将不含 Windows 服务端包，Windows Server 用户只能自己编译"
 fi
 
-# Android APK（build 工作流的 android job 上传，含 .sha256）。
-# 接入 CI 之前的 tag 没有这个 artifact —— 提醒一句继续走。
+# ── 手机端安装包：默认**不挂** Release ────────────────────────
+# `INCLUDE_MOBILE=1` 才把 APK / IPA 挂上去。
 #
-# 与前面几个包不同，APK 的附件名**就是用户看到的文件名**：安装文档里写的是
-# `Agent2API-<版本>.apk`，android job 已按这个形状重命名，这里原样上传即可。
-if [ -d dist/android-apk ]; then
-  for file in dist/android-apk/*; do
-    ASSETS+=("$file")
-  done
-  echo "→ 已下载 $(basename "$(ls dist/android-apk/*.apk)")（含 .sha256）"
-else
-  echo "⚠️  这个 run 里没有 android-apk 产物（APK 接入 CI 之前的 tag？）——"
-  echo "    Release 将不含手机端安装包，Android 用户只能从旧版本或自行编译获取"
-fi
+# 为什么默认关：手机端还在收尾（2026-10 用户明确要求先不发布）。构建照常
+# 产出 artifact，需要时在 Actions 页面下载；只是不挂到公开 Release 上 ——
+# 挂上去就等于对外承诺「这个包能用」，而现在还不能。
+#
+# 恢复发布时：`INCLUDE_MOBILE=1 bash scripts/release.sh vX.Y.Z`，或把默认值
+# 改成 1。安装文档里关于 APK / IPA 的段落也要跟着恢复。
+INCLUDE_MOBILE="${INCLUDE_MOBILE:-0}"
 
-# iOS IPA（build 工作流的 ios job 上传，含 .sha256）。
-# 默认是**未签名**包：用户拿 AltStore / SideStore 用自己的 Apple ID 重签后安装；
-# 配齐 iOS 签名 secret 的仓库出的是已签名包。两种都能挂 Release，脚本不区分。
-if [ -d dist/ios-ipa ]; then
-  for file in dist/ios-ipa/*; do
-    ASSETS+=("$file")
-  done
-  echo "→ 已下载 $(basename "$(ls dist/ios-ipa/*.ipa)")（含 .sha256）"
+if [ "$INCLUDE_MOBILE" = "1" ]; then
+  # Android APK（build 工作流的 android job 上传，含 .sha256）。
+  # 接入 CI 之前的 tag 没有这个 artifact —— 提醒一句继续走。
+  #
+  # 与前面几个包不同，APK 的附件名**就是用户看到的文件名**：安装文档里写的是
+  # `Agent2API-<版本>.apk`，android job 已按这个形状重命名，这里原样上传即可。
+  if [ -d dist/android-apk ]; then
+    for file in dist/android-apk/*; do
+      ASSETS+=("$file")
+    done
+    echo "→ 已下载 $(basename "$(ls dist/android-apk/*.apk)")（含 .sha256）"
+  else
+    echo "⚠️  这个 run 里没有 android-apk 产物（APK 接入 CI 之前的 tag？）——"
+    echo "    Release 将不含手机端安装包，Android 用户只能从旧版本或自行编译获取"
+  fi
+
+  # iOS IPA（build 工作流的 ios job 上传，含 .sha256）。
+  # 默认是**未签名**包：用户拿 AltStore / SideStore 用自己的 Apple ID 重签后安装；
+  # 配齐 iOS 签名 secret 的仓库出的是已签名包。两种都能挂 Release，脚本不区分。
+  if [ -d dist/ios-ipa ]; then
+    for file in dist/ios-ipa/*; do
+      ASSETS+=("$file")
+    done
+    echo "→ 已下载 $(basename "$(ls dist/ios-ipa/*.ipa)")（含 .sha256）"
+  else
+    echo "⚠️  这个 run 里没有 ios-ipa 产物（iOS 接入 CI 之前的 tag？）——"
+    echo "    Release 将不含 iOS 安装包，iPhone 用户只能走 PWA 或自行编译"
+  fi
 else
-  echo "⚠️  这个 run 里没有 ios-ipa 产物（iOS 接入 CI 之前的 tag？）——"
-  echo "    Release 将不含 iOS 安装包，iPhone 用户只能走 PWA 或自行编译"
+  echo "→ 手机端安装包按设置不挂 Release（INCLUDE_MOBILE=0）；构建产物仍在 Actions 的 artifact 里"
 fi
 
 # ── 2. 更新日志 = tag 所指提交的提交信息 ──────────────────────
