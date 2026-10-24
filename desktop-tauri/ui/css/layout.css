@@ -464,27 +464,6 @@ body.has-titlebar .shell {
   .theme-switch button[data-mode="dark"]::after { content: "深"; }
 }
 
-/* ─── 手机端入口（侧栏底部） ───
-   它是「换个设备继续看」，不是第 14 个功能页 —— 所以不占一级菜单，
-   只在这里放一条文字链。样式刻意做得比导航项轻：它不属于当前页面的功能。 */
-.sidebar-mobile-link {
-  display: block;
-  padding: 5px 2px;
-  font-size: 11px;
-  color: var(--sidebar-muted);
-  text-decoration: none;
-  text-align: center;
-  border-radius: var(--r-xs);
-  transition: color .15s ease, background .15s ease;
-}
-.sidebar-mobile-link:hover { color: var(--text); background: var(--nav-hover); }
-
-@media (max-width: 900px) {
-  /* 窄侧栏（图标栏）里放不下文字链：手机端本来就是这一档的使用者，
-     他们直接开 /m 就行，这里不必留一个只剩三个字的链接 */
-  .sidebar-mobile-link { display: none; }
-}
-
 /* ─────────────────────────────
    主区域
    ───────────────────────────── */

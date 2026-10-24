@@ -234,36 +234,61 @@
 }
 .usage-token-sub .hit { color: var(--warn); font-weight: 600; }
 
-/* ─── 「账号在，但插件不在」的空态 ───
-   见 islands/accounts-page.tsx 的 HiddenAccountsState：一条账号都显示不出来、
-   但库里有 N 条因插件未装被隐藏（后端 account_visible 的判据）时用它。
-   与 `.empty` 同一档留白，只是要纵向排版 —— 标题、清单、说明、按钮自成一列。 */
+/* 隐藏账号提示既用于空态，也用于仍有可见账号的列表。 */
 .acct-hidden-note {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  max-width: 520px;
+  gap: 12px;
+  max-width: 600px;
   margin: 0 auto;
 }
+.acct-hidden-main { min-width: 0; }
 .acct-hidden-title {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
 }
-/* 提供商清单：小字、居中、每行一家（数量少，不必分栏） */
 .acct-hidden-list {
-  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  margin: 10px 0;
   padding: 0;
   list-style: none;
   font-size: 12px;
   line-height: 1.9;
   color: var(--text-2);
 }
+.acct-hidden-list li { display: flex; align-items: center; gap: 6px; }
 .acct-hidden-foot {
   margin: 0;
   font-size: 12px;
   line-height: 1.7;
   color: var(--text-3);
+}
+.acct-hidden-banner {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--warn-bd);
+  background: var(--warn-soft);
+}
+.acct-hidden-banner .acct-hidden-main { flex: 1 1 280px; }
+.acct-hidden-banner .acct-hidden-list { justify-content: flex-start; margin: 6px 0; }
+.acct-hidden-banner .acct-hidden-foot { color: var(--text-2); }
+.acct-load-error {
+  flex: none;
+  margin: 0;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--danger-bd);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.7;
 }

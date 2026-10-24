@@ -18,8 +18,10 @@
  */
 
 import type {
-  AutoState, CheckinCenter, KeepaliveState, OnboardingTask, RecordsPage, RecordRow, TravelState,
+  AutoState, CheckinCenter, KeepaliveState, OnboardingTask, RecordsPage, RecordRow, TravelRunResult,
+  TravelState,
 } from './checkin-types'
+import { t } from '../i18n'
 
 /** 新手福利的按账号缓存（明细要打上游，查一次存一次） */
 export type OnboardingCache = {
@@ -88,7 +90,7 @@ type CheckinBridge = {
   saveCheckinKeepalive?: (models: string[]) => Promise<KeepaliveState | null | undefined>
   getTravelSchedule?: () => Promise<TravelState | null | undefined>
   saveTravelSchedule?: (patch: Record<string, unknown>) => Promise<TravelState | null | undefined>
-  runTravelScheduleNow?: () => Promise<unknown>
+  runTravelScheduleNow?: () => Promise<TravelRunResult | null | undefined>
   getOnboardingTasks?: (id: string, refresh?: boolean) => Promise<OnboardingPayload | null | undefined>
   claimOnboardingTasks?: (id: string) => Promise<OnboardingPayload | null | undefined>
   getQoderUmid?: () => Promise<UmidState | null | undefined>
@@ -488,9 +490,20 @@ export async function saveTravel(body: Record<string, unknown>): Promise<void> {
 export async function runTravelNow(): Promise<void> {
   await run(
     async () => {
-      await bridge().runTravelScheduleNow?.()
+      const result = await bridge().runTravelScheduleNow?.()
+      if (!result) throw new Error(t('后端未返回巡检结果'))
+      if (result.outcome === 'skipped') {
+        toast(t('本轮已跳过：{reason}', { reason: result.message ?? '' }))
+        return
+      }
+      const failed = Number(result.summary?.failed) || 0
+      toast(t('猫猫旅行：{n} 个动作，+{credit} 积分，{failed} 个失败', {
+        n: result.summary?.actions?.length ?? 0,
+        credit: Number(result.summary?.credit) || 0,
+        failed,
+      }), failed > 0 ? 'err' : 'ok')
     },
-    { success: '✅ 已执行一轮', failure: '执行失败' },
+    { failure: '执行失败' },
   )
 }
 

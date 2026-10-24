@@ -333,6 +333,9 @@ pub async fn start(store: AccountStore) -> Option<Arc<Host>> {
                     logging::log("Plugin", &format!("提供商 {id} 已被用户停用，跳过"));
                     continue;
                 }
+                if !info.admin_panels.is_empty() {
+                    super::schedules::load(&host, &id).await;
+                }
                 let kind = plugin_kind(&id);
                 // 握手带回的内置清单先落进缓存：`list_models` 是同步方法，
                 // 只能读缓存。不落的话，一个刚装上、还没刷过远程目录的插件家
@@ -349,6 +352,7 @@ pub async fn start(store: AccountStore) -> Option<Arc<Host>> {
                 &format!("插件包「{}」v{} 已加载，{} 家提供商可用", pack.id, pack.version, count),
             );
             super::install(host.clone());
+            super::schedules::wake();
             Some(host)
         }
         Err(reason) => {
@@ -423,6 +427,8 @@ fn plugin_kind(id: &str) -> ProviderKind {
 /// 组件是没道理的。
 pub fn spawn(store: AccountStore) {
     crate::spawn_task(async move {
+        let _guard = super::operations::mutation_guard().await;
         let _ = start(store).await;
+        super::catalog::spawn();
     });
 }

@@ -169,6 +169,10 @@ export type AppSettings = {
 export type SystemInfo = {
   app?: {
     version?: string | null
+    license?: string | null
+    sourceUrl?: string | null
+    licenseUrl?: string | null
+    copyright?: string | null
     channel?: string | null
     schemaVersion?: number | null
     dbSchemaVersion?: number | null

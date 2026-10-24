@@ -26,6 +26,7 @@
   "下载已取消，可重新点击「下载并更新」。": "Download cancelado; clique em “Baixar e atualizar” para tentar de novo.",
   "下载并安装": "Baixar e instalar",
   "下载并更新": "Baixar e atualizar",
+  "与软件更新共用出网代理和 GitHub 凭证，修改任意一处都会同步生效。": "Compartilha proxy de saída e credenciais do GitHub com a atualização do aplicativo. Alterações em qualquer lugar valem para ambos.",
   "个人开发并开源维护，免费使用，也不会收集你的账号数据。如果它帮到了你，欢迎到项目仓库点个 Star 支持一下。": "de forma independente, com uso gratuito, e não coleta os dados da sua conta. Se ela te ajudou, deixe uma Star no repositório do projeto para apoiar.",
   "仓库暂无发布版本。{at}": "O repositório ainda não tem versões publicadas. {at}",
   "代理列表读取失败": "Falha ao ler a lista de proxies",

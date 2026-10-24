@@ -205,18 +205,31 @@ export type AccountRecord = {
   [key: string]: unknown
 }
 
+export type HiddenAccountReason = 'not_installed' | 'pack_disabled' | 'provider_disabled' | 'not_loaded'
+
+export type HiddenAccountProvider = {
+  id: string
+  label: string
+  count: number
+  reason: HiddenAccountReason
+}
+
+export type HiddenAccountsSummary = {
+  total: number
+  byProvider: Record<string, number>
+  providers: HiddenAccountProvider[]
+}
+
 /** `wbApp.getState()?.accounts` 的形状（providers 摘要 + 账号清单） */
 export type AccountsSnapshot = {
   accounts?: AccountRecord[]
   providers?: Array<{ id?: string; label?: string; count?: number }>
-  /**
-   * 因「提供商插件未安装」而被隐藏的账号（`Visibility::UserFacing` 过滤掉的
-   * 那一部分，判据见后端 `account_store::store_view::account_visible`）。
-   *
-   * 有它界面才能把「真的没有账号」和「账号在等插件」分开说 —— 后者若沿用
-   * 「暂无账号，请添加」，升级上来的用户会以为数据丢了并去重新添加。
-   */
-  hiddenAccounts?: { total?: number; byProvider?: Record<string, number> }
+  /** 插件未就绪而隐藏的账号，只含数量与提供商元数据，不含账号记录。 */
+  hiddenAccounts?: {
+    total?: number
+    byProvider?: Record<string, number>
+    providers?: HiddenAccountProvider[]
+  }
 }
 
 /** 余额缓存的四种形态：undefined 未查 / null 查询中 / string 失败 / 对象结果 */
@@ -495,7 +508,9 @@ export type SharedWindow = {
     toast?: (message: string, kind?: 'err' | 'ok') => void
     formatTime?: (value: unknown) => string
     showPage?: (page: string) => void
-    refresh?: () => Promise<unknown> | unknown
+    refresh?: () => Promise<boolean>
+    getRefreshStatus?: () => { pending: boolean; error: string }
+    subscribeRefresh?: (listener: () => void) => () => void
     runAccountAction?: (action: string, id: string) => void
     getState?: () => {
       accounts?: AccountsSnapshot
@@ -510,6 +525,7 @@ export type SharedWindow = {
   wbProviders?: {
     labelOf?: (id: string) => string
     all?: () => Array<{ id?: string; label?: string }>
+    refreshCustom?: () => Promise<unknown>
     customList?: () => Array<{
       id?: string; name?: string; protocol?: string; baseUrl?: string
       /** 客户端形态伪装（`'opencode'` = 按 OpenCode 官方 CLI 形状补齐请求）。

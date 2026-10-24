@@ -26,6 +26,7 @@
   "下载已取消，可重新点击「下载并更新」。": "Download cancelled; click \"Download and update\" to try again.",
   "下载并安装": "Download and install",
   "下载并更新": "Download and update",
+  "与软件更新共用出网代理和 GitHub 凭证，修改任意一处都会同步生效。": "Shares the egress proxy and GitHub credentials with software updates. Changes in either place take effect in both.",
   "个人开发并开源维护，免费使用，也不会收集你的账号数据。如果它帮到了你，欢迎到项目仓库点个 Star 支持一下。": "Independently developed and open-source maintained. It is free to use, and never collects your account data. If it helps you, a Star on the project repository would be much appreciated.",
   "仓库暂无发布版本。{at}": "This repository has no releases yet.{at}",
   "代理列表读取失败": "Failed to load the proxy list",

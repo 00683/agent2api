@@ -9,6 +9,7 @@ import {
   type SystemInfo,
 } from './settings-model'
 import { t } from '../i18n'
+import { openExternal } from './update-shared'
 
 /**
  * 设置页「版本信息」面板（React 岛）。
@@ -216,6 +217,9 @@ function toPlainText(info: SystemInfo): string {
 
   section(t('版本'), [
     [t('软件版本'), text(app.version)],
+    [t('开源许可'), text(app.license)],
+    [t('源代码'), text(app.sourceUrl)],
+    [t('版权声明'), text(app.copyright)],
     [t('更新通道'), app.channel === 'beta' ? t('beta 版') : t('正式版')],
     [t('数据库 schema'), text(app.schemaVersion)],
     [t('库中 schema'), text(app.dbSchemaVersion)],
@@ -362,6 +366,7 @@ function SystemInfoPanel() {
       title: t('版本'),
       rows: [
         [t('软件版本'), <span className='sysinfo-mono'>{text(app.version)}</span>],
+        [t('开源许可'), text(app.license || 'AGPL-3.0-only')],
         [t('更新通道'), app.channel === 'beta'
           ? <Badge variant='warning' shape='tag'>{t('beta 版')}</Badge>
           : <Badge variant='outline' shape='tag'>{t('正式版')}</Badge>],
@@ -485,6 +490,19 @@ function SystemInfoPanel() {
           <div className='detail'>
             {t('出问题时把这一页截图，或点「复制全部信息」把文本贴进反馈，一般就能定位到大致原因。')}
           </div>
+
+          <div className='mt-3 flex flex-wrap items-center gap-2 text-[12px] text-subtle'>
+            <span>{app.copyright || 'Copyright (c) 2026 Agent2API'}</span>
+            <Button variant='outline' size='xs' onClick={() => void openExternal(
+              app.licenseUrl || 'https://github.com/aimod-cc/Agent2API/blob/main/LICENSE',
+            )}>AGPL-3.0</Button>
+            <Button variant='outline' size='xs' onClick={() => void openExternal(
+              app.sourceUrl || 'https://github.com/aimod-cc/Agent2API',
+            )}>{t('源代码')}</Button>
+          </div>
+          <p className='mt-1.5 text-[12px] text-subtle'>
+            {t('本软件不提供任何担保，可按 AGPL-3.0 修改与分发；通过网络提供修改版服务时须向用户提供对应源码。')}
+          </p>
 
           {/* 路径里的用户名可以隐藏：截图会发到公开的地方，这是给用户的选择 */}
           <div className='sysinfo-toggle'>

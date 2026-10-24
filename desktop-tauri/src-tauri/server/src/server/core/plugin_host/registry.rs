@@ -73,6 +73,7 @@ pub fn remove(id: &str) {
         map.remove(id);
     }
     super::rpc_cache::forget(id);
+    super::schedules::forget(id);
 }
 
 /// 清空（宿主重启前调 —— 适配器要按新的握手结果重建）。
@@ -80,4 +81,5 @@ pub fn clear() {
     if let Ok(mut map) = table().lock() {
         map.clear();
     }
+    super::schedules::clear_all();
 }

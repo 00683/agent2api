@@ -1,4 +1,8 @@
 {
+  "后端未返回巡检结果": "O backend não retornou um resultado de inspeção",
+  "本轮已跳过：{reason}": "Esta execução foi ignorada: {reason}",
+  "自动巡检已暂停：{reason}": "A inspeção automática está pausada: {reason}",
+  "巡检失败：{reason}": "Falha na inspeção: {reason}",
   " · ": " · ",
   "SOLO 的 checkin_credits 领取 · 按自然日 0 点刷新": "Resgate de checkin_credits do SOLO · redefinido às 0h do dia natural",
   "UMID 组件安装失败：{error}": "Falha ao instalar o componente UMID: {error}",

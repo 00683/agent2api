@@ -43,6 +43,9 @@ import {
   allAccounts, bump, findAccount, getStore, isPicked, patch,
 } from './accounts-store'
 import { proxyPoolSnapshot, refreshProxyPool } from './proxy-pool-cache'
+import { installListRefresh, refreshList } from './accounts-refresh'
+
+export { refreshList } from './accounts-refresh'
 
 // 状态层原样再导出：视图侧（accounts-page / panels / dialogs）只认本文件这一条路径
 export * from './accounts-store'
@@ -900,6 +903,7 @@ export function rowContext(
 
 export type AccountsViewApi = {
   render(): void
+  refreshList: typeof refreshList
   refreshCaches(validIds: Set<string>): void
   syncConnections(): Promise<boolean>
   /**
@@ -1019,8 +1023,10 @@ const ACCOUNTS_MODEL_API: AccountsModelApi = {
  * 拿不到就会退化成静默不生效。
  */
 export function installAccountsApi(): void {
+  installListRefresh()
   window.wbAccountsView = {
     render: () => bump(),
+    refreshList,
     refreshCaches,
     syncConnections,
     refreshProxyPool,

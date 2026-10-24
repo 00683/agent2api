@@ -631,6 +631,8 @@ pub fn panel_router(state: ServerState) -> Router {
         // 与 /api/backup/import 同级敏感。安装那条的请求体是 zip 的 base64
         // （约 7MB），落在管理面 32MB 上限内，不必单独放宽。
         .route("/api/plugins", get(api::plugins::list))
+        .route("/api/plugins/settings", get(api::plugins::settings).patch(api::plugins::save_settings))
+        .route("/api/plugins/progress", get(api::plugins::progress))
         .route("/api/plugins/install", post(api::plugins::install))
         .route("/api/plugins/uninstall", post(api::plugins::uninstall))
         .route("/api/plugins/enable", post(api::plugins::set_enabled))

@@ -209,10 +209,20 @@ impl RpcAdapter {
                     error.message,
                 );
             }
-            GatewayError::with_status(
-                502,
+            let status = if matches!(
+                error.code.as_deref(),
+                Some(proto::WireError::NO_METHOD) | Some(proto::WireError::UNSUPPORTED)
+            ) {
+                501
+            } else {
+                502
+            };
+            let mut failure = GatewayError::with_status(
+                status,
                 format!("提供商插件调用失败（{method}）：{}", error.message),
-            )
+            );
+            failure.code = error.code;
+            failure
         })
     }
 
@@ -1274,17 +1284,13 @@ fn describe_body(body: &Value) -> String {
     }
 }
 
-/// 从账号会话形态里取账号 id。
+/// 从转发会话里取账号库主键；空串表示默认登录态。
 ///
-/// ── 为什么不用 `account.id` 一把梭 ────────────────────────────
-/// 会话形态里账号 id 可能叫 `id`（账号记录）或嵌在 `account.uid` 下
-/// （上游身份）。插件只关心「网关用哪个 id 索引这条账号」，所以取前者、
-/// 缺失时回落到后者。
+/// 上游 `account.uid` 不一定等于账号主键，不能用它索引账号库。
 fn account_id_of(account: &Value) -> String {
     account
         .get("id")
         .and_then(Value::as_str)
-        .or_else(|| account.get("account").and_then(|a| a.get("uid")).and_then(Value::as_str))
         .unwrap_or("")
         .to_string()
 }

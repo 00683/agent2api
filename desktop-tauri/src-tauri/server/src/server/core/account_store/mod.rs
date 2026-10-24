@@ -100,6 +100,7 @@ pub mod codearts_accounts;
 pub mod atomcode_accounts;
 pub mod commandcode_accounts;
 pub mod custom_accounts;
+mod hidden_accounts;
 pub mod kuku_accounts;
 pub mod lobsterai_accounts;
 pub mod loomy_accounts;

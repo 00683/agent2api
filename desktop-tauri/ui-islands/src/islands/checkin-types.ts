@@ -106,8 +106,10 @@ export type CheckinResult = {
   active?: number
   skipped?: number
   failedCount?: number
-  failed?: string[]
+  failed?: string[] | number
   /** 猫猫旅行专用 */
+  outcome?: 'completed' | 'failed'
+  error?: string
   accounts?: number
   credit?: number
   actions?: TravelAction[]
@@ -139,12 +141,21 @@ export type KeepaliveState = {
 /** 猫猫旅行排程（`/api/travel-schedule`） */
 export type TravelState = {
   enabled: boolean
+  available?: boolean
+  pausedReason?: string | null
   times: string[]
   firedToday: string[]
   lastFiredDate: string | null
   lastFiredTime: string | null
   lastResult: CheckinResult | null
   running: boolean
+}
+
+export type TravelRunResult = {
+  outcome: 'completed' | 'skipped'
+  message?: string
+  summary: CheckinResult | null
+  schedule: TravelState
 }
 
 /** 一条签到历史（`history`） */

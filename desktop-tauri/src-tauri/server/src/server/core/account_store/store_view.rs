@@ -342,19 +342,8 @@ impl AccountStore {
         let global_current = Self::pick_current(&visible)
             .map(|record| Value::String(record.id().to_string()))
             .unwrap_or(Value::Null);
-        // ── 隐藏账号为什么要在快照里带出来 ─────────────────────────
-        // 「插件不在，这家就从界面消失」是 2026-10 定的（见 `account_visible`），
-        // 代价是**老用户升级上来会看到一张空列表**：他的账号一个没丢，只是在
-        // 等插件。界面原本只能说「暂无账号，请点击添加」—— 那句话会把一个
-        // 数据完好的用户直接推向「重新添加账号」，而那是唯一会造成真正混乱
-        // 的动作。
-        //
-        // 所以带一个只读计数出去，界面据此把两种空区分开：
-        //   `hiddenAccounts.total == 0` → 真的没有账号，沿用旧文案；
-        //   `hiddenAccounts.total > 0`   → 「有 N 个账号等插件启用」。
-        // `byProvider` 给的是 `{providerId: 条数}`，界面按 `label_of` 换成人话。
-        // 只给数量、不给账号本身：这些账号此刻确实不可用，把明细漏出去等于
-        // 绕过 `account_visible` 的决定。
+        // 隐藏摘要独立于可见账号数量，混有自定义账号时也必须能解释缺失的部分。
+        let hidden = super::hidden_accounts::summary(hidden);
         json!({
             "currentAccountId": global_current,
             "currentAccountIds": Value::Object(current_ids),
@@ -363,15 +352,7 @@ impl AccountStore {
                 .map(|record| self.public_account(record))
                 .collect::<Vec<_>>(),
             "providers": self.provider_summary(&visible),
-            "hiddenAccounts": {
-                "total": hidden.values().sum::<usize>(),
-                "byProvider": Value::Object(
-                    hidden
-                        .into_iter()
-                        .map(|(provider, count)| (provider, Value::from(count)))
-                        .collect(),
-                ),
-            },
+            "hiddenAccounts": hidden,
         })
     }
 

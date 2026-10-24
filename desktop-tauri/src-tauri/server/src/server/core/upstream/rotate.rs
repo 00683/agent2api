@@ -66,7 +66,11 @@ pub(super) async fn session_for(
     account_id: Option<&str>,
 ) -> Result<Value, GatewayError> {
     if let Some(id) = account_id {
-        if let Some(entry) = service.store.get_session_by_id(id) {
+        if let Some(mut entry) = service.store.get_session_by_id(id) {
+            // 账号主键只随转发会话传递，不改管理接口的会话形态。
+            if let Some(session) = entry.session.as_object_mut() {
+                session.insert("id".to_string(), Value::String(entry.id));
+            }
             return Ok(entry.session);
         }
         // 指定账号在两次读盘之间被删掉：回落到该 provider 的默认登录态

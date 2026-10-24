@@ -1,31 +1,8 @@
-//! WorkBuddy **猫猫旅行定时排程**（国内版）。
+//! 猫猫旅行排程的宿主编排：计时、用户配置、当天去重与执行记录。
 //!
-//! ── 这个模块解决什么问题 ─────────────────────────────────────
-//! 猫猫旅行原本只有手动入口（签到页的「巡检一次」）：用户得记得每天点两下
-//! （早上派出、晚上领奖）。参考项目把它挂成每日整点排程（`travel_hours`
-//! 默认 09/21 点），本模块照同一形态接入本仓的调度体系。
-//!
-//! ── 为什么连登管家不在这里 ──────────────────────────────────
-//! 连登管家（补签 → 档位兑换 → 抽奖）**挂在签到末尾**（见
-//! `core::billing::checkin` 的 `run_checkin`）：它的判据依赖「今天签到了没有」，
-//! 紧跟签到跑最准；而签到是手动与定时共用的唯一入口，挂那里天然覆盖两条
-//! 路径。参考项目同样是这个挂法（`RunCheckinNow` 末尾调 `RunStreakBonusNow`）。
-//! 本模块只管旅行 —— 它与签到无关，可以独立开关与时刻。
-//!
-//! ── 为什么不是 `core::scheduled_tasks` 里的一条 ───────────────
-//! 那个模块是**等间隔重复**型（`{enabled, interval}`，间隔以分钟计）。
-//! 旅行是**每天定点**型（一天两趟、按北京时间整点），与自动签到
-//! （`core::auto_checkin`）同一形状：时刻数组 + 当天去重 + 启动补跑。
-//! 硬塞进间隔型清单会逼着两边都变形 —— 那个模块头已经为自动签到写过
-//! 同样的理由。
-//!
-//! ── 与签到排程的关系 ────────────────────────────────────────
-//! 完全独立：签到是 `autoCheckin`，这里是 `growthSchedule`。两者可以各开各的，
-//! 时刻互不影响（参考项目也是独立排程，见其 `TravelDisabled` /
-//! `CheckinDisabled` 两个独立开关）。
-//!
-//! ── 硬约束 ──────────────────────────────────────────────────
-//! release 是 `panic=abort`：本文件零 unwrap/expect/panic。
+//! 默认开关、每日时刻和执行动作由插件的 `schedules.list` 提供。
+//! 未安装、停用或不支持排程的插件不进入执行路径；插件加载与配置更新会唤醒循环。
+//! `growthSchedule` 是已发布的配置键，保留它以兼容用户已有的开关与时刻。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -35,49 +12,29 @@ use serde_json::{json, Value};
 use crate::server::config;
 use crate::server::core::account_store::AccountStore;
 use crate::server::core::beijing;
+use crate::server::core::plugin_host::{self, schedules};
+use crate::server::errors::GatewayError;
 use crate::server::logging;
 
 /// 配置键（config.json 里的字段名）。
 pub const CONFIG_KEY: &str = "growthSchedule";
 
-/// 缺省时刻：与参考项目 `TravelHours` 一致（09 点派出、21 点领奖）。
-pub const DEFAULT_TIMES: [&str; 2] = ["09:00", "21:00"];
+const PROVIDER: &str = "workbuddy";
+const SCHEDULE_ID: &str = "travel";
 
-/// 时刻条目上限：再多列表难以扫读，成长维护也不需要更密。
-pub const MAX_TIMES: usize = 6;
+pub use schedules::MAX_TIMES;
 
 /// 轮询间隔：与 `auto_checkin` 的 30 秒同口径（到点后最多晚 30 秒执行）。
 pub const TICK_MS: u64 = 30_000;
 
-/// 一条时刻的归一化结果（`HH:MM`）。
+/// 时刻条目归一化为 `HH:MM`。
 fn normalize_time(value: Option<&Value>) -> Option<String> {
-    let text = value?.as_str()?.trim().to_string();
-    let (hour, minute) = text.split_once(':')?;
-    let hour: u32 = hour.parse().ok()?;
-    let minute: u32 = minute.parse().ok()?;
-    if hour > 23 || minute > 59 {
-        return None;
-    }
-    Some(format!("{hour:02}:{minute:02}"))
+    schedules::normalize_time(value?.as_str()?)
 }
 
-/// 读配置（缺失/损坏一律回落缺省：**默认关闭**）。
-///
-/// 返回 `(enabled, times)`。`times` 恒非空（空数组回落缺省）—— 一个开着的
-/// 排程没有任何时刻等于「永远不跑」，那是配置错误而不是用户意图。
-///
-/// ── 为什么默认关闭（曾经默认开启）────────────────────────────
-/// 早先这里 `unwrap_or(true)`，理由是「与参考项目零值即启用一致」。但那意味着
-/// **刚装好、一条配置都没有的机器上，程序启动 30 秒内就会自动跑一轮巡检**：
-/// 09:00 已过、`firedTimes` 为空 → 立刻补跑。此时用户可能还没装插件（或刚装
-/// 还没启用），于是日志里出现一条
-/// 「WorkBuddy 国内版没有实现管理动作 growth.travel.batch（可能需要更新提供商插件）」
-/// —— 一条用户没触发、也不知道该怎么处理的失败。
-///
-/// 定时任务在「用户没表过态」时不该自己开始写账号数据。现在与
-/// `auto_checkin::master_enabled` 对齐：只有配置里明确写了 `enabled: true`
-/// 才跑。缺省值仍然保留（09:00 / 21:00），用户打开开关时不必先填时刻。
+/// 用户明确保存的值优先；缺失字段采用已加载插件的默认值。
 pub fn settings() -> (bool, Vec<String>) {
+    let declared = schedules::definition(PROVIDER, SCHEDULE_ID);
     let raw = config::current()
         .raw()
         .get(CONFIG_KEY)
@@ -86,8 +43,12 @@ pub fn settings() -> (bool, Vec<String>) {
     let enabled = raw
         .get("enabled")
         .and_then(Value::as_bool)
-        == Some(true);
-    let times: Vec<String> = raw
+        .unwrap_or_else(|| {
+            declared
+                .as_ref()
+                .is_some_and(|definition| definition.enabled)
+        });
+    let mut times: Vec<String> = raw
         .get("times")
         .and_then(Value::as_array)
         .map(|items| {
@@ -97,15 +58,13 @@ pub fn settings() -> (bool, Vec<String>) {
                 .collect()
         })
         .unwrap_or_default();
-    let times = if times.is_empty() {
-        DEFAULT_TIMES.iter().map(|text| text.to_string()).collect()
-    } else {
-        // 去重并按时间序（界面上的顺序与执行顺序一致）
-        let mut sorted = times;
-        sorted.sort();
-        sorted.dedup();
-        sorted
-    };
+    if times.is_empty() {
+        times = declared
+            .map(|definition| definition.times)
+            .unwrap_or_default();
+    }
+    times.sort();
+    times.dedup();
     (enabled, times)
 }
 
@@ -114,13 +73,17 @@ pub fn settings() -> (bool, Vec<String>) {
 /// 与 `auto_checkin` 的 `write_state` 同构：合并写回，config.json 的其它字段
 /// 原样保留。
 pub fn configure(patch: &Value) -> Result<Value, String> {
+    let (_, previous_times) = settings();
     let mut current = config::current()
         .raw()
         .get(CONFIG_KEY)
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    if let Some(enabled) = patch.get("enabled").and_then(Value::as_bool) {
+    if let Some(value) = patch.get("enabled") {
+        let Some(enabled) = value.as_bool() else {
+            return Err("enabled 必须是布尔值".to_string());
+        };
         current.insert("enabled".to_string(), Value::Bool(enabled));
     }
     if let Some(items) = patch.get("times") {
@@ -146,16 +109,18 @@ pub fn configure(patch: &Value) -> Result<Value, String> {
             return Err("至少保留一个时刻".to_string());
         }
         times.sort();
+        if times != previous_times {
+            current.insert("lastFiredDate".to_string(), Value::Null);
+            current.insert("lastFiredTime".to_string(), Value::Null);
+            current.remove("firedTimes");
+        }
         current.insert(
             "times".to_string(),
             Value::Array(times.into_iter().map(Value::String).collect()),
         );
     }
-    // 当天去重标记：改了时刻就清掉，让新时刻当天就能生效
-    //（否则用户在 10:00 把时刻从 09:00 改成 11:00，会看到「今天已跑过」）
-    current.insert("lastFiredDate".to_string(), Value::Null);
-    current.insert("lastFiredTime".to_string(), Value::Null);
     config::update_raw_field(CONFIG_KEY, Value::Object(current));
+    schedules::wake();
     Ok(state())
 }
 
@@ -189,8 +154,11 @@ pub fn state() -> Value {
     } else {
         Vec::new()
     };
+    let pause_reason = schedules::pause_reason(PROVIDER, SCHEDULE_ID);
     json!({
         "enabled": enabled,
+        "available": pause_reason.is_none(),
+        "pausedReason": pause_reason,
         "times": times,
         "firedToday": fired_today,
         "lastFiredDate": if last_fired_date.is_empty() { Value::Null } else { Value::String(last_fired_date) },
@@ -230,69 +198,81 @@ fn acquire() -> Option<RunGuard> {
 
 // ─── 执行 ───────────────────────────────────────────────────
 
-/// 跑一轮猫猫旅行巡检。
-///
-/// `plan_time` 是**本次对应的计划时刻**（`HH:MM`）：去重标记必须按它落，
-/// 不能按实际执行时刻 —— 到点后最多晚一个 tick（30 秒）才跑，拿实际时刻
-/// 去比对计划时刻永远不相等，结果是每个 tick 都重跑一遍。
-/// `reason` 只进日志（区分「到点触发」与「手动立即执行」）。
-pub async fn run_once(store: &AccountStore, reason: &str, plan_time: Option<&str>) -> Option<Value> {
-    let guard = acquire()?;
-    logging::log("[Travel]", &format!("⏰ 猫猫旅行巡检开始（{reason}）"));
+/// 执行中、能力暂不可用和真正失败不能合并为同一个空结果。
+pub enum RunOutcome {
+    Completed(Value),
+    Skipped(String),
+    Busy,
+    Failed(GatewayError),
+}
 
-    // 巡检体在插件里：`growth.travel.batch` 自己列本家账号、自己门控，
-    // 返回网关 `summarize` 的同形摘要（账号数 / 动作 / 积分 / 失败数）。
-    //
-    // ── 为什么先查插件装没装 ────────────────────────────────────
-    // `adapter_by_id` 在插件缺失时会**回落到内置适配器**（见那里的说明：
-    // 「没装/停用时自然落到内置」）。而内置 WorkBuddy 早已不实现
-    // `growth.travel.batch` —— 这个动作随签到功能整体迁到了插件里。于是
-    // 没装插件时调用必然拿到 501「没有实现管理动作」，日志里就是一条红色
-    // 失败。那不是「巡检失败」，是「这个能力还不存在」：没装插件的机器上
-    // 根本不该有猫猫旅行这件事。
-    //
-    // 所以这里按能力是否存在分三档：插件没装 → 跳过（记一条说明，不报错）；
-    // 装了且实现了 → 正常跑；跑出错误 → 才是真失败。
-    let adapter = crate::server::core::providers::adapter::adapter_by_id("workbuddy");
-    // `serves("workbuddy")` = 这一家此刻由**已装入的插件**接管。
-    // 不用 `installed_ids()`：那返回的是 provider id 列表，与「装了哪个包」
-    // 不是一回事（同一个包可以提供十几家）。
-    let plugin_ready = crate::server::core::plugin_host::serves_provider("workbuddy");
-    let summary = match adapter {
-        Some(adapter) if plugin_ready => {
-            match adapter
-                .admin_action(store, "", "growth.travel.batch", &Value::Null)
-                .await
-            {
-                Ok(summary) => summary,
-                Err(error) => {
-                    // 501 = 插件在但没实现这个动作（插件版本旧了）。仍按「跳过」
-                    // 处理：这不是本轮巡检失败，重试也不会有结果。
-                    if error.status_code == 501 {
-                        logging::log(
-                            "[Travel]",
-                            "⚠️ 当前插件没有实现猫猫旅行巡检（growth.travel.batch），本轮跳过 —— \
-                             请更新提供商插件",
-                        );
-                        return None;
-                    }
-                    logging::log("[Travel]", &format!("❌ 猫猫旅行巡检失败：{}", error.message));
-                    return None;
-                }
-            }
+/// 跑一轮巡检；去重按计划时刻落，手动执行不占用定时轮次。
+pub async fn run_once(store: &AccountStore, reason: &str, plan_time: Option<&str>) -> RunOutcome {
+    if let Some(message) = schedules::pause_reason(PROVIDER, SCHEDULE_ID) {
+        return RunOutcome::Skipped(message);
+    }
+    let Some(definition) = schedules::definition(PROVIDER, SCHEDULE_ID) else {
+        return RunOutcome::Skipped("当前提供商插件未申报这项排程，请更新提供商插件".to_string());
+    };
+    let Some(adapter) = plugin_host::lookup(PROVIDER) else {
+        return RunOutcome::Skipped("未安装或未启用提供商插件".to_string());
+    };
+    let Some(_guard) = acquire() else {
+        return RunOutcome::Busy;
+    };
+    logging::log("[Travel]", &format!("⏰ 猫猫旅行巡检开始（{reason}）"));
+    let summary = match adapter
+        .admin_action(store, "", &definition.action, &Value::Null)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(_) if !plugin_host::lookup(PROVIDER)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(&current, &adapter)) =>
+        {
+            return RunOutcome::Skipped("提供商插件正在重新加载，本轮已跳过".to_string());
         }
-        // 插件没装 / 停用：猫猫旅行是插件能力，没有它就没有这项功能。
-        // 按「本轮无事可做」收口，不写 lastResult（否则界面会显示一条
-        // 时间为「刚刚」但零动作的记录，看着像跑过了）。
-        _ => {
-            logging::log(
-                "[Travel]",
-                "⚠️ 未安装 Agent2API 提供商插件，猫猫旅行巡检跳过（该功能在插件里）",
+        Err(error) if error.status_code == 501 => {
+            let message = "当前提供商插件未实现这项排程，请更新提供商插件".to_string();
+            schedules::suspend(PROVIDER, SCHEDULE_ID, message.clone());
+            return RunOutcome::Skipped(message);
+        }
+        Err(error) => {
+            // 每天定点的动作不应因失败变成高频重试；下个计划时刻或手动执行可再试。
+            record_run(
+                json!({
+                    "at": logging::now_ms(),
+                    "outcome": "failed",
+                    "error": error.message,
+                    "accounts": 0,
+                    "actions": [],
+                    "credit": 0,
+                    "failed": 1,
+                }),
+                plan_time,
             );
-            return None;
+            logging::log_with_level(
+                "[Travel]",
+                &format!("猫猫旅行巡检失败：{}", error.message),
+                "error",
+            );
+            return RunOutcome::Failed(error);
         }
     };
+    record_run(summary.clone(), plan_time);
+    let action_count = summary
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let credit = summary.get("credit").and_then(Value::as_i64).unwrap_or(0);
+    logging::log(
+        "[Travel]",
+        &format!("猫猫旅行巡检完成：{action_count} 个动作（+{credit}c）"),
+    );
+    RunOutcome::Completed(summary)
+}
 
+fn record_run(summary: Value, plan_time: Option<&str>) {
     // 落 lastResult + 当天的「已执行时刻」
     let today = beijing::today_key();
     let now_time = beijing::now().format("%H:%M").to_string();
@@ -330,27 +310,14 @@ pub async fn run_once(store: &AccountStore, reason: &str, plan_time: Option<&str
         "firedTimes".to_string(),
         Value::Array(fired.into_iter().map(Value::String).collect()),
     );
-    next.insert("lastResult".to_string(), summary.clone());
+    next.insert("lastResult".to_string(), summary);
     config::update_raw_field(CONFIG_KEY, Value::Object(next));
-
-    let action_count = summary
-        .get("actions")
-        .and_then(Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    let credit = summary.get("credit").and_then(Value::as_i64).unwrap_or(0);
-    logging::log(
-        "[Travel]",
-        &format!("猫猫旅行巡检完成：{action_count} 个动作（+{credit}c）"),
-    );
-    drop(guard);
-    Some(summary)
 }
 
 /// 当天该跑的时刻里还有没跑过的 → Some(那一条)，否则 None。
 fn due_time(now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
     let (enabled, times) = settings();
-    if !enabled {
+    if !enabled || schedules::pause_reason(PROVIDER, SCHEDULE_ID).is_some() {
         return None;
     }
     let today = beijing::today_key();
@@ -359,19 +326,20 @@ fn due_time(now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
         .get(CONFIG_KEY)
         .cloned()
         .unwrap_or(Value::Null);
-    let fired: Vec<String> = if raw.get("lastFiredDate").and_then(Value::as_str) == Some(today.as_str()) {
-        raw.get("firedTimes")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let fired: Vec<String> =
+        if raw.get("lastFiredDate").and_then(Value::as_str) == Some(today.as_str()) {
+            raw.get("firedTimes")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
     let now_text = now.format("%H:%M").to_string();
     // 取「已到点且今天没跑过」里最早的一条：多个时刻同时过期时逐轮补跑
     //（一轮只跑一次，下个 tick 再补下一条 —— 与 auto_checkin 的补签同语义）
@@ -385,23 +353,34 @@ fn due_time(now: chrono::DateTime<chrono::FixedOffset>) -> Option<String> {
 /// 每 `TICK_MS` 醒一次重新判定：改完设置下一轮就生效、机器休眠后自愈 ——
 /// 与 `auto_checkin` / `scheduled_tasks` 同一取舍（详见那两个模块头）。
 pub fn spawn(store: AccountStore) {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
     crate::spawn_task(async move {
         loop {
-            tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(TICK_MS)) => {},
+                _ = schedules::changed() => {},
+            }
             let now = beijing::now();
-            let Some(plan_time) = due_time(now) else { continue };
-            let _ = run_once(&store, &format!("到点触发（{plan_time}）"), Some(&plan_time)).await;
+            let Some(plan_time) = due_time(now) else {
+                continue;
+            };
+            let _ = run_once(
+                &store,
+                &format!("到点触发（{plan_time}）"),
+                Some(&plan_time),
+            )
+            .await;
         }
     });
 }
 
 // ─── 全局句柄（供 API 手动触发）─────────────────────────────
 
-/// 手动立即执行（供 API 调用）。返回 None = 已有一轮在跑。
-///
-/// 手动执行**不**写计划时刻的去重标记（见 `run_once` 的说明）：
-/// 用户点一下「立即巡检」不等于当天的定时轮次已经跑过。
-pub async fn run_now(store: &AccountStore) -> Option<Value> {
+/// 手动执行不占用当天的定时轮次。
+pub async fn run_now(store: &AccountStore) -> RunOutcome {
     run_once(store, "手动执行", None).await
 }
 
@@ -411,19 +390,23 @@ mod tests {
 
     #[test]
     fn normalize_time_accepts_and_rejects() {
-        assert_eq!(normalize_time(Some(&json!("09:00"))), Some("09:00".to_string()));
-        assert_eq!(normalize_time(Some(&json!("9:5"))), Some("09:05".to_string()));
-        assert_eq!(normalize_time(Some(&json!(" 21:30 "))), Some("21:30".to_string()));
+        assert_eq!(
+            normalize_time(Some(&json!("09:00"))),
+            Some("09:00".to_string())
+        );
+        assert_eq!(
+            normalize_time(Some(&json!("9:5"))),
+            Some("09:05".to_string())
+        );
+        assert_eq!(
+            normalize_time(Some(&json!(" 21:30 "))),
+            Some("21:30".to_string())
+        );
         // 越界 / 非字符串 / 缺字段
         assert_eq!(normalize_time(Some(&json!("24:00"))), None);
         assert_eq!(normalize_time(Some(&json!("12:60"))), None);
         assert_eq!(normalize_time(Some(&json!(930))), None);
         assert_eq!(normalize_time(None), None);
-    }
-
-    #[test]
-    fn default_times_are_nine_and_twenty_one() {
-        assert_eq!(DEFAULT_TIMES, ["09:00", "21:00"]);
     }
 
     /// 去重标记必须按**计划时刻**比对。
@@ -437,33 +420,37 @@ mod tests {
         let fired = vec!["09:00".to_string()];
         let now_text = "09:00".to_string();
         // 09:00 已跑过 → 21:00 还没到 → 无事可做
-        let due = times
-            .iter()
-            .find(|time| time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time));
+        let due = times.iter().find(|time| {
+            time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time)
+        });
         assert_eq!(due, None);
         // 若把 fired 换成实际执行时刻（09:01），会误判成「没跑过」→ 重复执行
         let wrong_fired = vec!["09:01".to_string()];
-        let due_wrong = times
-            .iter()
-            .find(|time| time.as_str() <= now_text.as_str() && !wrong_fired.iter().any(|item| *item == **time));
+        let due_wrong = times.iter().find(|time| {
+            time.as_str() <= now_text.as_str() && !wrong_fired.iter().any(|item| *item == **time)
+        });
         assert_eq!(due_wrong.map(|time| time.as_str()), Some("09:00"));
     }
 
     #[test]
     fn due_time_picks_earliest_unfired_past_slot() {
-        let times = ["09:00".to_string(), "13:00".to_string(), "21:00".to_string()];
+        let times = [
+            "09:00".to_string(),
+            "13:00".to_string(),
+            "21:00".to_string(),
+        ];
         // 现在 22:00、今天一个都没跑 → 先补最早的 09:00（一轮一条）
         let now_text = "22:00".to_string();
         let fired: Vec<String> = Vec::new();
-        let due = times
-            .iter()
-            .find(|time| time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time));
+        let due = times.iter().find(|time| {
+            time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time)
+        });
         assert_eq!(due.map(|time| time.as_str()), Some("09:00"));
         // 09:00 跑过之后 → 13:00
         let fired = vec!["09:00".to_string()];
-        let due = times
-            .iter()
-            .find(|time| time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time));
+        let due = times.iter().find(|time| {
+            time.as_str() <= now_text.as_str() && !fired.iter().any(|item| *item == **time)
+        });
         assert_eq!(due.map(|time| time.as_str()), Some("13:00"));
     }
 }

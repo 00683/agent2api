@@ -74,7 +74,7 @@ import { ACCOUNT_COLUMNS, bindColumnGrips, columnWidths, tableMinWidth } from '.
 import {
   allAccounts, bump, clearFilter, clearLimits, clearSelection, ensureProxyPoolOptions,
   filterActive, getStore, groupSortRules, groupView, hiddenAccounts, installAccountsApi, normalizeProviderFilter, openBatchDialog,
-  providerSummaryList, queryAllUsage, reorderQueue, rowContext, seats, segmentCounts,
+  providerSummaryList, queryAllUsage, refreshList, reorderQueue, rowContext, seats, segmentCounts,
   setAllGroupsCollapsed, setAllPicked, setProviderFilter, setSearchFilter, setSegmentFilter,
   snapshot, startConnectionsPolling, subscribe, subscribeProxyPool, syncGroupTotalPreference,
   tokenUsageOf, togglePick, usageEntryOf, GROUP_TOTAL_FILTERED_KEY,
@@ -85,6 +85,7 @@ import {
 } from './accounts-panels'
 import { bindQueueDrag, type QueueDrop } from './accounts-queue-drag'
 import { AccountsDialogs } from './accounts-dialogs'
+import { HiddenAccountsNotice } from './accounts-hidden-notice'
 
 /** 列设置的句柄（注册在挂载后的布局 effect 里，见下方说明） */
 let colHandle: ColSettingsHandle | null = null
@@ -142,57 +143,6 @@ function syncHead(): void {
   })
 }
 
-/* ─── 「账号在，但插件不在」的空态 ─────────────────── */
-
-/**
- * 一条账号都没有，但库里有 N 条因为「提供商插件未安装」被隐藏。
- *
- * ── 为什么值得单独做一块界面 ────────────────────────────────
- * 各家反代的转发 / 账号 / 签到实现已整体搬进插件（见后端 `account_visible`
- * 的模块头）。老用户升级上来时，账号记录一条没少、却一条都不显示 —— 而
- * 原来的空态写的是「暂无账号，请点击右上角添加账号」。那句话会把一个数据
- * 完好的用户直接推向**重新添加账号**，而那是唯一会造成真混乱的动作
- * （同一个上游账号在库里变成两条记录，选路、限额、签到都会分叉）。
- *
- * 所以这里把话说全：账号还在、只是等插件、去哪儿装。
- *
- * ── 为什么逐个列出 provider ────────────────────────────────
- * 只说「有 4 个账号」不够 —— 用户得知道要装哪个插件。后端按 provider 聚合
- * 过（`hiddenAccounts.byProvider`），这里用提供商注册表的显示名换成人话。
- */
-function HiddenAccountsState({ hidden }: {
-  hidden: { total: number; byProvider: Record<string, number> }
-}): React.ReactElement {
-  const labelOf = (id: string): string => shared().wbProviders?.labelOf?.(id) || id
-  const entries = Object.entries(hidden.byProvider).sort((a, b) => b[1] - a[1])
-  return (
-    <div className='empty acct-hidden-note'>
-      <p className='acct-hidden-title'>
-        {t('有 {n} 个账号暂不可用：它们依赖的提供商插件还没安装', { n: hidden.total })}
-      </p>
-      {entries.length > 0 ? (
-        <ul className='acct-hidden-list'>
-          {entries.map(([provider, count]) => (
-            <li key={provider}>
-              {t('{label} ×{count}', { label: labelOf(provider), count })}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <p className='acct-hidden-foot'>
-        {t('账号数据都还在库里，装上插件后会自动出现在这里 —— 不需要重新添加。')}
-      </p>
-      <Button
-        size='sm'
-        variant='default'
-        onClick={() => window.wbApp?.showPage?.('plugins')}
-      >
-        {t('去「插件」页安装')}
-      </Button>
-    </div>
-  )
-}
-
 /* ─── 页面 ─────────────────────────────────── */
 
 function AccountsPage() {
@@ -203,8 +153,6 @@ function AccountsPage() {
 
   const loaded = Boolean(snapshot())
   const all = allAccounts()
-  // 「插件未安装」而被隐藏的账号：只有一条都没有 + 这个数 >0 时才用另一种空态
-  // （见下方），平时不参与任何渲染
   const hidden = hiddenAccounts()
   // groups = 要渲染的（当前筛选下一条都看不见的组不留空壳）；allGroups = 全部组，
   // 拼队列与「折叠 / 展开全部」都用它
@@ -563,6 +511,11 @@ function AccountsPage() {
           </div>{/* /.acct-filter-group */}
 
           <div className='actions'>
+            <Button id='btn-refresh-accounts' variant='outline' disabled={store.listBusy}
+              title={t('重新读取账号列表和插件状态，不刷新 Token 或查询余额')}
+              onClick={() => void refreshList({ feedback: true })}>
+              {store.listBusy ? t('刷新中…') : t('刷新列表')}
+            </Button>
             {/* 折叠是「只看某几家」的入口：一家几十条时，收起不关心的那些比筛选更顺手。
                 「全部」就是全部 —— 作用对象是全部组，不按当前筛选收窄（见 store 里
                 setAllGroupsCollapsed 的说明） */}
@@ -586,6 +539,18 @@ function AccountsPage() {
               onClick={() => void queryAllUsage()}>{store.usageBusy ? t('查询中…') : t('查询余额')}</Button>
           </div>
         </div>
+
+        {store.listError ? (
+          <p className='acct-load-error' role='alert'>
+            {loaded
+              ? t('刷新账号列表失败，当前仍显示上一次成功读取的数据：{message}', { message: store.listError })
+              : t('账号列表加载失败，请点击「刷新列表」重试：{message}', { message: store.listError })}
+          </p>
+        ) : null}
+
+        {loaded && all.length > 0 && hidden.total > 0 ? (
+          <HiddenAccountsNotice hidden={hidden} compact />
+        ) : null}
 
         {/* ─── 窄屏筛选抽屉 ───
             四个筛选组由 CSS 从工具条移进来（.acct-filter-group 在 ≤767px 时
@@ -655,10 +620,14 @@ function AccountsPage() {
 
         <div className='acct-scroll' id='account-list' ref={listRef}>
           {!loaded ? (
-            <div className='empty'><span className='spinner' />{t('正在加载…')}</div>
+            <div className='empty'>
+              {store.listError
+                ? t('账号列表加载失败，请点击「刷新列表」重试')
+                : <><span className='spinner' />{t('正在加载…')}</>}
+            </div>
           ) : !all.length ? (
             hidden.total > 0
-              ? <HiddenAccountsState hidden={hidden} />
+              ? <HiddenAccountsNotice hidden={hidden} />
               : <div className='empty'>{t('暂无账号，请点击右上角「添加账号」')}</div>
           ) : !shown.length ? (
             <div className='empty'>

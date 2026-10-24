@@ -68,7 +68,7 @@ const DOMAIN_ORDER = [
 const DOMAIN_RULES = [
   { domain: 'common', files: ['index.html', 'm.html', 'titlebar.js', 'tooltip.js', 'clipboard.js', 'filter-memory.js', 'app.js', 'confirm-dialog.tsx', 'input.tsx', 'input-control.tsx', 'segmented.tsx', 'index.tsx', 'markdown.js', 'icons.js', 'App.tsx', 'main.tsx', 'Shell.tsx', 'NavBar.tsx', 'Icon.tsx', 'ProviderLogo.tsx', 'ui.tsx', 'PullToRefresh.tsx', 'AppUpdatePanel.tsx', 'CommunitySheet.tsx', 'i18n.ts', 'client.ts', 'gateway.ts', 'format.ts', 'providers.ts', 'providerFacts.ts', 'usePolling.ts', 'pwa.ts', 'usePwa.ts', 'appUpdate.ts', 'community.ts', 'servers.ts', 'auth.ts', 'store.ts', 'pluginPages.ts', 'PluginPage.tsx'] },
   { domain: 'login', files: ['login.html', 'login-page.tsx', 'panel-captcha.js'] },
-  { domain: 'accounts', files: ['accounts-page.tsx', 'AccountsPage.tsx', 'AccountSheet.tsx', 'AccountsFilterSheet.tsx', 'accounts-shared.ts', 'accounts-columns.ts', 'accounts-store.ts', 'accounts-panels.tsx', 'accounts-queue-drag.ts', 'accounts-dialogs.tsx', 'accounts-dialog-limiter.tsx', 'accounts-dialog-usage.tsx', 'accounts-credit-detail.tsx', 'accounts-limit-detail.tsx', 'accounts-data.ts', 'accounts-domain.ts', 'accounts-group-settings.tsx', 'usage.ts', 'zcode-plans-modal.tsx', 'balance-query.tsx'] },
+  { domain: 'accounts', files: ['accounts-page.tsx', 'accounts-hidden-notice.tsx', 'accounts-refresh.ts', 'AccountsPage.tsx', 'AccountSheet.tsx', 'AccountsFilterSheet.tsx', 'accounts-shared.ts', 'accounts-columns.ts', 'accounts-store.ts', 'accounts-panels.tsx', 'accounts-queue-drag.ts', 'accounts-dialogs.tsx', 'accounts-dialog-limiter.tsx', 'accounts-dialog-usage.tsx', 'accounts-credit-detail.tsx', 'accounts-limit-detail.tsx', 'accounts-data.ts', 'accounts-domain.ts', 'accounts-group-settings.tsx', 'usage.ts', 'zcode-plans-modal.tsx', 'balance-query.tsx'] },
   { domain: 'add-account', files: ['add-custom-provider.tsx', 'custom-provider-ui.js', 'providers.js', 'preset-providers.js', 'web-login.js', 'sms-login.js', 'autoclaw-oauth.js', 'aliyun-captcha.js', 'zcode-claim.js', 'zcode-captcha-pool.js', 'codearts-welfare.js'], prefixes: ['add-account-', 'add-provider-'] },
   { domain: 'models', files: ['ModelsPage.tsx', 'model-capability.ts', 'model-capability-dialog.tsx', 'model-test-dialog.tsx'], prefixes: ['models-'] },
   // 「Agent」页：本机 AI 客户端的配置接管（客户端清单 / 配置编辑 / 写入预览）
@@ -99,7 +99,7 @@ const DOMAIN_RULES = [
   // 单开一个域会让 i18n-src 多出五份几乎空的 JSON —— 归 common，与它实际
   // 的规模相称。菜单名「提供商插件」在 sidebar-layout.js 里，归 settings 域
   // （侧边栏布局那条规则已经收了它）。
-  { domain: 'common', files: ['plugins-page.tsx'] },
+  { domain: 'common', prefixes: ['plugins-'] },
 ]
 
 /* ─── 文件枚举 ─────────────────────────────── */

@@ -791,20 +791,8 @@ impl ServerState {
         // 服务器停机时进程会结束，任务随之消失。用 crate::spawn_task
         // （与 auto_checkin 同一理由）保证从非 tokio 上下文调用也能进入全局运行时。
         core::scheduled_tasks::spawn(state.store.clone(), state.update.clone());
-        // 猫猫旅行定时排程（国内版）：每天定点巡检一趟（无猫领养 / idle 派出 /
-        // arrived 领奖）。与上面的间隔型任务不是同一个形状（每天定点 vs 等间隔），
-        // 理由见 `core::growth_scheduler` 的模块头。默认开启、09:00 与 21:00 两趟
-        // —— 早上派出、晚上领奖，与参考项目 `TravelHours` 同口径。
-        {
-            let (enabled, times) = core::growth_scheduler::settings();
-            if enabled {
-                logging::log(
-                    "[Travel]",
-                    &format!("猫猫旅行定时排程已启用：每天 {} 执行", times.join(" / ")),
-                );
-                core::growth_scheduler::spawn(state.store.clone());
-            }
-        }
+        // 配置更新和插件热加载会唤醒排程，关闭时保持等待而不是省掉调度循环。
+        core::growth_scheduler::spawn(state.store.clone());
         // ZCode 活动套餐的「推理要不要验证码令牌」由上游配置说 —— 那份同步
         // 循环随实现搬到插件了（它挂在插件的转发钩子上，见插件侧
         // `zcode::config_sync::maybe_sync`）。网关这边不再有常驻任务。

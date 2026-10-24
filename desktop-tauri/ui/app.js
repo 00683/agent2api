@@ -14,8 +14,7 @@ let state = null;
 // 它是给顶栏状态区挂 title 用的：后端不可达时页面上其余数字都只是「上一次的值」，
 // 而顶栏是常驻可见的那一处，把原因挂在那里用户悬停就能看到（见 renderTopbarStatus）。
 let stateError = '';
-// busy 是「全局一次只干一件事」的互斥锁：刷新、切换账号、登录、保存配置等都要先占它。
-// 注意它与 account-panel.js 里的 panelBusy 是两把互不相干的锁：弹窗内的保存不占这把锁。
+// 账号操作与网页登录共用这把锁；只读刷新使用自己的请求队列。
 let busy = false;
 
 // ─── 工具 ────────────────────────────────────
@@ -246,7 +245,11 @@ function adoptPluginPages(data) {
  * 失败静默：插件页是增强项，拉不到就当作「一个都没有」，侧边栏照常显示
  * 内置页 —— 为它弹一条错误提示只会让「没装插件」看起来像故障。
  */
-async function refreshPluginPages() {
+async function refreshPluginPages(payload) {
+  if (payload) {
+    adoptPluginPages(payload);
+    return;
+  }
   try {
     const data = await api.getPlugins();
     adoptPluginPages(data);
@@ -609,6 +612,7 @@ function showPage(name, { persist = true } = {}) {
   // 切到账号页时立刻补一次连接数：那条 2 秒轮询只在「当时就在账号页」时才发请求，
   // 切走的这段时间里缓存已经过期，不补一下会先看到几秒前的旧数字
   if (page === 'accounts') {
+    void window.wbAccountsView?.refreshList?.();
     void window.wbAccountsView?.syncConnections?.();
     // 代理列的下拉读的是与「网络代理」页共用的那份池缓存：那一页的写操作会就地
     // 更新它，但池也可能在应用外被改过（另一个窗口 / 手工改库），切回来时重读一次
@@ -1111,63 +1115,65 @@ function renderAccountsView() {
 
 // ─── 加载 ─────────────────────────────────────
 
-/**
- * 忙碌期间被压下的刷新请求（合并成一次待办）。
- * 为什么需要它：refresh() 过去在 busy 时直接 return，请求被静默丢弃 ——
- * 保存账号设置后主动调刷新，恰好撞上 20 秒轮询或别的操作，这次刷新就白丢了，
- * 界面只能等下一次轮询才更新（用户看到的就是「保存完十几秒才变」）。
- */
-let refreshQueued = false;
+let refreshRequested = 0;
+let refreshTask = null;
+let refreshStatus = { pending: false, error: '' };
+const refreshListeners = new Set();
 
-/**
- * 释放 busy 锁，并把排队的刷新补跑掉。
- *
- * 为什么所有持锁函数都要经由它释放（而不是各自写 busy = false）：
- * 锁是共用的，排队标记却可能是在别人持锁期间被置上的（比如轮询撞上「等待网页登录」）。
- * 只在 refresh() 自己的 finally 里补跑，遇到「锁被非刷新操作持有」时就会漏掉这次请求，
- * 又要等下一个 20 秒。统一从这里释放，才能保证「锁一放开就补跑」。
- *
- * 补跑用 void 触发、不 await：调用方（如 runAccountAction）可能正持着锁，
- * 若在这里 await 补跑，就等于把锁借给别人、还会形成递归等待链。
- * 末尾挂 catch 只做兜底 —— refresh() 正常会把错误渲染成「加载失败」，
- * 但 render() 自身抛错时 Promise 会拒绝，void 出去的拒绝没人接就变成控制台噪音。
- * 此处 busy 已提前置 false，故补跑的那次 refresh() 一定拿得到锁。
- */
-function releaseBusy() {
-  busy = false;
-  if (!refreshQueued) return;
-  refreshQueued = false;
-  refresh().catch(() => { /* 兜底：避免 void 出去的 Promise 拒绝无人处理 */ });
+function publishRefreshStatus(patch) {
+  refreshStatus = { ...refreshStatus, ...patch };
+  refreshListeners.forEach(listener => listener());
 }
 
-async function refresh() {
-  // 忙碌时不丢弃请求，先排队；多次请求合并成一次补跑，避免连续触发时打出一串重复请求。
-  // 这里立即返回（不等补跑完成）：调用方可能正持着锁等这个 Promise（如 runAccountAction
-  // 内的 await refresh()），若返回的 Promise 依赖锁释放，就会自己把自己锁死。
-  if (busy) { refreshQueued = true; return; }
-  busy = true;
-  try {
-    const next = await api.getState();
-    state = next;
-    // 拿到状态即清掉上一次的失败说明（见下面 catch 的注释）
-    stateError = '';
-    // 清掉已删除账号的本地缓存；代理可选项也可能在 Clash 侧改过，下次打开弹窗重读
-    const validIds = new Set((state.accounts?.accounts || []).map(a => a.id));
-    window.wbAccountsView?.refreshCaches(validIds);
-    window.wbAccountPanel?.invalidate();
-    render();
-  } catch (error) {
-    state = null;
-    stateError = error.message;
-    render();
-    // 「本地代理状态」卡片与会话状态卡片都已删除，加载失败的说明改挂到顶栏状态区的
-    // title 上（见 renderTopbarStatus）：那里此时本来就显示「未登录 / 未就绪」，
-    // 悬停即可看到真实原因（后端不可达 / 接口报错）。
-    // 不用 toast：refresh() 每 20 秒轮询一次，后端长时间不可用会变成刷屏。
-    console.warn('加载状态失败:', error.message);
-  } finally {
-    releaseBusy();
-  }
+function subscribeRefresh(listener) {
+  refreshListeners.add(listener);
+  return () => refreshListeners.delete(listener);
+}
+
+function releaseBusy() {
+  busy = false;
+}
+
+// 在途请求可能早于插件操作；后来的刷新必须补读，不能复用那份旧响应。
+function refresh({ force = true } = {}) {
+  if (refreshTask && !force) return refreshTask;
+  refreshRequested += 1;
+  if (refreshTask) return refreshTask;
+  publishRefreshStatus({ pending: true });
+  refreshTask = Promise.resolve().then(async () => {
+    let applied = false;
+    let completed;
+    do {
+      completed = refreshRequested;
+      try {
+        const next = await api.getState();
+        if (!next || typeof next !== 'object' || !Array.isArray(next.accounts?.accounts)) {
+          throw new Error(wbI18n.t('账号列表响应异常'));
+        }
+        if (completed !== refreshRequested) continue;
+        state = next;
+        stateError = '';
+        const validIds = new Set(state.accounts.accounts.map(account => account.id));
+        window.wbAccountsView?.refreshCaches(validIds);
+        window.wbAccountPanel?.invalidate();
+        render();
+        publishRefreshStatus({ error: '' });
+        applied = true;
+      } catch (error) {
+        if (completed !== refreshRequested) continue;
+        applied = false;
+        stateError = error instanceof Error ? error.message : String(error);
+        publishRefreshStatus({ error: stateError });
+        renderTopbarStatus();
+        console.warn('加载状态失败:', stateError);
+      }
+    } while (completed !== refreshRequested);
+    return applied;
+  }).finally(() => {
+    refreshTask = null;
+    publishRefreshStatus({ pending: false });
+  });
+  return refreshTask;
 }
 
 // ─── 账号操作（列表按钮统一入口；余额查询由账号视图自行消化） ───
@@ -1211,7 +1217,7 @@ async function runAccountAction(action, id) {
   } catch (error) {
     toast(wbI18n.t('操作失败：{message}', { message: error.message }), 'err');
   } finally {
-    releaseBusy(); // 释放锁并补跑排队中的刷新（见 releaseBusy 注释）
+    releaseBusy();
   }
 }
 
@@ -1274,9 +1280,8 @@ window.addEventListener('wb:sidebar-layout', () => {
 
 api.onStateChanged(next => {
   if (!next?.accounts && !next?.session && !next?.health) return;
-  // 合并：旧 state + 新字段
-  state = { ...(state || {}), ...next };
-  render();
+  // 事件快照可能早于插件操作，只作失效通知；最新状态仍经统一刷新读取。
+  void refresh();
 });
 
 // ─── 共享给子模块（账号视图 / 词表面板 / 日志面板 / 账号设置面板）───
@@ -1289,6 +1294,8 @@ window.wbApp = {
   getState: () => state,
   runAccountAction,
   refresh,
+  getRefreshStatus: () => refreshStatus,
+  subscribeRefresh,
   // 插件页清单重拉（插件页装 / 卸 / 启停之后由插件页的岛调它）：
   // 侧边栏的插件页菜单按这份清单生成，不重拉就会「装完了菜单里还是没有」
   refreshPluginPages,
@@ -1432,13 +1439,14 @@ document.addEventListener('DOMContentLoaded', () => {
 // 快照时间戳没变时 syncBalancesSnapshot 自己会早退，重复触发没有代价。
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  if (currentPage === 'accounts') void window.wbAccountsView?.refreshList?.();
   void window.wbAccountsView?.syncBalancesSnapshot?.();
 });
 
 // 定时轮询：限额标记（429 + 恢复时间）与账号状态变化自动刷新；窗口隐藏时暂停
 setInterval(() => {
   if (document.hidden) return;
-  refresh();
+  refresh({ force: false });
   // 后端状态一起轮询：网关可能在这期间起停（端口冲突、用户结束占用进程后重启），
   // 而管理 API 打不通时 refresh() 只会静默失败，看不出发生了什么
   void window.wbPortPanel?.sync?.();

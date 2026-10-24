@@ -8,6 +8,7 @@ import {
   formatClock, formatTime,
   type CheckinCenter, type CheckinResult, type ScheduleEntry,
 } from './checkin-types'
+import { t } from '../i18n'
 
 /**
  * 「定时签到」标签页：总开关 + 条目列表 + 保活模型链 + 猫猫旅行。
@@ -452,6 +453,8 @@ function TravelPanel({ center }: { center: CheckinCenter }): React.ReactElement 
   const dirty = draft !== null && draft.replace(/\s+/g, '') !== times.join(',')
   const last = travel.lastResult
   const actions = Array.isArray(last?.actions) ? last.actions : []
+  const isPaused = travel.available === false
+  const failed = Number(last?.failed) || 0
 
   const submit = () => {
     const list = String(text)
@@ -473,13 +476,18 @@ function TravelPanel({ center }: { center: CheckinCenter }): React.ReactElement 
           size="sm"
           variant="outline"
           className="ml-auto flex-none"
-          disabled={travel.running}
+          disabled={travel.running || isPaused || store.saving}
           onClick={() => void runTravelNow()}
         >
           {travel.running ? '巡检中…' : '立即巡检全部'}
         </Button>
       </div>
       <div className="ck-panel-pad">
+        {isPaused ? (
+          <div className="ck-note">
+            {t('自动巡检已暂停：{reason}', { reason: travel.pausedReason ?? '' })}
+          </div>
+        ) : null}
         <div className="ck-set-line">
           <span className="ck-set-k">开关</span>
           <span className="ck-set-v ck-set-row">
@@ -512,11 +520,16 @@ function TravelPanel({ center }: { center: CheckinCenter }): React.ReactElement 
           北京时间 · 逗号分隔 · 最多 6 条 · 到点后最多晚 30 秒执行；错过时点开机后会补跑一轮。
           {fired.length ? ` 今天已执行：${fired.join(' / ')}` : ''}
         </div>
-        {last && actions.length > 0 ? (
+        {last && (actions.length > 0 || last.error) ? (
           <div className="ck-note">
-            上一轮（{last.at ? formatTime(last.at) : ''}）：{actions.length} 个动作，+{Number(last.credit) || 0} 积分
-            {actions.slice(0, 6).map(action =>
-              ` · ${action.name ?? action.accountId ?? ''}: ${action.message ?? action.outcome ?? ''}`).join('')}
+            {last.error ? t('巡检失败：{reason}', { reason: last.error }) : (
+              <>
+                上一轮（{last.at ? formatTime(last.at) : ''}）：{actions.length} 个动作，+{Number(last.credit) || 0} 积分
+                {failed > 0 ? ` · ${t('失败 {n}', { n: failed })}` : ''}
+                {actions.slice(0, 6).map(action =>
+                  ` · ${action.name ?? action.accountId ?? ''}: ${action.message ?? action.outcome ?? ''}`).join('')}
+              </>
+            )}
           </div>
         ) : null}
       </div>

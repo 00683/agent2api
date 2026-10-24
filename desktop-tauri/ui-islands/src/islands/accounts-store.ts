@@ -24,7 +24,10 @@
  * checkin-state.ts，签到完成后自动处理的那条链也在那边。）
  */
 
-import { shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot } from './accounts-shared'
+import {
+  shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot,
+  type HiddenAccountProvider, type HiddenAccountsSummary,
+} from './accounts-shared'
 import {
   accountGroups, byPriorityOrder, filterCounts, matchesFilter, positionMap, providerSummaries,
   visibleAccounts, DEFAULT_GROUP_SORT,
@@ -41,6 +44,8 @@ export type AccountsDialog =
 export type AccountsStore = {
   /** 每次变更 +1；React 靠它判断「该重画了」（快照对象同时被换掉） */
   version: number
+  listBusy: boolean
+  listError: string
   filter: AccountFilter
   /** 折叠起来的分组（provider id）。列表长了之后「只看某几家」靠它，见页头那颗按钮 */
   collapsed: ReadonlySet<string>
@@ -184,6 +189,8 @@ function loadGroupTotalFiltered(): boolean {
 
 let store: AccountsStore = {
   version: 0,
+  listBusy: false,
+  listError: '',
   filter: loadFilter(),
   collapsed: loadCollapsed(),
   selected: new Set<string>(),
@@ -230,32 +237,40 @@ export function allAccounts(): AccountRecord[] {
   return Array.isArray(list) ? list : []
 }
 
-/**
- * 因「提供商插件未安装」而被隐藏的账号数量与分布。
- *
- * `{ total: 0, byProvider: {} }` = 没有隐藏账号（也包含「真的一个账号都没有」）。
- *
- * ── 这个数用来区分两种空列表 ────────────────────────────────
- * 升级路径上最危险的一幕：老用户的账号记录都在库里，但那些家已搬到插件、
- * 他又还没装插件 —— 列表一片空白。原来那句「暂无账号，请点击添加」会让他
- * 以为数据丢了，然后去**重新添加账号**，那才是唯一会造成真混乱的动作。
- *
- * 后端在快照里带出这个计数（见 `account_store::store_view::snapshot`），
- * 只给数量与 provider id，不给账号明细 —— 那些账号此刻确实不可用，
- * 界面不该绕过 `account_visible` 的判断把它们列出来。
- */
-export function hiddenAccounts(): { total: number; byProvider: Record<string, number> } {
+/** 插件未就绪的账号摘要；旧后端只有数量时使用中性的「未加载」原因。 */
+export function hiddenAccounts(): HiddenAccountsSummary {
   const hidden = snapshot()?.hiddenAccounts
   const raw = hidden?.byProvider
   const byProvider: Record<string, number> = {}
-  if (raw && typeof raw === 'object') {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const [provider, count] of Object.entries(raw)) {
       const value = Number(count)
       if (Number.isFinite(value) && value > 0) byProvider[provider] = value
     }
   }
+  const details = new Map<string, HiddenAccountProvider>()
+  for (const item of Array.isArray(hidden?.providers) ? hidden.providers : []) {
+    if (!item || typeof item.id !== 'string' || !item.id) continue
+    const reason = item.reason === 'not_installed' || item.reason === 'pack_disabled'
+      || item.reason === 'provider_disabled' ? item.reason : 'not_loaded'
+    details.set(item.id, {
+      id: item.id,
+      label: typeof item.label === 'string' && item.label ? item.label : item.id,
+      count: Number(item.count) || 0,
+      reason,
+    })
+  }
+  const providers = Object.entries(byProvider).map(([id, count]): HiddenAccountProvider => {
+    const detail = details.get(id)
+    return {
+      id,
+      count,
+      label: detail?.label || shared().wbProviders?.labelOf?.(id) || id,
+      reason: detail?.reason || 'not_loaded',
+    }
+  }).sort((a, b) => b.count - a.count)
   const total = Number(hidden?.total)
-  return { total: Number.isFinite(total) && total > 0 ? total : 0, byProvider }
+  return { total: Number.isFinite(total) && total > 0 ? total : 0, byProvider, providers }
 }
 
 export function findAccount(id: string): AccountRecord | null {

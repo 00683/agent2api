@@ -123,7 +123,7 @@
           toast(wbI18n.t('登录失败：{message}', { message: error.message }), 'err');
         } finally {
           flowSettling = false;
-          releaseBusy(); // 释放锁并补跑排队中的刷新（见 releaseBusy 注释）
+          releaseBusy();
           // 以主进程状态为准复位按钮，避免这里与真实状态不一致
           await syncShellState();
         }

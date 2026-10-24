@@ -31,10 +31,17 @@
 //!     而发送方可能就是读循环 —— 那又是一条死锁。
 
 mod bootstrap;
+pub mod catalog;
 mod install;
+mod management;
+pub mod operations;
+mod packages;
+mod pack_view;
 mod registry;
 mod rpc;
 mod rpc_cache;
+pub mod schedules;
+pub mod settings;
 mod stream;
 pub mod update;
 
@@ -52,6 +59,8 @@ pub use install::{
 pub use registry::{install as install_provider, installed_ids, lookup, remove, clear};
 pub use registry::{serves as serves_provider};
 pub use rpc::{HostOptions, RpcAdapter};
+pub use management::snapshot as management_snapshot;
+pub(crate) use packages::prepare as prepare_pack;
 
 /// 当前平台的目标三元组（界面提示「下载哪个平台的包」用）。
 pub fn host_target() -> String {

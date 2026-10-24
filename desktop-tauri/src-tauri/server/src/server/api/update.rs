@@ -142,6 +142,7 @@ async fn dispatch(
                 let saved = config::set_update_proxy(normalized);
                 if changed {
                     state.update().clear_check_cooldown();
+                    crate::server::core::plugin_host::update::clear_cooldown();
                 }
                 // 落库失败仍返回新值（内存快照已生效，本次运行照走新线路），
                 // saved 字段如实带上，调用方要提醒就用它
@@ -186,6 +187,7 @@ async fn dispatch(
                 // 令牌不作数（token::stored_token 逐字比较，见 TokenUpdate 说明）
                 if update.changed {
                     state.update().clear_check_cooldown();
+                    crate::server::core::plugin_host::update::clear_cooldown();
                 }
                 // 落库失败仍返回新状态（内存已生效，本次运行照用），saved 如实带
                 let mut status = status_json();

@@ -120,6 +120,10 @@ pub async fn get_system_info(
             // 编译期版本：桌面壳会用它自己的运行时 package_info 覆盖显示，
             // 其余形态这就是唯一真值（与 `/api/update/check` 的缺省口径一致）
             "version": CURRENT_VERSION,
+            "license": "AGPL-3.0-only",
+            "sourceUrl": "https://github.com/aimod-cc/Agent2API",
+            "licenseUrl": "https://github.com/aimod-cc/Agent2API/blob/main/LICENSE",
+            "copyright": "Copyright (c) 2026 Agent2API",
             "channel": if config::update_beta() { "beta" } else { "stable" },
             "schemaVersion": db::schema::SCHEMA_VERSION,
             "dbSchemaVersion": db_schema,
