@@ -22,6 +22,9 @@
  */
 
 import { t } from '../i18n'
+import { modelOptionsFrom, type ModelOption } from './assistant-models'
+
+export type { ModelOption } from './assistant-models'
 
 /** 工具结果：`text` 回给模型（走 role:"tool" 的消息体），`summary` 给卡片显示 */
 export type ToolResult = {
@@ -947,109 +950,16 @@ export const TOOL_META: Array<{ id: string; label: string; desc: string; tag?: '
 
 export { errorText }
 
-/**
- * 组装**对外可请求的模型名列表**（助手页 / 设置页那个模型选择器的数据源）。
- *
- * 口径与 `/v1/models` 对齐（那就是客户端能请求的名字）：
- *   · 已启用模型的 ID（默认绑定）；
- *   · 已启用模型之上的**已启用映射名**（用户建的 `ca/xxx` 这类，同样可请求）。
- *
- * 走 `readModels()` 而不是只读 `getModelManage()`：那个接口只覆盖内置注册表，
- * 自定义提供商（含「预置 API」卡片建的）的清单存在提供商记录里，必须从目录
- * 缓存补进来 —— 否则用户在助手里选不到自建上游的模型，而它们在 `/v1/models`
- * 里明明是可请求的。
- */
+/** 助手选择器只列出网关当前对外提供的名字，不使用管理目录推算可用性。 */
 export async function loadModelNames(): Promise<string[]> {
-  const { models, mappings } = await readModels()
-  // 先记「provider×id 是启用的」—— 映射名能不能请求，取决于它指向的模型开没开
-  const enabledKeys = new Set<string>()
-  const names: string[] = []
-  const seen = new Set<string>()
-  for (const row of models) {
-    if (row.enabled !== true) continue
-    const provider = str(row.provider)
-    const id = str(row.id)
-    if (!provider || !id) continue
-    enabledKeys.add(`${provider}\u0001${id}`)
-    if (!seen.has(id)) { seen.add(id); names.push(id) }
-  }
-  for (const mapping of mappings) {
-    if (mapping.enabled !== true || mapping.isDefault === true) continue
-    const provider = str(mapping.provider)
-    const target = str(mapping.target)
-    const alias = str(mapping.alias)
-    if (!alias || !seen.has(alias) && enabledKeys.has(`${provider}\u0001${target}`)) {
-      seen.add(alias)
-      names.push(alias)
-    }
-  }
-  return names
+  return (await loadModelOptions()).map(option => option.name)
 }
 
-/** 模型选择器的一条候选（按提供商分组展示；`supportsImages` 用于图片输入的
- *  拦截提示 —— 未声明视为不支持，宁可提示一句也不要静默把图发上去被上游拒）。 */
-export type ModelOption = {
-  /** 对外可请求的名字（原始 ID 或映射名） */
-  name: string
-  /** 这家提供商的展示名（分组标题） */
-  provider: string
-  /** 模型自己声明的图片能力；未声明 = false */
-  supportsImages: boolean
-  /** 这条名字是从映射来的（选择器上给一个小标） */
-  viaMapping: boolean
-}
-
-/**
- * 模型候选表（聊天框那个选择器的数据源）。
- *
- * 与 [`loadModelNames`] 同一套「可请求」判据，只是多带分组与能力位：
- * 选择器要按提供商分组、要在选图后判断当前模型收不收图，这两件事都需要
- * 比纯名字更多的信息。**不另写一份筛选规则** —— 两处口径必须逐字一致，
- * 否则会出现「列表里有但发不出去」（列表只认名字，发送还要过网关的模型门禁）。
- */
 export async function loadModelOptions(): Promise<ModelOption[]> {
-  const { models, mappings } = await readModels()
-  const options: ModelOption[] = []
-  const seen = new Set<string>()
-  const enabledKeys = new Set<string>()
-  /** provider×id → 能力位（映射名要继承它指向的那个模型的能力） */
-  const capabilities = new Map<string, boolean>()
-
-  for (const row of models) {
-    if (row.enabled !== true) continue
-    const provider = str(row.provider)
-    const id = str(row.id)
-    if (!provider || !id) continue
-    const key = `${provider}\u0001${id}`
-    enabledKeys.add(key)
-    const caps = row.capabilities as Record<string, unknown> | undefined
-    const images = caps?.supportsImages === true
-    capabilities.set(key, images)
-    if (seen.has(id)) continue
-    seen.add(id)
-    options.push({
-      name: id,
-      provider: str(row.providerLabel) || provider,
-      supportsImages: images,
-      viaMapping: false,
-    })
-  }
-
-  for (const mapping of mappings) {
-    if (mapping.enabled !== true || mapping.isDefault === true) continue
-    const provider = str(mapping.provider)
-    const target = str(mapping.target)
-    const alias = str(mapping.alias)
-    if (!alias || seen.has(alias)) continue
-    const key = `${provider}\u0001${target}`
-    if (!enabledKeys.has(key)) continue
-    seen.add(alias)
-    options.push({
-      name: alias,
-      provider: str((mapping as { providerLabel?: unknown }).providerLabel) || provider,
-      supportsImages: capabilities.get(key) === true,
-      viaMapping: true,
-    })
-  }
-  return options
+  const readState = bridge().getState
+  if (!readState) throw new Error(t('读取模型清单失败'))
+  const state = await readState() as { models?: unknown } | null | undefined
+  if (!Array.isArray(state?.models)) throw new Error(t('读取模型清单失败'))
+  const managed = await readModels().catch(() => ({ models: [], mappings: [] }))
+  return modelOptionsFrom(state.models, managed.models, managed.mappings)
 }

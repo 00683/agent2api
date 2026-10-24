@@ -33,15 +33,14 @@ import { createRoot } from 'react-dom/client'
 import { Button, cn } from '@ui'
 import { t } from '../i18n'
 import {
+  AssistantRequestError,
   DEFAULT_SYSTEM_PROMPT,
   clearSessions,
   deleteSession,
   gatewayBase,
-  loadAssistantConfig,
   loadSession,
   loadSessions,
   parseToolArguments,
-  saveAssistantConfig,
   saveSession,
   streamChat,
   toast,
@@ -54,12 +53,13 @@ import {
 import {
   ASSISTANT_TOOLS,
   errorText,
-  loadModelOptions,
   toolById,
   toolsPayload,
-  type ModelOption,
   type ToolResult,
 } from './assistant-tools'
+import { selectedModel, unavailableModelMessage } from './assistant-models'
+import { useAssistantModels } from './assistant-model-state'
+import { useAssistantConfig } from './assistant-config-state'
 import {
   MAX_IMAGES,
   MAX_IMAGE_BYTES,
@@ -100,22 +100,13 @@ type Suspended = {
 /* ─── 主组件 ─────────────────────────────────────────────── */
 
 function AssistantPage() {
-  const [config, setConfig] = React.useState<AssistantConfig | null>(null)
-  const [models, setModels] = React.useState<ModelOption[]>([])
+  const { config, configRef, status, failed: loadingFailed, load: loadConfig, save: saveConfig } = useAssistantConfig()
+  const { models, ready: modelsReady, loading: modelsLoading, error: modelsError, refresh: refreshModels } = useAssistantModels()
   const [ui, setUi] = React.useState<UiMessage[]>([])
   const [busy, setBusy] = React.useState(false)
   const [awaiting, setAwaiting] = React.useState(false)
   const [draft, setDraft] = React.useState('')
   const [images, setImages] = React.useState<string[]>([])
-  /**
-   * **常驻**状态（助手配置读不出来 / 保存失败）。
-   *
-   * 只装需要一直看得见的那类信息；「已切换到完全访问」这类**瞬时**反馈一律走
-   * [`toast`]（顶部浮层，3.5 秒后自动消失），不要再往这里塞 —— 这个 state 的
-   * 落地处是空状态卡片里的一行警告，落在对话中时根本看不见。
-   */
-  const [status, setStatus] = React.useState('')
-  const [loadingFailed, setLoadingFailed] = React.useState(false)
   /** 历史会话列表（侧边栏）与当前打开的那一条 */
   const [sessions, setSessions] = React.useState<SessionSummary[]>([])
   const [activeId, setActiveId] = React.useState<string>('')
@@ -142,11 +133,6 @@ function AssistantPage() {
   const titleRef = React.useRef<string>('')
   /** 保存的串行化：每轮回答结束都存一次，但两次保存不该并发（后到的会覆盖先到的） */
   const savingRef = React.useRef<Promise<void>>(Promise.resolve())
-  /** 配置的最新值（`persist` 在异步链里读它，不能依赖闭包捕获的那一份） */
-  const configRef = React.useRef<AssistantConfig | null>(null)
-  configRef.current = config
-  /** 配置加载已自动重试的次数（成功即清零；上限见 activate 内的判定） */
-  const retryRef = React.useRef(0)
   /**
    * `loop` 的稳定引用（**别删**）。
    *
@@ -158,7 +144,13 @@ function AssistantPage() {
    */
   const loopRef = React.useRef<(() => Promise<void>) | null>(null)
   /** 本轮用户消息已经跑了几个来回（硬保险：见 MAX_ROUNDS） */
+  const sendingRef = React.useRef(false)
+  const checkingModelRef = React.useRef(false)
+  const preflightRef = React.useRef(0)
+  const requestModelRef = React.useRef<string>('')
   const roundRef = React.useRef(0)
+
+  const refreshModelOptions = React.useCallback(() => { void refreshModels().catch(() => {}) }, [refreshModels])
 
   const syncUI = React.useCallback(() => { setUi(uiRef.current.slice()) }, [])
 
@@ -226,7 +218,7 @@ function AssistantPage() {
         }
       })
     return savingRef.current
-  }, [])
+  }, [configRef])
   /** `persist` 的稳定引用（`loop` 的 deps 里放它会陷入循环，见 loopRef 的说明） */
   const persistRef = React.useRef(persist)
   persistRef.current = persist
@@ -248,28 +240,10 @@ function AssistantPage() {
    * 配置失败还会**自动重试**（有限次）：dev 刚启动时窗口可能比网关的 HTTP
    * 监听先就绪，那一刻的失败只代表「还早」，不代表「坏了」。 */
   const activate = React.useCallback(async () => {
+    void loadConfig()
+    void refreshModels().catch(() => {})
     if (loadedRef.current) return
     loadedRef.current = true
-    try {
-      const next = await loadAssistantConfig()
-      setConfig(next)
-      setLoadingFailed(false)
-      retryRef.current = 0
-    } catch (error) {
-      setLoadingFailed(true)
-      setStatus(t('加载助手设置失败：{message}', { message: errorText(error) }))
-      if (retryRef.current < 3) {
-        retryRef.current += 1
-        loadedRef.current = false
-        setTimeout(() => { void activate() }, 4000)
-      }
-    }
-    // 模型清单：助手自己只能选「可请求的名字」（启用的模型 ID + 启用的映射名）
-    try {
-      setModels(await loadModelOptions())
-    } catch (error) {
-      toast(t('读取模型清单失败：{message}', { message: errorText(error) }), 'err')
-    }
     try {
       setSessions(await loadSessions())
     } catch (error) {
@@ -282,7 +256,7 @@ function AssistantPage() {
       titleRef.current = ''
       setActiveId(id)
     }
-  }, [])
+  }, [loadConfig, refreshModels])
 
   React.useEffect(() => {
     const api = window as unknown as { wbAssistant?: { activate?: () => void } }
@@ -300,8 +274,12 @@ function AssistantPage() {
   const enabledCount = Object.values(toolEnabled).filter(Boolean).length
 
   const currentModel = config?.model ?? null
-  const currentOption = models.find(item => item.name === currentModel)
+  const currentOption = selectedModel(models, currentModel)
   const modelSupportsImages = currentOption?.supportsImages === true
+  const modelWarning = modelsError
+    ? t('读取模型清单失败：{message}', { message: modelsError })
+    : !modelsReady ? t('正在读取可用模型…')
+    : currentModel && !currentOption ? unavailableModelMessage(currentModel) : ''
   const mode: PermissionMode = config?.mode ?? 'confirm'
 
   /* ─── agent loop ───────────────────────────────────────── */
@@ -394,6 +372,7 @@ function AssistantPage() {
     let failed = false
     try {
       await streamChat({
+        model: requestModelRef.current,
         messages: wireRef.current,
         tools: enabledTools,
         reasoning: configRef.current?.reasoning ?? null,
@@ -411,6 +390,9 @@ function AssistantPage() {
       })
     } catch (error) {
       failed = true
+      if (error instanceof AssistantRequestError && error.code === 'model_not_found') {
+        void refreshModels().catch(() => {})
+      }
       const message = errorText(error)
       const current = uiRef.current[botIndex]
       const partial = current && current.kind === 'bot' ? current.text : ''
@@ -451,7 +433,7 @@ function AssistantPage() {
     }
     await pump(calls, 0, [])
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabledTools, pump, syncUI])
+  }, [enabledTools, pump, syncUI, refreshModels])
   loopRef.current = loop
 
   /** 确认卡上的一次决策：执行或取消，然后继续跑剩下的调用 */
@@ -486,51 +468,77 @@ function AssistantPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pump, syncUI])
 
-  /** 发送一条用户消息（带当前附件） */
+  /** 发送前校验当前模型，校验失败不追加历史也不清空草稿。 */
   const send = React.useCallback(async (text: string, attached: string[]) => {
     const value = text.trim()
-    if ((!value && attached.length === 0) || busy || awaiting) return
-    if (!activeIdRef.current) {
-      const id = newSessionId()
-      activeIdRef.current = id
-      setActiveId(id)
-    }
-    roundRef.current = 0
-    uiRef.current.push({ kind: 'user', text: value, ...(attached.length ? { images: attached } : {}) })
-    wireRef.current.push({ role: 'user', content: value, ...(attached.length ? { images: attached } : {}) })
-    setDraft('')
-    setImages([])
-    syncUI()
-    if (!config) {
-      uiRef.current.push({
-        kind: 'notice',
-        text: t('助手设置没读出来，现在还不能发消息 —— 点右上角「助手设置」看看。'),
-        bad: true,
-      })
-      syncUI()
+    if ((!value && attached.length === 0) || busy || awaiting || sendingRef.current) return
+    const current = configRef.current
+    if (!current?.model) {
+      toast(current
+        ? t('还没有选择对话模型：在输入框右下角选一个，或点右上角「助手设置」。')
+        : t('助手设置没读出来，现在还不能发消息 —— 点右上角「助手设置」看看。'), 'err')
       return
     }
-    if (!config.model) {
-      uiRef.current.push({
-        kind: 'notice',
-        text: t('还没有选择对话模型：在输入框右下角选一个，或点右上角「助手设置」。'),
-        bad: true,
-      })
+    const attempt = ++preflightRef.current
+    sendingRef.current = true
+    checkingModelRef.current = true
+    setBusy(true)
+    const model = current.model
+    const session = activeIdRef.current
+    try {
+      const latest = await refreshModels()
+      if (attempt !== preflightRef.current || activeIdRef.current !== session || configRef.current?.model !== model) return
+      const option = selectedModel(latest, model)
+      if (!option) {
+        toast(unavailableModelMessage(model), 'err')
+        return
+      }
+      checkingModelRef.current = false
+      requestModelRef.current = option.name
+      if (!activeIdRef.current) {
+        const id = newSessionId()
+        activeIdRef.current = id
+        setActiveId(id)
+      }
+      roundRef.current = 0
+      uiRef.current.push({ kind: 'user', text: value, ...(attached.length ? { images: attached } : {}) })
+      wireRef.current.push({ role: 'user', content: value, ...(attached.length ? { images: attached } : {}) })
+      setDraft('')
+      setImages([])
       syncUI()
-      return
+      await loop()
+      void persistRef.current()
+    } catch (error) {
+      if (attempt === preflightRef.current) {
+        toast(checkingModelRef.current
+          ? t('读取模型清单失败：{message}', { message: errorText(error) })
+          : t('请求失败：{message}', { message: errorText(error) }), 'err')
+      }
+    } finally {
+      if (attempt === preflightRef.current) {
+        checkingModelRef.current = false
+        sendingRef.current = false
+        setBusy(false)
+      }
     }
-    await loop()
-    // 用户这条消息先落库：模型没回（报错 / 用户停止）时，这句话也该留在历史里
-    void persistRef.current()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [awaiting, busy, config, loop, syncUI])
+  }, [awaiting, busy, loop, syncUI, refreshModels, configRef])
 
   const stop = React.useCallback(() => {
+    if (checkingModelRef.current) {
+      preflightRef.current += 1
+      checkingModelRef.current = false
+      sendingRef.current = false
+      setBusy(false)
+      return
+    }
     controllerRef.current?.abort()
   }, [])
 
   /** 重置成一条空白会话（点「新对话」/ 新建时用） */
   const resetToBlank = React.useCallback((id: string) => {
+    preflightRef.current += 1
+    checkingModelRef.current = false
+    sendingRef.current = false
     controllerRef.current?.abort()
     suspendedRef.current = null
     uiRef.current = []
@@ -589,14 +597,14 @@ function AssistantPage() {
           model: detail.model ?? config.model,
           reasoning: detail.reasoning ?? config.reasoning,
         }
-        setConfig(next)
-        void saveAssistantConfig(next).catch(() => { /* 恢复失败不影响这段对话 */ })
+        saveConfig(next)
+        refreshModelOptions()
       }
     } catch (error) {
       toast(t('打开会话失败：{message}', { message: errorText(error) }), 'err')
     }
     setSidebarOpen(false)
-  }, [awaiting, busy, config, syncUI])
+  }, [awaiting, busy, config, syncUI, saveConfig, refreshModelOptions])
 
   const removeSession = React.useCallback(async (id: string) => {
     try {
@@ -619,26 +627,6 @@ function AssistantPage() {
     setSessions([])
     resetToBlank(newSessionId())
   }, [resetToBlank])
-
-  /** 保存助手配置（抽屉与输入区的选择器共用这一条）
-   *
-   * `note` 是**瞬时**反馈（「已切换到完全访问」这类），走顶部 toast；
-   * 失败才写进底部那一行 —— 那是需要一直看得见的常驻状态。 */
-  const saveConfig = React.useCallback((next: AssistantConfig, note?: string) => {
-    setConfig(next)
-    void (async () => {
-      try {
-        const saved = await saveAssistantConfig(next)
-        setConfig(saved)
-        setLoadingFailed(false)
-        setStatus('')
-        if (note) toast(note)
-      } catch (error) {
-        setLoadingFailed(true)
-        setStatus(t('保存失败：{message}', { message: errorText(error) }))
-      }
-    })()
-  }, [])
 
   const pickModel = React.useCallback((name: string) => {
     if (!name) return
@@ -818,6 +806,11 @@ function AssistantPage() {
           onAddFiles={addFilesDedup}
           onRemoveImage={index => setImages(prev => prev.filter((_, i) => i !== index))}
           modelSupportsImages={modelSupportsImages}
+          modelAvailable={modelsReady && Boolean(currentOption)}
+          modelsReady={modelsReady}
+          modelsLoading={modelsLoading}
+          modelWarning={modelWarning}
+          onRefreshModels={refreshModelOptions}
           models={models}
           model={currentModel}
           onPickModel={pickModel}
@@ -837,6 +830,10 @@ function AssistantPage() {
         onOpenChange={setSettingsOpen}
         config={config}
         models={models.map(item => item.name)}
+        modelAvailable={modelsReady && Boolean(currentOption)}
+        modelsReady={modelsReady}
+        modelWarning={modelWarning}
+        onRefreshModels={refreshModelOptions}
         busy={busy}
         failed={loadingFailed}
         status={status}

@@ -53,6 +53,10 @@ type Props = {
   onOpenChange: (open: boolean) => void
   config: AssistantConfig | null
   models: string[]
+  modelAvailable: boolean
+  modelsReady: boolean
+  modelWarning: string
+  onRefreshModels: () => void
   busy: boolean
   failed: boolean
   status: string
@@ -79,10 +83,16 @@ function Section({ title, sub, extra, children }: {
 }
 
 export function AssistantSettingsDrawer({
-  open, onOpenChange, config, models, busy, failed, status, onSave,
+  open, onOpenChange, config, models, modelAvailable, modelsReady, modelWarning, onRefreshModels, busy, failed, status, onSave,
 }: Props) {
   const [editorOpen, setEditorOpen] = React.useState(false)
   const [editorDraft, setEditorDraft] = React.useState('')
+
+  const currentModel = models.find(name => name.toLowerCase() === config?.model?.trim().toLowerCase())
+  const modelLabel = config?.model
+    ? !modelsReady || modelAvailable ? config.model : `${config.model} · ${t('不可用')}`
+    : t('选择模型…')
+  React.useEffect(() => { if (open) onRefreshModels() }, [open, onRefreshModels])
 
   const ready = config !== null
   const enabledTools = React.useMemo(() => {
@@ -132,8 +142,8 @@ export function AssistantSettingsDrawer({
                 {/* 与聊天框里的模型列表同一份数据（父组件透传 names）：两处的
                     候选口径必须逐字一致，否则会出现「这里能选、聊天框选不到」。 */}
                 <Select
-                  value={config?.model ?? ''}
-                  disabled={!ready || busy}
+                  value={currentModel ?? ''}
+                  disabled={!ready || busy || !modelsReady}
                   onValueChange={value => {
                     if (!config) return
                     const name = String(value)
@@ -143,7 +153,7 @@ export function AssistantSettingsDrawer({
                 >
                   <SelectTrigger className='asst-select-trigger' aria-label={t('模型')}>
                     <SelectValue>
-                      {config?.model ?? t('选择模型…')}
+                      {modelLabel}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -157,6 +167,7 @@ export function AssistantSettingsDrawer({
                   </SelectContent>
                 </Select>
               </div>
+              {modelWarning && <p className='asst-hint bad' role='status'>{modelWarning}</p>}
 
               {/* 思考等级：与模型选择同一种「列表」形态（一行一项、右侧打勾），
                   不做成 chips 九宫格 —— 档位是有序的强弱序列，竖排列表读起来

@@ -20,7 +20,7 @@
 import * as React from 'react'
 import { Popover, PopoverContent, PopoverTrigger, cn } from '@ui'
 import { t } from '../i18n'
-import type { ModelOption } from './assistant-tools'
+import { selectedModel, type ModelOption } from './assistant-models'
 import type { PermissionMode } from './assistant-state'
 import {
   BoltIcon,
@@ -65,6 +65,11 @@ type Props = {
   onRemoveImage: (index: number) => void
   /** 当前模型是否收图（未声明 = 不收）。附件不全时发送前给提示。 */
   modelSupportsImages: boolean
+  modelAvailable: boolean
+  modelsReady: boolean
+  modelsLoading: boolean
+  modelWarning: string
+  onRefreshModels: () => void
   models: ModelOption[]
   model: string | null
   onPickModel: (name: string) => void
@@ -92,7 +97,8 @@ function groupModels(models: ModelOption[]): Array<{ provider: string; items: Mo
 export function AssistantComposer(props: Props) {
   const {
     draft, onDraftChange, images, onAddFiles, onRemoveImage,
-    modelSupportsImages, models, model, onPickModel,
+    modelSupportsImages, modelAvailable, modelsReady, modelsLoading, modelWarning, onRefreshModels,
+    models, model, onPickModel,
     reasoning, onPickReasoning, mode, onModeChange,
     busy, awaiting, onSend, onStop,
   } = props
@@ -106,7 +112,10 @@ export function AssistantComposer(props: Props) {
   const [keyword, setKeyword] = React.useState('')
 
   const disabled = busy || awaiting
-  const canSend = !disabled && (Boolean(draft.trim()) || images.length > 0)
+  const canSend = !disabled && modelAvailable && (Boolean(draft.trim()) || images.length > 0)
+  const selected = selectedModel(models, model)
+  const displayModel = model || t('选择模型…')
+  const displayLevel = model && modelsReady && !modelAvailable ? t('不可用') : levelLabel(reasoning)
   /** 有图但当前模型不收 —— 只提示，不拦（用户可能就是想试试，网关会回明确错误） */
   const imageWarning = images.length > 0 && !modelSupportsImages
 
@@ -267,21 +276,21 @@ export function AssistantComposer(props: Props) {
           {/* 右：模型 · 等级 + 发送 */}
           <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
             <PopoverTrigger
-              render={<button type='button' className='asst-pill asst-model-pill' />}
+              render={<button type='button' className='asst-pill asst-model-pill' title={modelWarning || displayModel} />}
             >
-              <span className={cn('asst-dot', model && 'ok')} />
-              <span className='asst-pill-model'>{model || t('选择模型…')}</span>
+              <span className={cn('asst-dot', modelAvailable && 'ok')} />
+              <span className='asst-pill-model'>{displayModel}</span>
               <span className='asst-pill-sep'>·</span>
-              <span className='asst-pill-level'>{levelLabel(reasoning)}</span>
+              <span className='asst-pill-level'>{displayLevel}</span>
               <ChevronIcon size={11} className='asst-pill-chev' />
             </PopoverTrigger>
             <PopoverContent side='top' align='end' className='asst-picker-pop w-[288px] p-1.5'>
               {pane === 'root' && (
                 <>
-                  <button type='button' className='asst-pick-row' onClick={() => setPane('model')}>
+                  <button type='button' className='asst-pick-row' onClick={() => { setPane('model'); onRefreshModels() }}>
                     <span className='asst-pr-ico'><LayersIcon size={14} /></span>
                     <span className='asst-pr-k'>{t('模型')}</span>
-                    <span className='asst-pr-v'><span className='mono'>{model || t('未选择')}</span><MiniChevronIcon size={11} /></span>
+                    <span className='asst-pr-v'><span className='mono'>{displayModel}</span><MiniChevronIcon size={11} /></span>
                   </button>
                   <button type='button' className='asst-pick-row' onClick={() => setPane('reason')}>
                     <span className='asst-pr-ico'><SlidersIcon size={14} /></span>
@@ -298,6 +307,8 @@ export function AssistantComposer(props: Props) {
                       <ChevronIcon size={11} className='flip' />
                     </button>
                     <span>{t('模型')}</span>
+                    <button type='button' className='asst-back ml-auto' disabled={modelsLoading}
+                      title={t('刷新列表')} aria-label={t('刷新列表')} onClick={onRefreshModels}>↻</button>
                   </div>
                   <label className='asst-search'>
                     <SearchIcon size={13} />
@@ -309,7 +320,9 @@ export function AssistantComposer(props: Props) {
                     />
                   </label>
                   <div className='asst-sub-list'>
-                    {groups.length === 0 && <div className='asst-sub-empty'>{t('没有可用的模型')}</div>}
+                    {groups.length === 0 && <div className='asst-sub-empty'>
+                      {modelsLoading ? t('正在读取可用模型…') : t('没有可用的模型')}
+                    </div>}
                     {groups.map(group => (
                       <div key={group.provider}>
                         <div className='asst-sub-group'>{group.provider}</div>
@@ -317,13 +330,13 @@ export function AssistantComposer(props: Props) {
                           <button
                             key={`${group.provider}-${item.name}`}
                             type='button'
-                            className={cn('asst-sub-item', item.name === model && 'selected')}
+                            className={cn('asst-sub-item', item.name === selected?.name && 'selected')}
                             onClick={() => { onPickModel(item.name); setPickerOpen(false) }}
                           >
                             <span className='mono'>{item.name}</span>
                             <span className='asst-sub-tail'>
                               {item.viaMapping && <em>{t('映射')}</em>}
-                              {item.name === model && <CheckIcon size={12} />}
+                              {item.name === selected?.name && <CheckIcon size={12} />}
                             </span>
                           </button>
                         ))}
@@ -381,6 +394,9 @@ export function AssistantComposer(props: Props) {
         </div>
       </div>
 
+      {modelWarning && (
+        <p className='asst-composer-warn' role='status'>{modelWarning}</p>
+      )}
       <div className='asst-footline'>
         <span>{t('Enter 发送 · Shift+Enter 换行')}</span>
       </div>

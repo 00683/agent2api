@@ -250,7 +250,7 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
     // 模型路由：对外名 → 上游名（默认值 / 映射别名 / 目录校验与 /v1/* 同源）
     let requested_model = match pipeline::resolve_model(&state, &mut upstream, None) {
         Ok(name) => name,
-        Err(error) => return errors::management_error(error.http_status().as_u16() as i32, error.message),
+        Err(error) => return chat_error(error),
     };
 
     let started_at = logging::now_ms();
@@ -364,9 +364,22 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
                 Some(message.clone()),
             );
             guard.complete();
-            errors::management_error(status as i32, message)
+            chat_error(error)
         }
     }
+}
+
+fn chat_error(error: errors::GatewayError) -> Response {
+    let status = error.http_status();
+    (
+        status,
+        axum::Json(json!({
+            "success": false,
+            "error": error.message,
+            "code": error.code,
+        })),
+    )
+        .into_response()
 }
 
 /// 从请求体读本次点名的思考等级（字符串；缺失 / null / 空串 → None）。

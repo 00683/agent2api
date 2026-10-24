@@ -211,6 +211,28 @@ function describeError(value: unknown, status: number): string {
   return `HTTP ${status}`
 }
 
+export class AssistantRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) {
+    super(message)
+    this.name = 'AssistantRequestError'
+  }
+}
+
+function requestError(parsed: unknown, status: number, method: string, path: string): AssistantRequestError {
+  const envelope = parsed && typeof parsed === 'object'
+    ? parsed as { error?: unknown; code?: unknown } : null
+  const raw = envelope?.error ?? parsed
+  const detail = raw && typeof raw === 'object' ? raw as { code?: unknown } : null
+  const code = typeof detail?.code === 'string' ? detail.code
+    : typeof envelope?.code === 'string' ? envelope.code : ''
+  const message = describeError(raw, status)
+  // 只有路由兜底才表示接口缺失，模型和会话的业务错误也可能是 404。
+  if (status === 404 && message === `Not found: ${method} ${path}`) {
+    return new AssistantRequestError(t('这一版网关还没有 AI 助手接口（HTTP 404）：后端还是旧的，重新编译 / 重启客户端后再试。{message}', { message }), status, 'api_not_found')
+  }
+  return new AssistantRequestError(message, status, code)
+}
+
 /** 把 fetch 的网络层失败包成带网关地址的 Error。
  *  浏览器对连接不上的回应只有一句 `TypeError: Failed to fetch`，不带任何上下文
  *  —— 把「连的是哪个地址」拼进去，用户对着侧栏的网关端口一眼就能看出对不对。 */
@@ -271,14 +293,7 @@ async function callJson<T>(method: string, path: string, body?: unknown): Promis
   try { parsed = text ? JSON.parse(text) : null } catch { parsed = null }
   const envelope = parsed as { success?: boolean; data?: unknown; error?: unknown } | null
   if (!response.ok || envelope?.success === false) {
-    const raw = envelope?.error ?? (parsed as { error?: unknown } | null)?.error
-    const message = describeError(raw, response.status)
-    // 404 只有一种来源：这一版网关**没有助手接口**（前端比后端新）。把话说全，
-    // 否则用户只会看到一句「HTTP 404」去猜是不是自己哪里配错了
-    if (response.status === 404) {
-      throw new Error(t('这一版网关还没有 AI 助手接口（HTTP 404）：后端还是旧的，重新编译 / 重启客户端后再试。{message}', { message }))
-    }
-    throw new Error(message)
+    throw requestError(parsed, response.status, method, path)
   }
   const payload = envelope && typeof envelope === 'object' && 'data' in envelope ? envelope.data : parsed
   return payload as T
@@ -366,6 +381,7 @@ export function toWireMessages(messages: ChatMessage[]): Array<Record<string, un
  * 那是用户的意图，不是错误，调用方按 `signal.aborted` 区分即可。
  */
 export async function streamChat(options: {
+  model: string
   messages: ChatMessage[]
   tools: Array<Record<string, unknown>>
   /** 本次请求的思考等级；缺省由后端的设置值兜底（见 api::assistant::chat） */
@@ -373,7 +389,7 @@ export async function streamChat(options: {
   signal?: AbortSignal
   onEvent: (event: ChatEvent) => void
 }): Promise<void> {
-  const body: Record<string, unknown> = { messages: toWireMessages(options.messages) }
+  const body: Record<string, unknown> = { model: options.model, messages: toWireMessages(options.messages) }
   if (options.tools.length) body.tools = options.tools
   if (options.reasoning) body.reasoning = options.reasoning
   // 与 config 两条走同一个通道（凭证、跨源模式、401 重试都在 requestDirect 里）
@@ -386,12 +402,7 @@ export async function streamChat(options: {
     const text = await response.text().catch(() => '')
     let parsed: unknown = null
     try { parsed = text ? JSON.parse(text) : null } catch { /* 非 JSON 错误体：保住状态码 */ }
-    const raw = (parsed as { error?: unknown } | null)?.error
-    const message = describeError(raw, response.status)
-    if (response.status === 404) {
-      throw new Error(t('这一版网关还没有 AI 助手接口（HTTP 404）：后端还是旧的，重新编译 / 重启客户端后再试。{message}', { message }))
-    }
-    throw new Error(message)
+    throw requestError(parsed, response.status, 'POST', '/api/assistant/chat')
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

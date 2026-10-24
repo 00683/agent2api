@@ -61,6 +61,34 @@
 .ck-main > .panel { margin-bottom: 0; }
 .ck-main > .panel + .panel { margin-top: 14px; }
 
+/* ── 两块地区专属面板并排（定时签到 tab）──
+   保活模型链（国际版）与猫猫旅行排程（国内版）由插件申报的 adminPanels 决定，
+   两块同时存在时收进这一行 —— 各自独占整行时卡片有一半宽度是空的（模型链
+   只有一列清单，旅行排程只有两行设置项）。
+
+   ── 为什么用 auto-fit 而不是定死两列 ──────────────────────
+   iframe 之外的宿主内容区限宽 `--content-max: 80vw`，实际可用宽度随窗口与
+   侧栏（216px / 折叠后 68px）变化，用视口断点判断不准。`auto-fit` + 最小
+   420px 让「放得下两列就两列、放不下就一列」由**容器的真实宽度**决定。
+   420 是这两张卡的舒适下限：再窄「时刻框 + 保存」「输入框 + 添加模型」会
+   开始互相挤压。`min()` 兜住比 420px 还窄的极端窗口，避免撑出横向滚动。
+   两侧面板各自 `min-width: 0`（见下）—— 否则模型名的等宽长串会按内容宽度
+   把列顶宽。 */
+.ck-region-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  /* 两张卡各按自己的内容高度，不互相拉伸：模型链的条数随用户增删变化，
+     拉伸后短的那张（旅行排程）会拖着大片空白停在同一高度。 */
+  align-items: start;
+  gap: 14px;
+  margin-top: 14px;
+  /* 它是 `.ck-main` 的 grid 项，同样要放开内容最小宽度 */
+  min-width: 0;
+}
+/* `.panel` 自带 margin-bottom，这两块现在是这一层的子节点，上面那条
+   `.ck-main > .panel` 选不到它们 —— 间距全部交给 grid 的 gap。 */
+.ck-region-row > .panel { margin-bottom: 0; min-width: 0; }
+
 @media (max-width: 1080px) {
   .ck-stats { grid-template-columns: repeat(2, 1fr); }
 }
@@ -201,8 +229,11 @@
    变成「拖走一行」（与账号页顺序拖拽同一取舍）。 */
 
 /* 面板本身收成半幅：里面只有一列短清单，拉满整行时那排灰条会长得没有内容。
-   再给个上限 —— 2K / 4K 上「半幅」又够宽到把清单拉回一条长带，白收。 */
+   再给个上限 —— 2K / 4K 上「半幅」又够宽到把清单拉回一条长带，白收。
+   并排时（`.ck-region-row` 里）列宽已由网格定好，这两个值要归位，
+   否则会在这个格子里再乘一次 50%。 */
 .ck-chain-panel { width: 50%; max-width: 640px; }
+.ck-region-row > .ck-chain-panel { width: auto; max-width: none; }
 
 .ck-chain { display: flex; flex-direction: column; gap: 4px; }
 .ck-chain-row {

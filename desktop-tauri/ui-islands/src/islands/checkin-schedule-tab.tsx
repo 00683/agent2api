@@ -547,6 +547,9 @@ export function ScheduleTab({ center }: { center: CheckinCenter }): React.ReactE
   const options = auto?.providerOptions ?? []
   const entries = auto?.schedules ?? []
   const panels = new Set(center.adminPanels ?? [])
+  const keepalive = panels.has('daily_keepalive') ? <KeepalivePanel center={center} /> : null
+  const travel = panels.has('growth_tasks') ? <TravelPanel center={center} /> : null
+  const bothRegions = keepalive !== null && travel !== null
 
   return (
     <div className="ck-main">
@@ -608,8 +611,18 @@ export function ScheduleTab({ center }: { center: CheckinCenter }): React.ReactE
         </div>
       </section>
 
-      {panels.has('daily_keepalive') ? <KeepalivePanel center={center} /> : null}
-      {panels.has('growth_tasks') ? <TravelPanel center={center} /> : null}
+      {/* 两块地区专属面板：由插件申报的 adminPanels 决定。
+          国内版与国际版默认都启用，所以两块**会同时出现** —— 那种情况收进
+          同一行分栏（左保活模型链 / 右猫猫旅行排程）；各自独占整行时，每张卡
+          的右半截都是空白。只有一块时不套容器：模型链仍收半幅。 */}
+      {bothRegions ? (
+        <div className="ck-region-row">{keepalive}{travel}</div>
+      ) : (
+        <>
+          {keepalive}
+          {travel}
+        </>
+      )}
     </div>
   )
 }
