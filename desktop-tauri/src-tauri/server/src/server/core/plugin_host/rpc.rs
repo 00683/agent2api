@@ -196,6 +196,9 @@ impl RpcAdapter {
             .await
             .map_err(|e| GatewayError::with_status(503, format!("提供商插件不可用：{e}")))?;
         self.host.call_coded(method, params, timeout).await.map_err(|error| {
+            if let Some(failure) = super::errors::control_error(&error) {
+                return failure;
+            }
             // ── 「本地前置条件不成立」要还原成 556 而不是 502 ────────────
             // 编排层对这个码的处置与别的错误**完全不同**：它意味着请求还没
             // 出本机就注定发不出去（今天的用户：ZCode 活动套餐通道缺人机
@@ -260,10 +263,7 @@ impl ProviderAdapter for RpcAdapter {
         // 跨进程拿清单只能异步，因此这里**只返回本地缓存**，由后台任务
         // 定期调 `models.list` 填充。缓存为空时返回内置兜底（握手时
         // `provider.info` 已经带回来了）。
-        match super::rpc_cache::models_for(&self.id) {
-            Some(models) => models,
-            None => super::rpc_cache::default_models_for(&self.id).unwrap_or_default(),
-        }
+        super::rpc_cache::models_for(self.id).unwrap_or_default()
     }
 
     fn stream_refusal_finishes(&self) -> &'static [&'static str] {
@@ -597,25 +597,33 @@ impl ProviderAdapter for RpcAdapter {
             {
                 Ok(value) => match serde_json::from_value::<proto::RefreshOutcome>(value) {
                     Ok(outcome) => {
-                        // 刷新成功就把新清单写进本地缓存 —— 否则界面上的
-                        // 「模型」列要到下一次重启才更新（`list_models` 只读
-                        // 缓存，见它的说明）。空清单不覆盖已有值由缓存负责。
-                        if outcome.refreshed && outcome.count > 0 {
-                            if let Ok(list) = self
-                                .control(
-                                    proto::methods::gateway::MODELS_LIST,
-                                    self.with_account(account_id),
-                                )
-                                .await
-                            {
-                                if let Ok(list) = serde_json::from_value::<proto::ModelList>(list) {
-                                    super::rpc_cache::set_remote(&self.id, list.models);
-                                }
-                            }
+                        if !outcome.refreshed {
+                            return ModelRefreshOutcome {
+                                refreshed: false,
+                                count: outcome.count,
+                                message: outcome.message,
+                            };
                         }
+                        let list = match self.control(
+                            proto::methods::gateway::MODELS_LIST,
+                            self.with_account(account_id),
+                        ).await {
+                            Ok(value) => match serde_json::from_value::<proto::ModelList>(value) {
+                                Ok(list) => list,
+                                Err(error) => return ModelRefreshOutcome::failed(
+                                    format!("插件刷新后返回的模型清单无法解析: {error}"),
+                                ),
+                            },
+                            Err(error) => return ModelRefreshOutcome::failed(error.message),
+                        };
+                        let count = super::rpc_cache::set_remote(self.id, list);
+                        if count == 0 {
+                            return ModelRefreshOutcome::failed("插件刷新后没有可用模型，已保留旧清单");
+                        }
+                        crate::server::core::providers::adapter::seed_hidden_visibility_defaults();
                         ModelRefreshOutcome {
-                            refreshed: outcome.refreshed,
-                            count: outcome.count,
+                            refreshed: true,
+                            count,
                             message: outcome.message,
                         }
                     }

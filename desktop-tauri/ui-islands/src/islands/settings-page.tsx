@@ -649,10 +649,11 @@ function DisplayPane() {
         </div>
       </section>
 
-      {/* 侧边栏菜单：显隐 / 顺序 / 分组。它自己持有一份本机偏好
-          （localStorage，见 ui/sidebar-layout.js），与上面三项同属「纯前端偏好」，
-          所以放在「显示」分类里、不经过 settings-state 的快照。
-          布局的唯一真相在那个经典脚本里 —— app.js 渲染主侧边栏时读的是同一份。 */}
+      {/* 侧边栏菜单：显隐 / 顺序 / 分组。权威副本在库里（kv 的 sidebarLayout
+          键，经 /api/sidebar-layout 读写），localStorage 只是首帧缓存 ——
+          它走自己的键、不经过 settings-state 的快照，所以放在「显示」分类里。
+          布局的唯一真相在 ui/sidebar-layout.js 那个经典脚本里 ——
+          app.js 渲染主侧边栏时读的是同一份。 */}
       <SidebarPane />
     </>
   )

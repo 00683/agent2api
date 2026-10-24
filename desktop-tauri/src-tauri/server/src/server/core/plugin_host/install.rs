@@ -460,7 +460,8 @@ pub(super) fn extract_zip(bytes: &[u8], target: &Path) -> Result<(), String> {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = file.unix_mode().unwrap_or(0o644);
-            let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode));
+            std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
+                .map_err(|error| format!("设置文件权限失败（{}）：{error}", out_path.display()))?;
         }
     }
     Ok(())

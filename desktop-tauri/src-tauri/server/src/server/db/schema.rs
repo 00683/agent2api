@@ -84,6 +84,12 @@ pub const RESERVED_KV_KEYS: &[&str] = &[
     // （core::agents）。零散状态，与 desktopSettings 同一类。
     "agentProfiles",
     "priorityScope",
+    // 侧边栏布局（core::sidebar_layout）：整份「分组 / 顺序 / 显隐」JSON 一个键。
+    // 从前只存浏览器 localStorage，而桌面壳与网页端是两个 origin、localStorage
+    // 隔离 —— 于是「在 WebUI 里隐藏的菜单，客户端照旧显示」。落库后两端读同一份。
+    // 属于「其它零散状态」：配置写入绝不能动它（否则用户改一次 API Key
+    // 侧边栏就退回默认布局）。
+    "sidebarLayout",
     // 事件日志的下一个 id 水位（logs_store::sql）
     "logsNextId",
     // 整份桌面设置 JSON（壳侧 settings）—— 一个键而不是拆成三个：

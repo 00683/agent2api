@@ -91,6 +91,28 @@ export type LimiterRule = {
   enabled?: boolean
 }
 
+export type BatchLimiterMode = 'append' | 'replace' | 'enable' | 'disable' | 'clear'
+
+export type BatchAccountsPayload = {
+  action: string
+  ids: string[]
+  proxy?: unknown
+  maxConcurrent?: number
+  usageQuery?: { enabled: boolean; interval: number }
+  limiters?: LimiterRule[]
+  limiterMode?: BatchLimiterMode
+}
+
+export type BatchAccountsResult = {
+  ok?: Array<{ id?: string; name?: string; changes?: string[] }>
+  removed?: unknown[]
+  failed?: Array<{ id?: string; error?: string }>
+  skipped?: Array<{ id?: string; name?: string; reason?: string }>
+}
+
+/** 与后端 MAX_CONCURRENT_LIMIT 一致。 */
+export const ACCOUNT_CONCURRENCY_MAX = 999
+
 /**
  * 一个 Token 规则窗口在**当前窗口**的消耗读数（用量快照 `tokenUsage` 的行，
  * 后端 `core::limiter` 的内存事实表投影）。`kind` 是窗口种类：固定周期 =
@@ -277,16 +299,11 @@ export type AccountsBridge = {
   setRoutingConfig(patch: Record<string, unknown>): Promise<Record<string, unknown> | null | undefined>
   getRoutingQueue(model?: string): Promise<Record<string, unknown> | null | undefined>
   /**
-   * 批量操作（后端 `POST /api/accounts/batch`）。`proxy` 与 `maxConcurrent` 是
-   * 两个带参动作的载荷：前者对应 action=proxy（null = 改为直连），后者对应
-   * action=concurrency（0 = 不限）。**两条桥都按字段白名单转发**（bridge.rs /
-   * web_shim.rs），加参数时两处都要补 —— 漏了会静默丢参数，服务端只报「缺字段」。
+   * 批量操作（后端 `POST /api/accounts/batch`）。带参动作的字段必须在桌面
+   * bridge.rs 与网页 web_shim.rs 两份白名单里同时转发。
+   * `skipped` 是能力不适用的账号，与真正保存失败的 `failed` 分开。
    */
-  batchAccounts(payload: { action: string; ids: string[]; proxy?: unknown; maxConcurrent?: number }): Promise<{
-    ok?: Array<{ id?: string; changes?: string[] }>
-    removed?: unknown[]
-    failed?: Array<{ id?: string; error?: string }>
-  } | null | undefined>
+  batchAccounts(payload: BatchAccountsPayload): Promise<BatchAccountsResult | null | undefined>
   getAllBalances(id?: string): Promise<{ results?: Array<Record<string, unknown>> } | null | undefined>
   /**
    * 用量快照（后端 `usage_query::snapshot`）：余额结论之外还带 Token 限制器的
@@ -334,6 +351,9 @@ export type AccountsBridge = {
   zcodeCaptchaStats?(): Promise<{
     ready?: number
     target?: number
+    required?: boolean
+    needsTokens?: boolean
+    error?: string
     startPlanAccounts?: number
     rejected?: number
     minted?: number
@@ -571,6 +591,9 @@ export type SharedWindow = {
   }
   /** ZCode 套餐明细弹窗（zcode-plans-modal.tsx）：可领取 + 名下已有的套餐，逐份领取 */
   wbZcodePlans?: { open?: (options: { id: string; name?: string }) => void }
+  wbZcodeCaptchaPool?: {
+    status?(): { state: 'idle' | 'checking' | 'minting' | 'waiting' | 'error' | 'disabled'; error: string }
+  }
   /** CodeArts「领福利」流程（ui/codearts-welfare.js：只读探测 → 确认 → 领取 → 回读） */
   wbCodeArtsWelfare?: { start?: (account: AccountRecord | undefined) => Promise<unknown> }
   /** 「添加账号」弹窗（归另一个代理，本页只调它的 open） */

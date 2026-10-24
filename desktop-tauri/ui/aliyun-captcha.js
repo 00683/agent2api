@@ -247,6 +247,7 @@
   function settlePending(pending, outcome) {
     if (pendingVerification !== pending || pending.settled) return false;
     pending.settled = true;
+    pendingVerification = null;
     window.clearTimeout(pending.timer);
     if (outcome.error) pending.reject(outcome.error);
     else pending.resolve(outcome.value);
@@ -543,6 +544,7 @@
 
   /** 铸造实例作废（失败/超时后调；下一次会用新实例重来） */
   function invalidateMintInstance() {
+    mintGeneration += 1;
     const instance = mintInstanceRef;
     mintInstancePromise = null;
     mintInstanceKey = '';
@@ -609,11 +611,11 @@
     } catch (error) {
       failure = error;
     }
-    mintWaiter = null;
     if (failure) {
       failMint(failure);
       return;
     }
+    mintWaiter = null;
     // ── 铸完就作废实例（**一次一铸**，实测结论）────────────────────
     // SDK 的同一个实例第二次调 `startTracelessVerification()` 必失败
     // （2026-09-28 实测：第一次 958ms 拿到串，第二次直接走 fail 回调）。
@@ -642,7 +644,11 @@
    * 返回值就是这个串。**一次一用**：铸好不用，两分钟后自己过期（上游拒收）。
    */
   async function mintTraceless(config) {
-    const instance = await ensureMintInstance(config);
+    if (mintWaiter) throw new CaptchaError('验证码组件正在铸造，请稍后重试');
+    if (mintInstancePromise) invalidateMintInstance();
+    const generation = ++mintGeneration;
+    const instance = await ensureMintInstance(config, generation);
+    if (generation !== mintGeneration) throw new CaptchaError('验证码组件初始化已失效，请重试');
     // ── SDK 预热等待 ───────────────────────────────────────────
     // 阿里云 SDK 初始化后必须收集足够的设备环境与指纹数据（至少等 2.1 秒），
     // 否则直接调用 startTracelessVerification 会触发 fail/onError。
@@ -652,7 +658,7 @@
     }
     simulateHumanActivity();
 
-    const generation = ++mintGeneration;
+    if (generation !== mintGeneration) throw new CaptchaError('验证码组件初始化已失效，请重试');
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
         if (!mintWaiter || mintWaiter.generation !== generation) return;
@@ -681,14 +687,14 @@
   }
 
   /** 备好铸造实例（同配置复用；失败/超时后由 invalidateMintInstance 作废） */
-  function ensureMintInstance(config) {
+  function ensureMintInstance(config, generation) {
     const language = resolveAliyunCaptchaLanguage(currentLanguage());
     const key = config.region + ':' + config.prefix + ':' + config.sceneId + ':' + language;
     if (mintInstancePromise && mintInstanceKey === key) return mintInstancePromise;
-    if (mintInstanceRef) invalidateMintInstance();
     mintInstanceKey = key;
     const pending = (async () => {
       await loadAliyunCaptchaScript(config);
+      if (generation !== mintGeneration) throw new CaptchaError('验证码组件初始化已失效，请重试');
       const ids = mintIds();
       mintElementId = ids.elementId;
       mintButtonId = ids.buttonId;
@@ -697,12 +703,23 @@
       if (!initAliyunCaptcha) throw new CaptchaError('验证码组件不可用，请重试');
       return new Promise((resolve, reject) => {
         let settled = false;
-        const timer = window.setTimeout(() => {
+        const finishInit = error => {
           if (settled) return;
           settled = true;
-          mintInstancePromise = null;
-          reject(new CaptchaError('验证码组件初始化超时，请重试'));
-        }, INIT_TIMEOUT_MS);
+          window.clearTimeout(timer);
+          invalidateMintInstance();
+          reject(error);
+        };
+        const onMintError = error => {
+          if (generation !== mintGeneration) return;
+          const failure = new CaptchaError((error && error.message) || '验证码组件出错，请重试');
+          if (!settled) finishInit(failure);
+          else failMint(failure);
+        };
+        const timer = window.setTimeout(
+          () => finishInit(new CaptchaError('验证码组件初始化超时，请重试')),
+          INIT_TIMEOUT_MS,
+        );
         try {
           initAliyunCaptcha({
             SceneId: config.sceneId,
@@ -715,34 +732,28 @@
             showErrorTip: false,
             language,
             getInstance: instance => {
-              if (settled) return;
+              if (settled || generation !== mintGeneration) {
+                try { instance?.destroy?.(); } catch {}
+                return;
+              }
               settled = true;
               window.clearTimeout(timer);
               mintInstanceRef = instance;
               mintInitializedAt = Date.now();
               resolve(instance);
             },
-            success: result => deliverMintResult(result),
-            fail: error => failMint(new CaptchaError(
-              (error && error.message) || '验证码校验失败，请重试',
-            )),
-            onError: error => failMint(new CaptchaError(
-              (error && error.message) || '验证码组件出错，请重试',
-            )),
+            success: result => { if (generation === mintGeneration) deliverMintResult(result); },
+            fail: onMintError,
+            onError: onMintError,
           });
         } catch (error) {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timer);
-          mintInstancePromise = null;
-          reject(new CaptchaError((error && error.message) || '验证码组件初始化失败'));
+          finishInit(new CaptchaError((error && error.message) || '验证码组件初始化失败'));
         }
       });
     })();
     // 初始化失败不要把失败的 promise 缓存住（下一次要能重来）
     pending.catch(() => {
-      mintInstancePromise = null;
-      mintInstanceKey = '';
+      if (mintInstancePromise === pending) invalidateMintInstance();
     });
     mintInstancePromise = pending;
     return pending;

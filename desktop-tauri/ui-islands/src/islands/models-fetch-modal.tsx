@@ -939,7 +939,7 @@ function unmountModal() {
  * 选中的那家；`custom` 由调用方判好。**打开只建壳，不拉取** —— 拉取要用户点「获取模型」才发生。
  */
 function openModal(options: OpenOptions) {
-  if (!options?.providerId) return
+  if (!options || (options.custom && !options.providerId)) return
   unmountModal() // 重复打开先拆掉上一份（旧实现同样是 close() 打头）
   host = document.createElement('div')
   document.body.append(host)

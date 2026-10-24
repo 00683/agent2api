@@ -32,6 +32,7 @@
 
 mod bootstrap;
 pub mod catalog;
+mod errors;
 mod install;
 mod management;
 pub mod operations;
@@ -59,6 +60,7 @@ pub use install::{
 pub use registry::{install as install_provider, installed_ids, lookup, remove, clear};
 pub use registry::{serves as serves_provider};
 pub use rpc::{HostOptions, RpcAdapter};
+pub(crate) use rpc_cache::meta as model_catalog_meta;
 pub use management::snapshot as management_snapshot;
 pub(crate) use packages::prepare as prepare_pack;
 

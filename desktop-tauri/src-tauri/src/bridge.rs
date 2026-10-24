@@ -364,6 +364,15 @@ const BRIDGE_JS: &str = r#"
         ...(payload && Object.prototype.hasOwnProperty.call(payload, 'maxConcurrent')
           ? { maxConcurrent: payload.maxConcurrent }
           : {}),
+        ...(payload && Object.prototype.hasOwnProperty.call(payload, 'usageQuery')
+          ? { usageQuery: payload.usageQuery }
+          : {}),
+        ...(payload && Object.prototype.hasOwnProperty.call(payload, 'limiters')
+          ? { limiters: payload.limiters }
+          : {}),
+        ...(payload && Object.prototype.hasOwnProperty.call(payload, 'limiterMode')
+          ? { limiterMode: payload.limiterMode }
+          : {}),
       }),
 
     // ── 出网代理 ──
@@ -778,6 +787,16 @@ const BRIDGE_JS: &str = r#"
     // 另开一条「只给页面清单」的端点会让「菜单」与「插件状态」两个事实分开取，
     // 装 / 卸之后两边可能对不上。
     getPlugins: () => call('GET', '/api/plugins'),
+    // ── 侧边栏布局（分组 / 顺序 / 显隐）──
+    // 布局的权威副本在库里（`kv` 的 `sidebarLayout` 键），页面侧的
+    // localStorage 只是首帧缓存 —— 桌面壳与网页端是两个 origin，localStorage
+    // 互不相通，只有库那一份能让「在 WebUI 里隐藏的菜单，客户端也不显示」。
+    // 读回 `{layout}`，`layout: null` = 库里没存过（界面回落默认布局）。
+    // 写整份（null = 恢复默认）。规整（校验 / 补位）在前端做，后端只存不解释，
+    // 理由见 api::sidebar_layout 的模块头。
+    getSidebarLayout: () => call('GET', '/api/sidebar-layout'),
+    saveSidebarLayout: layout =>
+      call('PUT', '/api/sidebar-layout', { layout: layout === undefined ? null : layout }),
     // 清空支持筛选条件（可选对象，与 getLogs 同一套键）：带条件 = 只删命中的，
     // 不传 = 全部清空（后端两种语义不同，见 logs_api::clear_logs）
     clearLogs: query => call('DELETE', '/api/logs' + toQuery(query)),

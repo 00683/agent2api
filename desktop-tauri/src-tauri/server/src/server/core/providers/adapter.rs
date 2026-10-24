@@ -2112,7 +2112,7 @@ fn seed_current_cline_defaults() {
 /// 只对**有判据的四家**生效（其余家的清单没有 `visibility` 键，这里自然跳过）：
 /// 别的家目前没有可靠判据，按「没依据就不藏」处理（见
 /// `officeace/probe.rs` 的同一纪律）。
-fn seed_hidden_visibility_defaults() {
+pub(crate) fn seed_hidden_visibility_defaults() {
     for kind in [
         super::ProviderKind::WorkBuddy,
         super::ProviderKind::WorkBuddyIntl,
@@ -2121,7 +2121,8 @@ fn seed_hidden_visibility_defaults() {
         super::ProviderKind::QoderIntl,
     ] {
         let provider = crate::server::core::providers::kind_id(kind);
-        let entries: Vec<(String, &str)> = adapter_for(kind)
+        let Some(adapter) = adapter_by_id(provider) else { continue };
+        let entries: Vec<(String, &str)> = adapter
             .list_models()
             .iter()
             .filter_map(|item| {

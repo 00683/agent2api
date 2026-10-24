@@ -421,6 +421,14 @@ pub fn panel_router(state: ServerState) -> Router {
         .route("/api/agents/preview", post(api::agents::preview_profile))
         .route("/api/agents/restore", post(api::agents::restore_client))
         .route("/api/agents/import", post(api::agents::import_client))
+        // ── 侧边栏布局（菜单的分组 / 顺序 / 显隐）──
+        // 挂 protected：布局是用户配置，且写操作会改两端共用的那一份。
+        // 桌面壳的管理请求由壳自动带 Key，网页端走面板会话，两端都不受影响。
+        // 形状见 api::sidebar_layout 的模块头（`{layout: ...}`）。
+        .route(
+            "/api/sidebar-layout",
+            get(api::sidebar_layout::get_layout).put(api::sidebar_layout::put_layout),
+        )
         // ── 出网代理（Clash Verge 实时读取 + 出口连通性测试 + 代理池）──
         // /api/proxies 与 /api/proxies/pool* 之外（如 /api/proxies/zzz）不注册
         // → 落到全局 404 兜底，与 Node 版「前缀判定不通过 → 全局兜底」一致。

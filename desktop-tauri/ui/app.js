@@ -271,7 +271,12 @@ function sidebarApi() {
   return window.wbSidebarLayout;
 }
 
-/** 当前生效的布局（每次都从 localStorage 读：设置页改完只需派事件，不必传值） */
+/**
+ * 当前生效的布局（每次都从 localStorage 读：设置页改完只需派事件，不必传值）。
+ *
+ * ⚠ 读的是**首帧缓存**，权威副本在库里（见 ui/sidebar-layout.js 模块头）。
+ * `syncFromServer` 把库里的那份拉回来写进缓存之后，这里读到的就是它。
+ */
 function readSidebarLayout() {
   return sidebarApi()?.readLayout?.() || null;
 }
@@ -1106,6 +1111,7 @@ function render() {
  */
 function renderModels() {
   window.wbModelsPanel?.render();
+  if (currentPage === 'gateway') void window.wbModelsPanel?.load();
 }
 
 /** 账号列表由 accounts-view 模块负责（含优先级/禁用/代理徽章与行内面板） */
@@ -1389,6 +1395,21 @@ if (document.readyState === 'loading') {
 
 refresh();
 
+/**
+ * 启动即与库对齐一次侧边栏布局。
+ *
+ * 首帧（上面模块顶部的 `renderSidebar()`）用的是 localStorage 缓存 —— 那一步
+ * 必须同步，不能等网络。而布局的权威副本在库里：桌面壳与网页端是两个 origin、
+ * localStorage 互不相通，所以「在 WebUI 里隐藏的菜单客户端也跟着隐藏」只能
+ * 靠这一下把库里的那份拉回来（拉回后 `syncFromServer` 自己派
+ * `wb:sidebar-layout` 重画，不需要在这里再画一次）。
+ *
+ * 失败静默：桥不可用（浏览器直开）或离线时继续用缓存，与改造前一致。
+ * 首次落库（库里还是空的）也在这条路径里完成 —— `syncFromServer` 会把
+ * 本机缓存上行，老用户调好的布局无感迁移进库。
+ */
+void window.wbSidebarLayout?.syncFromServer?.();
+
 /** 首屏问一次后端状态：此时 state 还没回来，侧栏两条状态各自显示
  * 「正在检查…」，拿到结果后立刻变成真值（端口冲突会直接给出失败原因）。
  * port-panel 也是岛，同样要等注册完，所以与初始页恢复放在一起。 */
@@ -1459,6 +1480,10 @@ setInterval(() => {
   // 界面得跟上它（否则用户不点按钮就永远停在启动那次的旧余额上）。
   // 快照时间戳没变时它自己会早退，不会造成无谓的重绘。
   void window.wbAccountsView?.syncBalancesSnapshot?.();
+  // 侧边栏布局也跟着对一次库：另一端（WebUI 与客户端是两个 origin，
+  // localStorage 不通）刚改过布局时，这一端最迟在这一轮跟上。
+  // 内容没变时 `syncFromServer` 自己早退，不会重画（重画会打断正在拖动的项）。
+  void window.wbSidebarLayout?.syncFromServer?.();
 }, 20_000);
 
 // 「软件版本检查」结果的轮询：读**后端缓存**，不自己打 GitHub。

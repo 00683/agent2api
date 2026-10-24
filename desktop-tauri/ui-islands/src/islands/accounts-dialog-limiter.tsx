@@ -29,7 +29,7 @@ import { t } from '../i18n'
 import {
   balanceBlockedOf, formatIntervalSeconds, formatTokenCount, limitersOf,
   TOKEN_PERIOD_MAX_SECONDS, TOKEN_PERIOD_MIN_SECONDS, tokenCountdownText,
-  tokenReadingForRule, tokenWindowInfo,
+  tokenReadingForRule, tokenWindowInfo, supportsUsage,
 } from './accounts-domain'
 import { tokenUsageOf, usageEntryOf } from './accounts-data'
 import { type AccountRecord, type LimiterRule, type TokenReading, numberText } from './accounts-shared'
@@ -165,6 +165,9 @@ function ruleOfDraft(draft: LimiterEditorDraft): { error: string } | { rule: Lim
     return { rule: { type: 'balance', action: draft.action, threshold: thresholdRaw, enabled: true } }
   }
   const threshold = Math.round(draft.tokenUnit === 'wan' ? thresholdRaw * 10_000 : thresholdRaw)
+  if (!Number.isSafeInteger(threshold) || threshold <= 0) {
+    return { error: t('Token 限制阈值必须是大于 0 的安全整数') }
+  }
   if (draft.reset === 'daily') {
     return { rule: { type: 'token', action: draft.action, threshold, reset: 'daily', enabled: true } }
   }
@@ -181,9 +184,10 @@ function ruleOfDraft(draft: LimiterEditorDraft): { error: string } | { rule: Lim
 
 /** 编辑器弹层（受控：`target` 为 null = 关闭；index -1 = 添加）。 */
 function LimiterEditorDialog({
-  account, target, onClose, onSave,
+  account, allowBalance, target, onClose, onSave,
 }: {
-  account: AccountRecord
+  account?: AccountRecord
+  allowBalance: boolean
   /** 正在编辑的规则与它在草稿里的下标；null = 关闭 */
   target: { index: number; draft: LimiterEditorDraft } | null
   onClose: () => void
@@ -213,6 +217,7 @@ function LimiterEditorDialog({
 
   /** 实况提示：余额读数 / 窗口用量与倒计时（判不出给兜底口径说明） */
   const liveHint = (): string => {
+    if (!account) return t('批量规则按每个账号分别判定，不合并余额或 Token 用量。')
     if (draftLocal.type === 'balance') {
       const data = usageEntryOf(account)
       if (data && typeof data === 'object') {
@@ -258,11 +263,13 @@ function LimiterEditorDialog({
                 <SelectValue>{draftLocal.type === 'balance' ? t('余额') : t('Token 消耗')}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value='balance'>{t('余额')}</SelectItem>
+                <SelectItem value='balance' disabled={!allowBalance}>{t('余额')}</SelectItem>
                 <SelectItem value='token'>{t('Token 消耗')}</SelectItem>
               </SelectContent>
             </Select>
-            <span className='detail'>{t('余额沿用现有口径；Token 按重置方式内的累计消耗判定（切换类型会清空阈值）')}</span>
+            <span className='detail'>{!allowBalance
+              ? t('该提供商没有余额查询；可按 Token 消耗设置限制。')
+              : t('余额沿用现有口径；Token 按重置方式内的累计消耗判定（切换类型会清空阈值）')}</span>
           </div>
           {draftLocal.type === 'balance' ? (
             <>
@@ -390,20 +397,25 @@ function LimiterEditorDialog({
  * 添加 / 编辑的表单在二级弹层，见 LimiterEditorDialog）。
  */
 export function LimiterSection({
-  account, draft, onChange,
+  account, draft, onChange, allowBalance = account ? supportsUsage(account) : true,
 }: {
-  account: AccountRecord
+  account?: AccountRecord
   draft: LimiterRule[]
   onChange: (next: LimiterRule[]) => void
+  allowBalance?: boolean
 }) {
   const [editor, setEditor] = React.useState<{ index: number; draft: LimiterEditorDraft } | null>(null)
 
-  const openAdd = (): void => setEditor({ index: -1, draft: editorDraftOf(null) })
+  const openAdd = (): void => {
+    const next = editorDraftOf(null)
+    if (!allowBalance) next.type = 'token'
+    setEditor({ index: -1, draft: next })
+  }
   const openEdit = (index: number): void => setEditor({ index, draft: editorDraftOf(draft[index]) })
 
   const saveEditor = (rule: LimiterRule, index: number): void => {
     const next = [...draft]
-    if (index >= 0) next[index] = rule
+    if (index >= 0) next[index] = { ...rule, enabled: draft[index].enabled !== false }
     else next.push(rule)
     onChange(next)
     setEditor(null)
@@ -426,7 +438,7 @@ export function LimiterSection({
       {draft.length ? (
         <div className='limiter-rules mt-2.5'>
           {draft.map((rule, index) => {
-            const state = ruleStateOf(account, rule)
+            const state = account ? ruleStateOf(account, rule) : null
             return (
               <div key={index} className='limiter-rule' data-off={rule.enabled === false || undefined}>
                 <Switch checked={rule.enabled !== false} aria-label={t('启用该规则')}
@@ -437,10 +449,12 @@ export function LimiterSection({
                     {' '}{t('{cond} 时 → {action}', { cond: describeRuleCondition(rule), action: describeRuleAction(rule) })}
                   </span>
                 </div>
-                <Badge variant={state.kind === 'ok' ? 'success' : state.kind === 'warn' ? 'warning'
-                  : state.kind === 'danger' ? 'destructive' : 'secondary'} shape='tag' title={state.title}>
-                  {state.text}
-                </Badge>
+                {state ? (
+                  <Badge variant={state.kind === 'ok' ? 'success' : state.kind === 'warn' ? 'warning'
+                    : state.kind === 'danger' ? 'destructive' : 'secondary'} shape='tag' title={state.title}>
+                    {state.text}
+                  </Badge>
+                ) : null}
                 <div className='limiter-rule-ops'>
                   <Button variant='ghost' onClick={() => openEdit(index)}>{t('编辑')}</Button>
                   <Button variant='ghost' onClick={() => removeRule(index)}>{t('删除')}</Button>
@@ -450,13 +464,16 @@ export function LimiterSection({
           })}
         </div>
       ) : (
-        <p className='detail mt-2.5'>{t('还没有限制规则：账号照常参与转发，余额与 Token 消耗都不设上限。')}</p>
+        <p className='detail mt-2.5'>{account
+          ? t('还没有限制规则：账号照常参与转发，余额与 Token 消耗都不设上限。')
+          : t('还没有批量规则，请先添加限制或从所选账号复制。')}</p>
       )}
       <div className='field-row mt-2.5'>
         <Button variant='outline' onClick={openAdd}>{t('＋ 添加限制')}</Button>
         <span className='detail'>{t('可添加多条；同类规则也允许并存（例如一条按余额、两条不同重置方式的 Token）')}</span>
       </div>
-      <LimiterEditorDialog account={account} target={editor} onClose={() => setEditor(null)} onSave={saveEditor} />
+      <LimiterEditorDialog account={account} allowBalance={allowBalance} target={editor}
+        onClose={() => setEditor(null)} onSave={saveEditor} />
     </>
   )
 }

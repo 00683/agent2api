@@ -36,6 +36,7 @@
 // 「Agent」页：本机 AI 客户端配置接管（列表 / 保存 / 写入 / 预览 / 还原 / 导入）
 pub mod agents;
 pub mod accounts;
+pub mod accounts_batch;
 // `/api/accounts/usage` 的查询与结果组装（从 accounts.rs 拆出：余额能力从
 // 「只服务 workbuddy」扩到四家混查时新增，见该文件模块头）
 pub mod accounts_usage;
@@ -129,6 +130,9 @@ pub mod routing_api;
 pub mod sanitize;
 pub mod scheduled_tasks;
 pub mod session;
+// 侧边栏布局（GET/PUT /api/sidebar-layout）：桌面壳与网页端两个 origin
+// 共享同一份菜单布局，见该文件模块头
+pub mod sidebar_layout;
 pub mod stats_api;
 pub mod storage_api;
 pub mod subscriptions;

@@ -20,6 +20,7 @@
 
 import { buildIndex as buildReasoningIndex } from './models-reasoning'
 import * as customSource from './models-custom-source'
+import { ALL_CUSTOM } from './models-custom-source'
 import type { CustomProviderRecord, ManageMapping, ManageModel, ManageView } from './models-custom-source'
 import type { SegmentedControlOption } from '@ui'
 import { t } from '../i18n'
@@ -272,14 +273,6 @@ const COLUMNS: ColumnDecl[] = [
  */
 const CUSTOM_HIDDEN_COLUMNS: ReadonlySet<string> = new Set(['rate', 'source', 'visibility'])
 
-/**
- * 左栏「自定义提供商」组那颗「全部」的哨兵 id：选中它时右栏聚合**所有**自定义家的
- * 模型（不含内置家 —— 内置组那颗「全部」用的是 'all'，两颗是并列的两份聚合）。
- * `custom-` 前缀 + 12 位十六进制，与它撞车判据上不可能（isCustom 判前缀但候选名单
- * 只认目录里实有的记录，哨兵不在名单里）。
- */
-const ALL_CUSTOM = 'custom-all'
-
 const EMPTY_VIEW: ManageView = { models: [], mappings: [] }
 
 /**
@@ -406,7 +399,10 @@ export function restoreSavedFilters(): void {
   if (saved.provider !== snapshot.provider || saved.state !== snapshot.stateFilter
     || saved.search !== snapshot.search || saved.sort !== snapshot.sort
     || saved.visibility !== snapshot.visibilityFilter) {
-    patch(saved)
+    patch({
+      provider: saved.provider, stateFilter: saved.state, search: saved.search,
+      sort: saved.sort, visibilityFilter: saved.visibility,
+    })
   }
 }
 
@@ -495,8 +491,8 @@ function aggregateView(): ManageView {
 /** 当前视图的数据（两个数据源在这里合流，下游渲染 / 搜索 / 候选自动跟着选中的家走） */
 export function viewData(): ManageView {
   const provider = currentProvider()
-  if (customSource.isCustom(provider)) return customViewOf(provider)
   if (provider === ALL_CUSTOM) return aggregateView()
+  if (customSource.isCustom(provider)) return customViewOf(provider)
   return snapshot.data || EMPTY_VIEW
 }
 

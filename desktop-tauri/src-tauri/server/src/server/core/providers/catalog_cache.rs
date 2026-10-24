@@ -183,19 +183,18 @@ pub fn save(scope: &str, models: &[Value], fetched_at: i64) {
 /// 让「这次启动的清单是从缓存恢复的、是什么时候拉的」在日志里留痕 ——
 /// 没有它，排障时「清单是刚拉的还是上次的」只能靠翻数据库回答。
 /// 一次读库（不是逐 scope 调 [`load`]）：整份缓存本来就在一行里。
-pub fn cached_scopes() -> Vec<(&'static str, i64)> {
+pub fn cached_scopes() -> Vec<(String, i64)> {
     let Some(db) = db() else { return Vec::new() };
     let Some(all) = db.with(read_all).flatten() else { return Vec::new() };
-    ALL_SCOPES
-        .iter()
-        .filter_map(|scope| {
-            let entry = all.get(*scope)?;
+    all.iter()
+        .filter(|(scope, _)| scope.starts_with("plugin:") || ALL_SCOPES.contains(&scope.as_str()))
+        .filter_map(|(scope, entry)| {
             let models = entry.get("models").and_then(Value::as_array)?;
             if models.is_empty() {
                 return None;
             }
             let at = entry.get("fetchedAt").and_then(Value::as_i64).unwrap_or(0);
-            Some((*scope, at))
+            Some((scope.clone(), at))
         })
         .collect()
 }

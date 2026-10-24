@@ -918,7 +918,7 @@ impl AccountStore {
     /// 用户先关开关保存，不会因为残留的旧间隔被 400 挡住。非对象（null / 脏值）
     /// 一律视为「恢复缺省」= 开启、1 分钟（与读侧 `query_interval_of` 的缺省
     /// 同一口径）；显式关闭必须是 `{enabled:false}` 对象。
-    fn normalize_usage_query(value: &Value) -> Result<Value, AccountStoreError> {
+    pub(crate) fn normalize_usage_query(value: &Value) -> Result<Value, AccountStoreError> {
         const MIN: i64 = crate::server::core::usage_records::MIN_QUERY_INTERVAL_SECONDS;
         const MAX: i64 = crate::server::core::usage_records::MAX_QUERY_INTERVAL_SECONDS;
         const DEFAULT: i64 = crate::server::core::usage_records::DEFAULT_QUERY_INTERVAL_SECONDS;
@@ -998,7 +998,7 @@ impl AccountStore {
     }
 
     /// 变更提示文案：`每 90 分钟` 这类人能读的间隔。
-    fn describe_usage_query(next: &Value) -> String {
+    pub(crate) fn describe_usage_query(next: &Value) -> String {
         let enabled = next.get("enabled").and_then(Value::as_bool).unwrap_or(false);
         if !enabled {
             return "自动查询余额 → 关闭".to_string();

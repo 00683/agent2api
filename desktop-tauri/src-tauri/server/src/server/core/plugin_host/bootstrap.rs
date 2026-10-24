@@ -191,6 +191,11 @@ impl GatewayCallbacks for StoreCallbacks {
             // 用两个**约定键名**而不是把整份配置摊给插件：插件只需要问它要
             // 的那两项，网关也只回答这两项。
             match key.as_str() {
+                super::rpc_cache::SETTING_MODEL_CATALOG => {
+                    return Ok(super::rpc_cache::snapshot(&provider)
+                        .and_then(|list| serde_json::to_value(list).ok())
+                        .unwrap_or(serde_json::Value::Null));
+                }
                 crate::server::config::PLUGIN_SETTING_GATEWAY_PROMPT => {
                     let enabled = crate::server::config::gateway_prompt_enabled(&provider);
                     return Ok(serde_json::Value::Bool(enabled));
@@ -314,6 +319,10 @@ pub async fn start(store: AccountStore) -> Option<Arc<Host>> {
         );
         return None;
     }
+    if let Err(reason) = super::packages::ensure_entry_executable(&exe) {
+        logging::log("Plugin", &format!("插件包「{}」不可用：{reason}", pack.id));
+        return None;
+    }
 
     let options = HostOptions {
         cwd: exe.parent().map(std::path::Path::to_path_buf),
@@ -337,12 +346,7 @@ pub async fn start(store: AccountStore) -> Option<Arc<Host>> {
                     super::schedules::load(&host, &id).await;
                 }
                 let kind = plugin_kind(&id);
-                // 握手带回的内置清单先落进缓存：`list_models` 是同步方法，
-                // 只能读缓存。不落的话，一个刚装上、还没刷过远程目录的插件家
-                // 在界面上会显示「没有模型」（而插件其实给了兜底清单）。
-                if !info.default_models.is_empty() {
-                    super::rpc_cache::set_defaults(&id, info.default_models.clone());
-                }
+                super::rpc_cache::set_defaults(&id, info.default_models.clone());
                 let adapter = RpcAdapter::new(id.clone(), kind, host.clone(), info);
                 registry::install(id, Arc::new(adapter));
                 count += 1;
@@ -352,6 +356,7 @@ pub async fn start(store: AccountStore) -> Option<Arc<Host>> {
                 &format!("插件包「{}」v{} 已加载，{} 家提供商可用", pack.id, pack.version, count),
             );
             super::install(host.clone());
+            crate::server::core::providers::adapter::seed_hidden_visibility_defaults();
             super::schedules::wake();
             Some(host)
         }

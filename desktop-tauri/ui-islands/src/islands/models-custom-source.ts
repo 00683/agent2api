@@ -147,9 +147,11 @@ function shared(): SharedWindow {
 const norm = (value: unknown): string => String(value ?? '').trim().toLowerCase()
 const same = (left: unknown, right: unknown): boolean => norm(left) === norm(right)
 
+export const ALL_CUSTOM = 'custom-all'
+
 /** `custom-` 前缀判据（与后端 `is_custom_provider_id` 一致） */
 export function isCustom(id: unknown): boolean {
-  return typeof id === 'string' && id.startsWith('custom-')
+  return typeof id === 'string' && id !== ALL_CUSTOM && id.startsWith('custom-')
 }
 
 /** 全部自定义提供商（目录缓存的原始记录，按 createdAt 升序） */

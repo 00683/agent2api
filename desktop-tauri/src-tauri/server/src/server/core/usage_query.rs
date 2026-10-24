@@ -268,6 +268,10 @@ fn supports_usage(account: &Value) -> bool {
         .get("provider")
         .and_then(Value::as_str)
         .unwrap_or(crate::server::core::providers::DEFAULT_PROVIDER_ID);
+    supports_usage_provider(provider_id)
+}
+
+pub(crate) fn supports_usage_provider(provider_id: &str) -> bool {
     if crate::server::core::custom_providers::is_custom_provider_id(provider_id) {
         return crate::server::core::providers::custom::balance::supports_usage(provider_id);
     }
