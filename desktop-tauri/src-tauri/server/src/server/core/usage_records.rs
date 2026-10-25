@@ -327,9 +327,13 @@ pub fn extract_remaining(usage: &Value) -> (Option<f64>, bool) {
 
 /// 从 usage JSON 提「各模型池的 (剩余, 总额)」。
 /// 认两种形状：`credits[].{name, remain, total}` 与
-/// `wallets[].{displayName, balance, total}`（zcode 活动套餐的读数两种都有）；
-/// 名字统一转小写，credits 优先、wallets 只补缺。形状不认 / 条目残缺 → 空表，
-/// 调用方按「没有读数」处理，不猜。
+/// `wallets[].{displayName, balance, total}`（zcode 活动套餐的读数两种都有）。
+/// **同名桶按只求和**：一个账号领过多份套餐时上游会下发多个同名桶
+/// （如 `GLM-5.3-Flash` 同时有一只 2.6 亿的新桶和一只已用完的 5 万旧桶），
+/// 覆盖式取值会随机撞上哪只算哪只 —— 求和才是这个账号该模型的真实家底。
+/// credits 与 wallets 是同一批桶的两个视图，双计只影响数字不影响
+/// 「是否已耗尽」的判定（任一视图为正则和为正；全为 0 则和仍为 0）。
+/// 形状不认 / 条目残缺 → 空表，调用方按「没有读数」处理，不猜。
 fn extract_model_pools(usage: &Value) -> HashMap<String, (f64, f64)> {
     let mut pools: HashMap<String, (f64, f64)> = HashMap::new();
     if let Some(credits) = usage.get("credits").and_then(Value::as_array) {
@@ -341,7 +345,9 @@ fn extract_model_pools(usage: &Value) -> HashMap<String, (f64, f64)> {
             ) else {
                 continue;
             };
-            pools.insert(name.trim().to_lowercase(), (remain, total));
+            let entry = pools.entry(name.trim().to_lowercase()).or_insert((0.0, 0.0));
+            entry.0 += remain;
+            entry.1 += total;
         }
     }
     if let Some(wallets) = usage.get("wallets").and_then(Value::as_array) {
@@ -353,9 +359,9 @@ fn extract_model_pools(usage: &Value) -> HashMap<String, (f64, f64)> {
             ) else {
                 continue;
             };
-            pools
-                .entry(name.trim().to_lowercase())
-                .or_insert((remain, total));
+            let entry = pools.entry(name.trim().to_lowercase()).or_insert((0.0, 0.0));
+            entry.0 += remain;
+            entry.1 += total;
         }
     }
     pools
