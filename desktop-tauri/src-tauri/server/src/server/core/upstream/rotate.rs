@@ -622,7 +622,7 @@ pub(super) fn pick_next_account(
     let accounts = accounts_in_providers(service, providers, pinned);
     // 换号顺延与第一级选路同一份候选剔除：被限制器拦下的账号不会在 429 之后
     // 被当作「下一个」重新塞进来
-    let (candidates, balance_blocked_ids) = filter_limiter_blocked(&accounts, pinned);
+    let (candidates, balance_blocked_ids) = filter_limiter_blocked(&accounts, pinned, keys);
     let counts = connection_counts(service);
     let now = logging::now_ms();
     let settings = config::routing_settings();
