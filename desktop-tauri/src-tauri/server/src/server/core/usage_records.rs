@@ -62,6 +62,17 @@ fn facts_slot() -> &'static Mutex<HashMap<String, BalanceFact>> {
     FACTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 模型池事实：账号 id → (池名小写 → (剩余, 总额))。来源与余额事实同一份
+/// usage JSON（`credits` / `wallets`），同一时机刷新（成功刷新 / 判不出摘除 /
+/// 失败保留），供选路按**请求的模型**跳过「该模型池已耗尽」的账号 —— 补账号级
+/// 余额判定覆盖不到的形态：账号总余额还够、单个池见底（如 zcode 活动套餐里
+/// Flash 用完、GLM 还剩着），账号级读数拦不住，请求仍会被派给它。
+fn model_pools_slot() -> &'static Mutex<HashMap<String, HashMap<String, (f64, f64)>>> {
+    static POOLS: OnceLock<Mutex<HashMap<String, HashMap<String, (f64, f64)>>>> =
+        OnceLock::new();
+    POOLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// 一条余额查询记录（读侧形状；行不存在时各字段取缺省值）。
 #[derive(Clone, Debug)]
 pub struct UsageRecord {
@@ -260,6 +271,20 @@ pub fn write_result(account_id: &str, outcome: &UsageOutcome) {
         // 失败（或库不可用）→ 事实保持不动（上次成功的数字继续生效，见模块头）
         _ => {}
     }
+    // 模型池事实与余额事实同一套时机：成功 → 刷新（usage 里认得出
+    // credits/wallets 才有内容），成功但判不出 → 摘除，失败 → 保留旧值。
+    if matches!(written, Some((true, _))) {
+        if let Some(usage) = outcome.usage.as_ref() {
+            let pools = extract_model_pools(usage);
+            if let Ok(mut slot) = model_pools_slot().lock() {
+                if pools.is_empty() {
+                    slot.remove(account_id);
+                } else {
+                    slot.insert(account_id.to_string(), pools);
+                }
+            }
+        }
+    }
 }
 
 /// 清掉「账号已被删除」的孤儿行（心跳循环每轮顺手一次，一条 SQL）。
@@ -298,6 +323,59 @@ pub fn extract_remaining(usage: &Value) -> (Option<f64>, bool) {
         return (available.as_f64().filter(|value| value.is_finite()), false);
     }
     (None, false)
+}
+
+/// 从 usage JSON 提「各模型池的 (剩余, 总额)」。
+/// 认两种形状：`credits[].{name, remain, total}` 与
+/// `wallets[].{displayName, balance, total}`（zcode 活动套餐的读数两种都有）；
+/// 名字统一转小写，credits 优先、wallets 只补缺。形状不认 / 条目残缺 → 空表，
+/// 调用方按「没有读数」处理，不猜。
+fn extract_model_pools(usage: &Value) -> HashMap<String, (f64, f64)> {
+    let mut pools: HashMap<String, (f64, f64)> = HashMap::new();
+    if let Some(credits) = usage.get("credits").and_then(Value::as_array) {
+        for credit in credits {
+            let (Some(name), Some(remain), Some(total)) = (
+                credit.get("name").and_then(Value::as_str),
+                credit.get("remain").and_then(Value::as_f64),
+                credit.get("total").and_then(Value::as_f64),
+            ) else {
+                continue;
+            };
+            pools.insert(name.trim().to_lowercase(), (remain, total));
+        }
+    }
+    if let Some(wallets) = usage.get("wallets").and_then(Value::as_array) {
+        for wallet in wallets {
+            let (Some(name), Some(remain), Some(total)) = (
+                wallet.get("displayName").and_then(Value::as_str),
+                wallet.get("balance").and_then(Value::as_f64),
+                wallet.get("total").and_then(Value::as_f64),
+            ) else {
+                continue;
+            };
+            pools
+                .entry(name.trim().to_lowercase())
+                .or_insert((remain, total));
+        }
+    }
+    pools
+}
+
+/// 账号在给定模型名上的池子是否已耗尽：找得到对应池、该池**发过额度**
+/// （total > 0，排除「本来就是 0 的摆设池」）且剩余 <= 0 才算。
+/// 无读数 / unlimited（不存池）/ 名字对不上 → 一律放行，与
+/// [`balance_blocked`] 同一口径：跳过是对「这个池此刻没钱」的断言，
+/// 断言拿不出证据就不能拦请求。`model_names` 由调用方把请求名与该
+/// provider 的上游真名都传进来（池名是上游形状，如 `GLM-5.3-Flash`）。
+pub fn model_pool_empty(account_id: &str, model_names: &[&str]) -> bool {
+    let Ok(pools) = model_pools_slot().lock() else { return false };
+    let Some(account_pools) = pools.get(account_id) else { return false };
+    model_names.iter().any(|name| {
+        account_pools
+            .get(name.trim().to_lowercase().as_str())
+            .map(|(remaining, total)| *total > 0.0 && *remaining <= 0.0)
+            .unwrap_or(false)
+    })
 }
 
 // ─── 账号上的查询配置读取（调度与选路共用的判定口径）─────────
@@ -542,6 +620,27 @@ pub(crate) fn reload_facts() {    let facts: HashMap<String, BalanceFact> = load
         .collect();
     if let Ok(mut slot) = facts_slot().lock() {
         *slot = facts;
+    }
+    // 模型池事实同一次装载（余额事实换血的时机就是它的时机）：unlimited
+    // 的账号不存池 —— 余额判定对它放行，池判定同样放行。
+    let pools: HashMap<String, HashMap<String, (f64, f64)>> = load_all()
+        .into_iter()
+        .filter(|(_, record)| !record.unlimited)
+        .filter_map(|(id, record)| {
+            let extracted = record
+                .usage
+                .as_ref()
+                .map(extract_model_pools)
+                .unwrap_or_default();
+            if extracted.is_empty() {
+                None
+            } else {
+                Some((id, extracted))
+            }
+        })
+        .collect();
+    if let Ok(mut slot) = model_pools_slot().lock() {
+        *slot = pools;
     }
 }
 

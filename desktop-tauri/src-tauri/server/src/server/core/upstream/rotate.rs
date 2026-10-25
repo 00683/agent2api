@@ -145,9 +145,9 @@ pub(super) async fn select_target_account(
         });
     }
 
-    // 限制器软跳过的候选先剔除（余额不足 / Token 限额，见 `filter_limiter_blocked`），
-    // 三级选择共用
-    let (candidates, balance_blocked_ids) = filter_limiter_blocked(&accounts, pinned);
+    // 限制器软跳过的候选先剔除（余额不足 / Token 限额 / 该模型池已耗尽，
+    // 见 `filter_limiter_blocked`），三级选择共用
+    let (candidates, balance_blocked_ids) = filter_limiter_blocked(&accounts, pinned, keys);
 
     // 在途计数快照取一次（锁是纳秒级的内存操作，见 connections.rs）：
     // 第一级与第二级共用同一份，两级看到的「谁在忙」是同一时刻的事实。
@@ -692,6 +692,7 @@ fn decision_json(
 fn filter_limiter_blocked(
     accounts: &[Value],
     pinned: Option<&str>,
+    keys: &routing::CooldownKeys<'_>,
 ) -> (Vec<Value>, std::collections::HashSet<String>) {
     if pinned.is_some() {
         return (accounts.to_vec(), Default::default());
@@ -704,6 +705,7 @@ fn filter_limiter_blocked(
         .filter(|account| {
             crate::server::core::usage_records::balance_blocked(account, &facts)
                 || crate::server::core::limiter::token_skip_blocked(account, &token_facts, now)
+                || model_pool_blocked(account, keys)
         })
         .filter_map(|account| routing::account_id(account).map(str::to_string))
         .collect();
@@ -720,6 +722,19 @@ fn filter_limiter_blocked(
         .cloned()
         .collect();
     (candidates, blocked_ids)
+}
+
+/// 该账号对本请求模型的池子是否已耗尽（读数来自余额查询的 usage，见
+/// `usage_records::model_pool_empty`）。请求名与该 provider 的上游真名都试：
+/// 池名是上游形状（如 `GLM-5.3-Flash`），别名请求按真名也能命中；两个名字
+/// 都对不上任何池 → 无读数 → 放行，不猜。
+fn model_pool_blocked(account: &Value, keys: &routing::CooldownKeys<'_>) -> bool {
+    let Some(id) = routing::account_id(account) else { return false };
+    let true_name = keys.for_account(account);
+    crate::server::core::usage_records::model_pool_empty(
+        id,
+        &[keys.request_model(), true_name.as_str()],
+    )
 }
 
 /// 该账号对该模型此前是否处于限额状态（用于「已恢复可用」日志的去噪）。
