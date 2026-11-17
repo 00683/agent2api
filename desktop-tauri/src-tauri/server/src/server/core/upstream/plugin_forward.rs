@@ -26,6 +26,10 @@ pub(super) async fn forward(
         let result = adapter.forward_conversation(store, account, body, headers, proxy.clone(), stream, telemetry).await;
         let Err(error) = result else { return result; };
         if telemetry.is_cancelled() { return Err(super::cancellation::cancelled_error()); }
+        // 并发满由外层选择其他空闲账号，不在当前账号上等待或重发。
+        if super::provider_loop::is_zcode_account_busy(adapter.provider_id(), error.status_code, error.upstream_code) {
+            return Err(error);
+        }
         if matches!(error.code.as_deref(), Some("plugin_response_started" | "account_model_unavailable"
             | "account_model_permissions_unknown" | "plugin_protocol_error" | "plugin_resource_limit"
             | "plugin_trap" | "forbidden" | "native_helper_not_authorized")) { return Err(error); }

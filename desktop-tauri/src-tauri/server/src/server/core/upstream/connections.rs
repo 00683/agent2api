@@ -56,29 +56,6 @@ impl Connections {
         entries
     }
 
-    /// 计数 +1（空 id 是「没有账号」的转发，不计数）
-    fn add(&self, account_id: &str) {
-        if account_id.is_empty() {
-            return;
-        }
-        let mut guard = lock_counts(&self.inner);
-        *guard.entry(account_id.to_string()).or_insert(0) += 1;
-    }
-
-    /// 计数 -1（减到 0 就删项；无记录时是空操作 —— 幂等，重复释放不会变负数）
-    fn sub(&self, account_id: &str) {
-        if account_id.is_empty() {
-            return;
-        }
-        let mut guard = lock_counts(&self.inner);
-        match guard.get_mut(account_id) {
-            Some(count) if *count > 1 => *count -= 1,
-            Some(_) => {
-                guard.remove(account_id);
-            }
-            None => {}
-        }
-    }
 }
 
 impl Default for Connections {
@@ -94,6 +71,16 @@ fn lock_counts<'a>(
     match inner.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn decrement(counts: &mut HashMap<String, usize>, account_id: &str) {
+    match counts.get_mut(account_id) {
+        Some(count) if *count > 1 => *count -= 1,
+        Some(_) => {
+            counts.remove(account_id);
+        }
+        None => {}
     }
 }
 
@@ -123,17 +110,28 @@ impl ConnectionGuard {
     /// 空字符串与 None 等价（都表示「没有账号」），这样调用方可以直接把
     /// `RouteTarget::account_id` 传进来，不必先做一次归一。
     pub(super) fn rebind(&mut self, account_id: Option<String>) {
+        self.try_rebind(account_id, 0);
+    }
+
+    /// 持锁检查并占用并发位。0 表示不限；失败时保留已有的占用。
+    pub(super) fn try_rebind(&mut self, account_id: Option<String>, limit: u64) -> bool {
         let next = account_id.filter(|id| !id.is_empty());
         if self.account_id == next {
-            return;
+            return true;
+        }
+        let mut counts = lock_counts(&self.connections.inner);
+        if let Some(current) = next.as_deref() {
+            let count = counts.get(current).copied().unwrap_or(0);
+            if limit > 0 && count as u64 >= limit {
+                return false;
+            }
+            *counts.entry(current.to_owned()).or_default() += 1;
         }
         if let Some(previous) = self.account_id.as_deref() {
-            self.connections.sub(previous);
-        }
-        if let Some(current) = next.as_deref() {
-            self.connections.add(current);
+            decrement(&mut counts, previous);
         }
         self.account_id = next;
+        true
     }
 
     /// 把计数移交给响应流：返回一个持有当前账号的新凭证，自身转为已释放。
@@ -158,7 +156,57 @@ impl ConnectionGuard {
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         if let Some(account_id) = self.account_id.as_deref() {
-            self.connections.sub(account_id);
+            decrement(&mut lock_counts(&self.connections.inner), account_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn simultaneous_selection_respects_account_cap() {
+        for limit in [1, 2] {
+            let counts = Connections::new();
+            let selected = Barrier::new(4);
+            let all_reserved = Barrier::new(4);
+            std::thread::scope(|scope| {
+                let attempts: Vec<_> = (0..4)
+                    .map(|_| scope.spawn(|| {
+                        let mut guard = ConnectionGuard::new(counts.clone());
+                        let was_empty = counts.snapshot().is_empty();
+                        selected.wait();
+                        let admitted = guard.try_rebind(Some("account".into()), limit);
+                        all_reserved.wait();
+                        assert!(was_empty);
+                        admitted
+                    }))
+                    .collect();
+                let admitted = attempts.into_iter()
+                    .map(|attempt| attempt.join().unwrap())
+                    .filter(|admitted| *admitted)
+                    .count();
+                assert_eq!(admitted, limit as usize);
+            });
+            assert!(counts.snapshot().is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_rebind_keeps_old_slot_and_handoff_releases_it() {
+        let counts = Connections::new();
+        let mut first = ConnectionGuard::new(counts.clone());
+        let mut second = ConnectionGuard::new(counts.clone());
+        assert!(first.try_rebind(Some("old".into()), 1));
+        assert!(second.try_rebind(Some("busy".into()), 1));
+        assert!(!first.try_rebind(Some("busy".into()), 1));
+        assert!(first.try_rebind(Some("old".into()), 1));
+        let stream_slot = first.handoff();
+        assert!(!second.try_rebind(Some("old".into()), 1));
+        drop(stream_slot);
+        assert!(second.try_rebind(Some("old".into()), 1));
+        assert_eq!(counts.snapshot(), vec![("old".into(), 1)]);
     }
 }

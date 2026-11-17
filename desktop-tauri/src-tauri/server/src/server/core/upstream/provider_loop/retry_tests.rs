@@ -14,6 +14,7 @@ struct TestAdapter {
     content_blocked: bool,
     json_error: bool,
     suspend: bool,
+    zcode: bool,
 }
 
 impl ProviderAdapter for TestAdapter {
@@ -21,7 +22,7 @@ impl ProviderAdapter for TestAdapter {
         ProviderKind::WorkBuddy
     }
     fn provider_id(&self) -> &'static str {
-        "retry-test"
+        if self.zcode { "zcode-intl" } else { "retry-test" }
     }
     fn list_models(&self) -> Vec<Value> {
         Vec::new()
@@ -218,6 +219,21 @@ const ERROR: (u16, &str, &str) = (
     r#"{"code":123,"message":"retry later"}"#,
 );
 const SUCCESS: (u16, &str, &str) = (200, "text/event-stream", "data: [DONE]\n\n");
+
+#[tokio::test]
+async fn zcode_3008_never_retries_the_busy_account() {
+    let upstream = upstream(vec![(429, "application/json",
+        r#"{"code":3008,"message":"user concurrency limit exceeded"}"#), SUCCESS]).await;
+    let adapter = TestAdapter { zcode: true, retry: true, ..Default::default() };
+    let mut budget = RetryBudget::new(3);
+    let result = send(&adapter, &upstream, &mut budget, &telemetry(), false, None).await;
+    let error = failure(result).error;
+    assert_eq!(error.status_code, 429);
+    assert_eq!(error.upstream_code, Some(3008));
+    assert!(error.retry_after_secs.is_none());
+    assert_eq!(upstream.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.remaining, 3);
+}
 
 #[tokio::test]
 async fn successful_response_does_not_spend_retry_budget() {

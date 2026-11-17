@@ -629,6 +629,8 @@ async fn attempt_queue(
     }
     let mut conversation_ids = None;
     let mut tried_ids: Vec<String> = Vec::new();
+    let mut busy_accounts = Vec::new();
+    let mut pending_busy_error = None;
     // ── 两份独立的预算（见 config::RetrySettings）─────────────────────
     //   - `budget`：同一个账号上还能**原地重发**几次。整份请求共用一份，
     //     由 `send_with_retry` 逐次扣减 —— 于是它天然花在「第一个真正发出去的
@@ -685,7 +687,7 @@ async fn attempt_queue(
         if ctx.telemetry.is_cancelled() {
             return Err(cancellation::cancelled_error());
         }
-        let mut target = rotate::select_target_account(
+        let selection = rotate::select_target_account(
             service,
             provider_ids,
             &cooldown_keys,
@@ -693,8 +695,19 @@ async fn attempt_queue(
             ctx.pinned_account,
             &conv_key,
             &ctx.routing,
-        )
-        .await?;
+            connections.handoff(),
+            &busy_accounts,
+            pending_busy_error.is_some(),
+        ).await;
+        let (mut target, selected_connection) = match selection {
+            Ok(selected) => selected,
+            Err(error) if error.code.as_deref() == Some("account_concurrency_busy") => {
+                return Err(pending_busy_error.unwrap_or(error));
+            }
+            Err(error) => return Err(error),
+        };
+        pending_busy_error = None;
+        *connections = selected_connection;
         if let Some(override_proxy) = ctx.proxy_override {
             target.proxy = override_proxy.clone();
             target.proxy_notice = None;
@@ -719,10 +732,6 @@ async fn attempt_queue(
             decision["sessionSource"] = Value::String(sticky_source.to_string());
             ctx.telemetry.set_route_decision(decision);
         }
-        // 连接计数改绑到这一轮选中的账号：失败重试换账号时计数跟着走，
-        // 于是「一个请求任意时刻只占一个账号」这条口径不需要每个分支各维护一次
-        // （429 降级、401 刷新后换号、会话式失败顺延三条路径都经过这里）。
-        connections.rebind(target.account_id.clone());
         if let Some(model) = &ctx.direct_model {
             if let Some(account) = target.account.as_mut() { account["routingModel"] = model.clone().into(); }
         }
@@ -915,6 +924,16 @@ async fn attempt_queue(
                             Some(cancellation::MANUAL_TERMINATED),
                         );
                         return Err(cancellation::cancelled_error());
+                    }
+                    if is_zcode_account_busy(provider_id, error.status_code, error.upstream_code) {
+                        let busy = zcode_busy_error();
+                        if switch_after_zcode_busy(service, stateful_account_id.as_deref(),
+                            &attempt_key, &mut tried_ids, &mut busy_accounts, &mut switches_left, switch_total)
+                        {
+                            pending_busy_error = Some(busy);
+                            continue 'accounts;
+                        }
+                        return Err(busy);
                     }
                     if stateful_account_id.is_some() {
                         if !tried_ids.contains(&attempt_key) {
@@ -1462,6 +1481,17 @@ async fn attempt_queue(
                     if super::vision_compat::handles_error(ctx, &failure.error) {
                         ctx.telemetry.finish_last_attempt(Some(i64::from(failure.error.status_code)), Some(&failure.error.message));
                         return Err(failure.error);
+                    }
+                    if is_zcode_account_busy(provider_id, failure.error.status_code, failure.error.upstream_code) {
+                        let busy = zcode_busy_error();
+                        ctx.telemetry.finish_last_attempt(Some(i64::from(failure.error.status_code)), Some(&failure.error.message));
+                        if switch_after_zcode_busy(service, target.account_id.as_deref(),
+                            &attempt_key, &mut tried_ids, &mut busy_accounts, &mut switches_left, switch_total)
+                        {
+                            pending_busy_error = Some(busy);
+                            continue 'accounts;
+                        }
+                        return Err(busy);
                     }
                     if let Some(account_id) = target.account_id.as_deref() {
                         if failure.policy.suspend_account {
@@ -2253,7 +2283,35 @@ async fn attempt_queue(
             }
         }
     }
-    Err(GatewayError::with_status(500, "上游转发重试次数超限"))
+    Err(pending_busy_error.unwrap_or_else(|| GatewayError::with_status(500, "上游转发重试次数超限")))
+}
+
+pub(super) fn is_zcode_account_busy(provider: &str, status: i32, code: Option<i64>) -> bool {
+    rotate::is_zcode(provider) && status == 429 && code == Some(3008)
+}
+
+fn zcode_busy_error() -> GatewayError {
+    GatewayError::with_status(429, "ZCode 账号并发已满，请稍后重试")
+        .with_code("account_concurrency_busy")
+        .upstream_code(3008)
+}
+
+fn switch_after_zcode_busy(
+    service: &UpstreamService,
+    account_id: Option<&str>,
+    attempt_key: &str,
+    tried: &mut Vec<String>,
+    busy_accounts: &mut Vec<String>,
+    switches_left: &mut usize,
+    switch_total: usize,
+) -> bool {
+    let Some(account_id) = account_id else { return false; };
+    if !rotate::allows_route_skip(service, account_id) || !take_switch(switches_left, switch_total) {
+        return false;
+    }
+    busy_accounts.push(account_id.to_owned());
+    tried.push(attempt_key.to_owned());
+    true
 }
 
 /// 门控后的 Chat 响应形态：`Live` = 未消费的 `Response`（原样直通）；
@@ -3133,6 +3191,19 @@ async fn send_with_retry(
         };
         let body = detail.to_value();
         let mut class = adapter.classify_error_async(status, &body).await;
+        let busy_code = match &class {
+            UpstreamErrorClass::QuotaLimited { upstream_code, .. }
+            | UpstreamErrorClass::Fatal { upstream_code, .. } => *upstream_code,
+            _ => None,
+        }.or(detail.code);
+        if is_zcode_account_busy(adapter.provider_id(), i32::from(status), busy_code) {
+            return Err(OutboundFailure {
+                class,
+                error: GatewayError::with_status(429, detail.message).upstream_code(3008),
+                stop: false,
+                policy: Default::default(),
+            });
+        }
         super::retry_after::apply(&mut class, header_reset);
         let policy = adapter.error_policy_async(status, &body).await;
         let decision = adapter

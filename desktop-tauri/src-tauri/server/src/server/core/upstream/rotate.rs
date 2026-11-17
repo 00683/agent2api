@@ -50,7 +50,7 @@ use crate::server::core::routing;
 use crate::server::errors::{self, GatewayError};
 use crate::server::logging;
 
-use super::{account_display, format_reset_text, has_access_token, priority_of, RouteTarget,
+use super::{account_display, connections::ConnectionGuard, format_reset_text, has_access_token, priority_of, RouteTarget,
             UpstreamService};
 
 /// 取指定账号的会话；`account_id` 为 None 时回落到**该 provider 的**默认登录态。
@@ -129,6 +129,7 @@ pub(super) async fn session_for(
 /// 不粘）。粘性命中会刷新该键的最近使用时刻 —— 「缓存还在值上」的计时就在
 /// 这一步续。
 ///
+/// 选中前先占用账号的连接位，调用方将凭证持有到请求结束。
 /// 返回的 `RouteTarget::decision` 是本次选路的**决策快照**（排序 + 每位原因 +
 /// 被跳过者），由调用方挂进 telemetry 落请求日志 ——「上一个请求为什么走它」
 /// 的数据源。
@@ -140,7 +141,10 @@ pub(super) async fn select_target_account(
     pinned: Option<&str>,
     conv_key: &str,
     request_routing: &super::route_context::RequestRouting,
-) -> Result<RouteTarget, GatewayError> {
+    mut connections: ConnectionGuard,
+    busy_accounts: &[String],
+    ready_only: bool,
+) -> Result<(RouteTarget, ConnectionGuard), GatewayError> {
     let service = service.clone();
     let providers: Vec<String> = providers.iter().map(|id| id.to_string()).collect();
     let model = keys.request_model().to_string();
@@ -148,10 +152,18 @@ pub(super) async fn select_target_account(
     let pinned = pinned.map(str::to_string);
     let conv_key = conv_key.to_string();
     let request_routing = request_routing.clone();
+    let busy_accounts = busy_accounts.to_vec();
     crate::server::core::blocking::run(move || {
         let providers: Vec<&str> = providers.iter().map(String::as_str).collect();
-        select_target_account_sync(&service, &providers, &routing::CooldownKeys::new(&model),
-            &tried_ids, pinned.as_deref(), &conv_key, &request_routing)
+        let accounts = scoped_accounts(
+            &service, &providers, &model, pinned.as_deref(), Some(&request_routing),
+        );
+        let target = select_target_account_sync(
+            &service, &providers, &routing::CooldownKeys::new(&model),
+            &tried_ids, pinned.as_deref(), &conv_key, &request_routing,
+            &mut connections, accounts, &busy_accounts, ready_only,
+        )?;
+        Ok((target, connections))
     }).await?
 }
 
@@ -163,8 +175,16 @@ fn select_target_account_sync(
     pinned: Option<&str>,
     conv_key: &str,
     request_routing: &super::route_context::RequestRouting,
+    connections: &mut ConnectionGuard,
+    mut accounts: Vec<Value>,
+    busy_accounts: &[String],
+    ready_only: bool,
 ) -> Result<RouteTarget, GatewayError> {
-    let accounts = scoped_accounts(service, providers, keys.request_model(), pinned, Some(request_routing));
+    accounts.retain(|account| routing::account_id(account)
+        .is_none_or(|id| !busy_accounts.iter().any(|busy| busy == id)));
+    if (ready_only || !busy_accounts.is_empty()) && accounts.is_empty() {
+        return Err(account_concurrency_busy());
+    }
     if accounts.is_empty() && request_routing.strict_vision {
         return Err(GatewayError::with_status(503, "当前权限和路由范围内没有可用的图片处理账号；未回退默认登录态")
             .with_code("vision_target_unavailable"));
@@ -201,6 +221,7 @@ fn select_target_account_sync(
     }
     // 这些家都没有账号记录 → 用第一家的默认登录态（环境变量旁路等）
     if accounts.is_empty() {
+        connections.rebind(None);
         return Ok(RouteTarget {
             provider: providers.first().copied().unwrap_or_default().to_string(),
             account_id: None,
@@ -316,18 +337,29 @@ fn select_target_account_sync(
         decision["sessionId"] = Value::String(super::route_sticky::entry_id(conv_key, keys.request_model()));
         if ttl > 0 { decision["stickyId"] = decision["sessionId"].clone(); }
     }
-    let mut excluded: Vec<String> = tried_ids.to_vec();
-    for entry in &plan.ordered {
-        if let Some(picked_session) = service.store.get_session_by_id(&entry.id) {
-            return Ok(with_proxy_notice(
-                entry.account.clone(),
-                picked_session.proxy,
-                picked_session.proxy_error,
-                entry.id.clone(),
-                Some(decision),
-            ));
+    let mut at_limit = false;
+    let mut reserve = |account: &Value, id: &str| {
+        let session = service.store.get_session_by_id(id)?;
+        if !connections.try_rebind(Some(id.to_owned()), strict_concurrency_limit(account)) {
+            at_limit = true;
+            return None;
         }
-        excluded.push(entry.id.clone());
+        let mut decision = decision.clone();
+        let key = crate::server::core::routing_groups::attempt_key(account);
+        if plan.sticky_hit && snap.sticky_hit.as_deref() != Some(key.as_str()) {
+            decision["stickyHit"] = Value::Bool(false);
+        }
+        Some(with_proxy_notice(
+            account.clone(), session.proxy, session.proxy_error, id.to_owned(), Some(decision),
+        ))
+    };
+    for entry in &plan.ordered {
+        if let Some(target) = reserve(&entry.account, &entry.id) {
+            return Ok(target);
+        }
+    }
+    if ready_only {
+        return Err(account_concurrency_busy());
     }
 
     let enabled: Vec<Value> = candidates
@@ -366,23 +398,8 @@ fn select_target_account_sync(
             "固定生图账号受冷却、并发或额度限制，或已无可用凭证；未自动换号")
             .with_code("image_account_unavailable"));
     }
-    // ── 第二级兜底（并发感知）──────────────────────────────────
-    // 启用中的账号都在限额冷却期内 / 已达并发上限时，仍挑一个试一次：
-    //   ① 先在「启用 + 未尝试 + 未达并发上限」的账号里挑**恢复最早**的
-    //      —— 上游若已实际解除限额可直接成功，否则把真实 429 与恢复时间
-    //      返回给客户端（与改造前同一条路，只多了并发这一道闸）；
-    //   ② 一个都没有（未尝试的账号**全部**达到并发上限）→ 挑**余量最大**
-    //      的账号强塞。
-    //
-    // ── 为什么 ② 强塞而不是报 503（本级的取舍）──────────────────
-    // 限流是「等得起」的：冷却有明确恢复时间，到点账号自然回来；并发挤占
-    // 则是**即刻自愈**的 —— 在途请求一轮对话结束后计数立刻回落（见
-    // connections.rs 的 Drop）。全部账号都忙时拒绝请求（503）只会把本可
-    // 服务的请求直接挡在门外，而强塞只意味着短暂超载 1-2 个（软上限口径见
-    // `routing::max_concurrent_of`）。所以：能等就等（①），等不了就挤（②），
-    // 永不因并发上限直接 503。
-    let mut best_effort: Option<Value> = None;
-    let mut best_reset = f64::INFINITY;
+    // 冷却兜底仍按恢复时间；ZCode 即便走兜底也必须拿到并发位。
+    let mut cooling = Vec::new();
     for account in &enabled {
         let Some(id) = routing::account_id(account) else {
             continue;
@@ -390,47 +407,30 @@ fn select_target_account_sync(
         if tried_ids.iter().any(|tried| tried == &crate::server::core::routing_groups::attempt_key(account)) {
             continue;
         }
-        // 已达并发上限的账号不进「正常兜底」候选 —— 它们是 ② 的原料
         let limit = routing::max_concurrent_of(account);
-        if limit > 0 && counts.get(id).copied().unwrap_or(0) >= limit as usize {
+        let full = limit > 0 && counts.get(id).copied().unwrap_or(0) as u64 >= limit;
+        if full && strict_concurrency_limit(account) == 0 {
             continue;
         }
         let reset = routing::rate_limit_reset_at(account, keys, now);
-        let reset = if reset > 0 { reset as f64 } else { f64::INFINITY };
-        if reset < best_reset {
-            best_reset = reset;
-            best_effort = Some(account.clone());
+        if reset > 0 || full {
+            cooling.push((reset.max(0), id, account));
         }
     }
-    if best_effort.is_none() {
-        // ① 无果：在「全部达到并发上限」（或没有未尝试账号）时按余量挤占。
-        // 挑出的账号走与 ① 同一条收尾（取会话 → 组装选路结果）。
-        if let Some(account) = squeeze_by_headroom(&enabled, &counts, tried_ids, keys, now) {
-            if let Some(id) = routing::account_id(&account).map(str::to_string) {
-                if let Some(entry) = service.store.get_session_by_id(&id) {
-                    return Ok(with_proxy_notice(
-                        account,
-                        entry.proxy,
-                        entry.proxy_error,
-                        id,
-                        Some(decision),
-                    ));
-                }
-            }
+    cooling.sort_by_key(|(reset, _, _)| *reset);
+    for (_, id, account) in cooling {
+        if let Some(target) = reserve(account, id) {
+            return Ok(target);
         }
     }
-    if let Some(account) = best_effort {
-        if let Some(id) = routing::account_id(&account).map(str::to_string) {
-            if let Some(entry) = service.store.get_session_by_id(&id) {
-                return Ok(with_proxy_notice(
-                    account,
-                    entry.proxy,
-                    entry.proxy_error,
-                    id,
-                    Some(decision),
-                ));
-            }
+    // 其余提供商保留软上限的余量兜底。
+    if let Some(account) = squeeze_by_headroom(&enabled, &counts, tried_ids, keys, now) {
+        if let Some(target) = routing::account_id(&account).and_then(|id| reserve(&account, id)) {
+            return Ok(target);
         }
+    }
+    if at_limit {
+        return Err(account_concurrency_busy());
     }
     if request_routing.requires_account() {
         return Err(GatewayError::with_status(503,
@@ -447,6 +447,7 @@ fn select_target_account_sync(
             503, "当前模型路由中的账号都没有可用凭证，请在路由页检查账号状态",
         ));
     }
+    connections.rebind(None);
     decision["picked"] = Value::String(String::new());
     Ok(RouteTarget {
         provider: providers.first().copied().unwrap_or_default().to_string(),
@@ -457,6 +458,23 @@ fn select_target_account_sync(
         proxy_notice: None,
         decision: Some(decision),
     })
+}
+
+pub(super) fn is_zcode(provider: &str) -> bool {
+    matches!(provider, "zcode" | "zcode-intl")
+}
+
+fn strict_concurrency_limit(account: &Value) -> u64 {
+    if is_zcode(provider_of(account)) {
+        routing::max_concurrent_of(account)
+    } else {
+        0
+    }
+}
+
+fn account_concurrency_busy() -> GatewayError {
+    GatewayError::with_status(429, "当前没有可接手的空闲账号，请稍后重试")
+        .with_code("account_concurrency_busy")
 }
 
 /// 账号记录上的 provider id（缺失按默认 provider）。
@@ -721,6 +739,9 @@ fn squeeze_by_headroom(
     let mut best_headroom = i64::MIN;
     let mut best_reset = f64::INFINITY;
     for account in enabled {
+        if strict_concurrency_limit(account) > 0 {
+            continue;
+        }
         let Some(id) = routing::account_id(account) else {
             continue;
         };
@@ -946,9 +967,50 @@ pub(super) fn report_limit_event(
 
 #[cfg(test)]
 mod tests {
-    use super::earliest_limit_reset_at_in;
-    use crate::server::core::routing::CooldownKeys;
+    use super::*;
+    use crate::server::core::{account_store::AccountStore, auth::AuthService};
+    use crate::server::db::Db;
     use serde_json::json;
+
+    #[test]
+    fn zcode_routes_only_to_accounts_with_slots_and_skips_a_3008_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AccountStore::with_db(Some(Db::open(&dir.path().join("agent2api.db")).unwrap()));
+        let service = UpstreamService::new(store.clone(), AuthService::for_store(store.clone()));
+        let make_account = |uid: &str| {
+            let record = store.add_account(
+                &json!({"auth": {"accessToken": uid}, "account": {"uid": uid}}),
+                Some(uid), Some("zcode-intl"),
+            ).unwrap();
+            let id = record["id"].as_str().unwrap();
+            json!({"id": id, "provider": "zcode-intl", "enabled": true,
+                "hasCredentials": true, "maxConcurrent": 1})
+        };
+        let accounts = vec![make_account("first"), make_account("second")];
+        let routing = super::super::route_context::RequestRouting::capture_request(
+            "test-model", &store, &json!({}), None, true,
+        ).unwrap();
+        let choose = |guard: &mut ConnectionGuard, busy: &[String]| {
+            select_target_account_sync(&service, &["zcode-intl"], &CooldownKeys::new("test-model"),
+                &[], None, "", &routing, guard, accounts.clone(), busy, !busy.is_empty())
+        };
+        let mut first = ConnectionGuard::new(service.connections().clone());
+        let mut second = ConnectionGuard::new(service.connections().clone());
+        let mut retry = ConnectionGuard::new(service.connections().clone());
+        let one = choose(&mut first, &[]).unwrap().account_id.unwrap();
+        let two = choose(&mut second, &[]).unwrap().account_id.unwrap();
+        assert_ne!(one, two);
+        let full = choose(&mut retry, &[]).err().expect("both slots are reserved");
+        assert_eq!(full.code.as_deref(), Some("account_concurrency_busy"));
+        assert!(full.retry_after_secs.is_none());
+
+        // Holding the other slot must not cause a replay on the account that sent 3008.
+        drop(first);
+        let excluded = [one];
+        assert!(choose(&mut retry, &excluded).is_err());
+        drop(second);
+        assert_eq!(choose(&mut retry, &excluded).unwrap().account_id, Some(two));
+    }
 
     /// 造一条带限额冷却的账号记录（形状与 `mark_rate_limited` 落盘的一致）
     fn limited(id: &str, provider: &str, model: &str, reset_at: i64) -> serde_json::Value {

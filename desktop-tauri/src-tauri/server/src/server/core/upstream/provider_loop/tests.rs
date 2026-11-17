@@ -92,6 +92,24 @@ fn temp_service() -> (tempfile::TempDir, UpstreamService, String) {
     (dir, service, id)
 }
 
+#[test]
+fn zcode_account_busy_keeps_the_business_code_without_a_reset() {
+    for provider in ["zcode", "zcode-intl"] {
+        assert!(is_zcode_account_busy(provider, 429, Some(3008)));
+        assert!(!is_zcode_account_busy(provider, 429, Some(1005)));
+        assert!(!is_zcode_account_busy(provider, 429, None));
+        assert!(!is_zcode_account_busy(provider, 403, Some(3008)));
+    }
+    assert!(!is_zcode_account_busy("workbuddy", 429, Some(3008)));
+
+    let error = zcode_busy_error();
+    assert_eq!(error.payload()["error"]["upstream_code"], 3008);
+    assert!(error.payload()["error"].get("reset_at").is_none());
+    let response = error.payload_response();
+    assert_eq!(response.status(), 429);
+    assert!(!response.headers().contains_key(axum::http::header::RETRY_AFTER));
+}
+
 /// 本家分类结果 → 记账名单（只取本次这一个键，绕开目录缓存的全局态）。
 fn single(name: &str) -> Vec<String> {
     vec![name.to_string()]
