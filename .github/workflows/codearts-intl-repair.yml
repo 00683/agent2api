@@ -21,6 +21,7 @@ jobs:
       - name: Build desktop and mobile interfaces
         shell: bash
         run: |
+          npm --prefix desktop-tauri/ui-kit ci
           npm --prefix desktop-tauri/ui-islands ci
           npm --prefix desktop-tauri/ui-islands run build
           npm --prefix desktop-tauri/mobile ci

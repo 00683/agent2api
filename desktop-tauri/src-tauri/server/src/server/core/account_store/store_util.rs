@@ -190,7 +190,7 @@ const CODEARTS_MAX_SESSION_LIMIT: u32 = 64;
 
 pub(crate) fn max_concurrent_public_for(provider: &str, value: Option<&Value>) -> u64 {
     let configured = max_concurrent_public(value);
-    if provider != super::codearts_accounts::CODEARTS_PROVIDER_ID {
+    if !matches!(provider, super::codearts_accounts::CODEARTS_PROVIDER_ID | "codearts-intl") {
         if crate::server::core::plugin_host::wasm::owns(provider) {
             if let Some(limit) = crate::server::core::plugin_host::wasm::managed_task::account_concurrency_limit(provider) {
                 return if configured > 0 { configured.min(limit) } else { limit };

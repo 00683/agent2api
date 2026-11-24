@@ -298,7 +298,7 @@ fn codearts_credential_response(url: &url::Url) -> bool {
     url.scheme() == "https" && url.port_or_known_default() == Some(443)
         && matches!((url.host_str(), url.path().trim_end_matches('/')),
             (Some("sts.cn-north-4.myhuaweicloud.com"), "/v1/oauth2/tokens")
-            | (Some("snap-access.cn-north-4.myhuaweicloud.com"), "/snap-manager/v1/login/ticket"))
+            | (Some("snap-access.cn-north-4.myhuaweicloud.com" | "snap-access.ap-southeast-1.myhuaweicloud.com"), "/snap-manager/v1/login/ticket"))
 }
 
 pub(super) fn hide_response(entry: &TrafficEntry) -> bool {

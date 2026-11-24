@@ -1156,7 +1156,7 @@ export function accountGroups(
     return {
       provider,
       label: shared().wbProviders?.labelOf?.(provider) || provider,
-      rank: sorting?.providerOrder.includes(provider ?? '') ? sorting.providerOrder.indexOf(provider) + 1 : index + 1,
+      rank: sorting?.providerOrder.includes(provider) ? sorting.providerOrder.indexOf(provider) + 1 : index + 1,
       members: shown,
       queueMembers: list,
       accounts: keep ? shown.filter(keep) : shown,
