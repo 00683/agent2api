@@ -43,7 +43,7 @@ fn codearts_account_of(state: &ServerState, account_id: &str) -> Result<Value, R
         .and_then(|items| {
             items.iter().find(|account| {
                 account.get("id").and_then(Value::as_str) == Some(account_id)
-                    && account.get("provider").and_then(Value::as_str) == Some("codearts")
+                    && matches!(account.get("provider").and_then(Value::as_str), Some("codearts" | "codearts-intl"))
             })
         })
         .cloned()
@@ -57,8 +57,9 @@ async fn call_action(
     action: &str,
     payload: &Value,
 ) -> Result<Value, Response> {
-    codearts_account_of(state, account_id)?;
-    let Some(adapter) = crate::server::core::providers::adapter::adapter_by_id("codearts") else {
+    let account = codearts_account_of(state, account_id)?;
+    let provider = account["provider"].as_str().ok_or_else(|| management_error(404, "未找到 CodeArts 账号"))?;
+    let Some(adapter) = crate::server::core::providers::adapter::adapter_by_id(provider) else {
         return Err(management_error(
             400,
             "CodeArts 的提供商插件没有安装，无法执行福利动作",

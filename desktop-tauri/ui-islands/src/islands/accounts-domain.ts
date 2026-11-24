@@ -298,7 +298,7 @@ export const DEFAULT_LOW_BALANCE_THRESHOLD = 1
  */
 export function defaultLimiters(provider: string | undefined | null): LimiterRule[] {
   const declared = provider ? providerFeatures(provider).defaultLimiters : undefined
-  if (declared && (provider !== 'codearts' || declared.every(rule => rule.type === 'balance'))) return declared.slice()
+  if (declared && (!['codearts', 'codearts-intl'].includes(provider ?? '') || declared.every(rule => rule.type === 'balance'))) return declared.slice()
   if (provider === 'cline-free') return []
   return [{ type: 'balance', action: 'skip', threshold: DEFAULT_LOW_BALANCE_THRESHOLD, enabled: true }]
 }
@@ -1156,7 +1156,7 @@ export function accountGroups(
     return {
       provider,
       label: shared().wbProviders?.labelOf?.(provider) || provider,
-      rank: sorting?.providerOrder.includes(provider) ? sorting.providerOrder.indexOf(provider) + 1 : index + 1,
+      rank: sorting?.providerOrder.includes(provider ?? '') ? sorting.providerOrder.indexOf(provider) + 1 : index + 1,
       members: shown,
       queueMembers: list,
       accounts: keep ? shown.filter(keep) : shown,

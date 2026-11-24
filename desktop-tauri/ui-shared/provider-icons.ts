@@ -16,6 +16,7 @@ export const BUILTIN_PROVIDER_ICONS: Readonly<Record<string, string>> = {
   zcode: 'assets/providers/zcode.png',
   'zcode-intl': 'assets/providers/zcode.png',
   codearts: 'assets/providers/codearts.png',
+  'codearts-intl': 'assets/providers/codearts.png',
   trae: 'assets/providers/trae.png',
   loomy: 'assets/providers/loomy.png',
   kuku: 'assets/providers/kuku.png',

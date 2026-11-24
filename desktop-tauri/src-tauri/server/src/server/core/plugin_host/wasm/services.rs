@@ -422,7 +422,7 @@ impl Context {
                     if let Some((result, handle)) = self.doubao_http(&params, deadline).await? {
                         return self.keep_http(result, handle, deadline);
                     }
-                    if provider == "codearts" && params["url"].as_str().is_some_and(|raw| raw.starts_with("https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions")) {
+                    if super::codearts_realm::Realm::for_provider(&provider).is_some_and(|realm| params["url"].as_str().is_some_and(|raw| realm.is_chat_url(raw))) {
                         let session = self.codearts_session.as_ref().ok_or_else(|| super::error("对话缺少本次 CodeArts 心跳会话"))?;
                         if params["headers"]["User-Session-Id"].as_str() != Some(session.id.as_str()) { return Err(super::error("CodeArts 对话的会话编号与心跳不符")); }
                         let client = session.client.client().map_err(|_| super::error("CodeArts 原出口已关闭"))?.clone();

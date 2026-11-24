@@ -65,7 +65,7 @@ export function accountPatchConfirmed(account: AccountRecord, patch: Record<stri
     }
     if (key === 'maxConcurrent') {
       const configured = Number(value)
-      const expected = account.provider === 'codearts' ? (configured === 0 ? 3 : Math.min(configured, 64)) : configured
+      const expected = ['codearts', 'codearts-intl'].includes(account.provider) ? (configured === 0 ? 3 : Math.min(configured, 64)) : configured
       return account.maxConcurrent === expected
     }
     if (key === 'limiterGroups') {

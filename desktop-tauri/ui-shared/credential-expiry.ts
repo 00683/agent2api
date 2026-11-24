@@ -31,7 +31,7 @@ export type CredentialExpiryRow = {
  *     续期会换掉整对 AK/SK/STS。
  * 未登记的家一律走单行（只有主凭证那一个读数），即使它们也有 refreshToken。
  */
-const DUAL_CREDENTIAL_PROVIDERS: readonly string[] = ['codearts']
+const DUAL_CREDENTIAL_PROVIDERS: readonly string[] = ['codearts', 'codearts-intl']
 
 export function credentialExpiryMillis(value: unknown): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') return null

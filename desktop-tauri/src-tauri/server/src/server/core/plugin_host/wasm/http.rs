@@ -28,7 +28,7 @@ pub(super) fn guard_ordinary(policy: super::managed_task::OrdinaryPolicy, params
 
 pub(super) fn guard_token_exchange(context: &Context, params: &Value) -> Result<(), proto::WireError> {
     let provider = context.shared.options.provider.as_str();
-    if !matches!(provider, "kiro" | "codearts" | "doubaowork") { return Ok(()); }
+    if !matches!(provider, "kiro" | "codearts" | "codearts-intl" | "doubaowork") { return Ok(()); }
     let raw = params["url"].as_str().ok_or_else(|| super::error("换证请求地址无效"))?;
     let parsed = url::Url::parse(raw).map_err(|_| super::error("换证请求地址无效"))?;
     let host = parsed.host_str().unwrap_or("");
@@ -60,7 +60,7 @@ pub(super) fn guard_token_exchange(context: &Context, params: &Value) -> Result<
         {
             return Ok(());
         }
-        if provider == "codearts" && context.managed.is_none()
+        if matches!(provider, "codearts" | "codearts-intl") && context.managed.is_none()
             && !context.account.is_empty() && params["method"] == "POST"
             && parsed.query().is_none()
             && params.get("body_resource").is_none_or(Value::is_null)

@@ -43,7 +43,7 @@ impl Context {
         let origin = match self.shared.options.provider.as_str() {
             "tabbit" => "https://web.tabbit.com",
             "tabbit-intl" => "https://web.tabbit.ai",
-            "codearts" if url_path(params)? == "/api/v2/chat/completions" => {
+            "codearts" | "codearts-intl" if url_path(params)? == "/api/v2/chat/completions" => {
                 self.conversation.as_ref().ok_or_else(unavailable)?
                     .freeze_http_submission(&self.shared, &self.account)?;
                 return Ok(());
@@ -98,7 +98,7 @@ impl ConversationCall {
             || state.record.is_some()
             || account.is_empty()
             || account != self.account
-            || !matches!(self.provider.as_str(), "tabbit" | "tabbit-intl" | "codearts" | "doubaowork")
+            || !matches!(self.provider.as_str(), "tabbit" | "tabbit-intl" | "codearts" | "codearts-intl" | "doubaowork")
             || shared.options.provider != self.provider
             || !std::ptr::eq(self.shared.as_ptr(), Arc::as_ptr(shared))
         {

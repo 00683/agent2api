@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 use super::context::Context;
 use crate::server::core::egress::managed::FrozenHttpClient;
 
-const ORIGIN: &str = "https://snap-access.cn-north-4.myhuaweicloud.com";
+use super::codearts_realm::Realm;
 const HEARTBEAT: &str = "/snap-manager/v1/chat-session/heartbeat";
 
 pub(super) struct Session {
@@ -36,6 +36,7 @@ impl Session {
 impl Drop for Session { fn drop(&mut self) { self.stop.cancel(); } }
 
 struct Heartbeat {
+    realm: Realm,
     shared: std::sync::Weak<super::context::Shared>,
     account: String,
     original_secret: Value,
@@ -62,7 +63,8 @@ fn slots(identity: &str) -> Result<Arc<Semaphore>, proto::WireError> {
 impl Context {
     pub(super) async fn codearts_session(&mut self, method: &str, params: &Value) -> Result<Value, proto::WireError> {
         self.permission("http.codearts-session.v1")?;
-        if self.shared.options.provider != "codearts" || self.conversation.is_none()
+        let realm = Realm::for_provider(&self.shared.options.provider).ok_or_else(invalid)?;
+        if self.conversation.is_none()
             || !params.as_object().is_some_and(|fields| fields.is_empty()) { return Err(invalid()); }
         if method == "codearts.session.close" {
             if let Some(session) = self.codearts_session.take() { session.close().await; }
@@ -74,8 +76,8 @@ impl Context {
         let deadline = self.call_deadline.min(Instant::now() + Duration::from_secs(30));
         let client = tokio::time::timeout_at(deadline,FrozenHttpClient::from_path(path)).await
             .map_err(|_| invalid())?.map_err(|_| invalid())?;
-        let record = self.shared.callbacks.store_get("codearts".into(),self.account.clone()).await?;
-        if record["provider"] != "codearts" || record["public"]["enabled"] == false { return Err(invalid()); }
+        let record = self.shared.callbacks.store_get(realm.provider.into(),self.account.clone()).await?;
+        if record["provider"] != realm.provider || record["public"]["enabled"] == false { return Err(invalid()); }
         let secret = &record["secret"];
         let field = |name: &str| -> Result<Zeroizing<String>,proto::WireError> {
             secret[name].as_str().filter(|value| !value.is_empty() && value.len() <= 8192 && !value.chars().any(char::is_control))
@@ -96,17 +98,17 @@ impl Context {
             _ if record["id"].as_str() == Some(self.account.as_str()) => format!("account:{}", self.account),
             _ => return Err(invalid()),
         };
-        let slot = slots(&identity)?.try_acquire_owned().map_err(|_| proto::WireError::with_code(
+        let slot = slots(&format!("{}:{identity}", realm.provider))?.try_acquire_owned().map_err(|_| proto::WireError::with_code(
             "CodeArts 当前账号已有三路对话，请稍后重试",
             format!("provider_http:{}", json!({"status":429,"code":"codearts_concurrency_limited"})),
         ))?;
         let mut random = [0u8;16];
         getrandom::getrandom(&mut random).map_err(|_| invalid())?;
         let id = format!("{:032x}",u128::from_be_bytes(random));
-        let heartbeat = Heartbeat { shared:Arc::downgrade(&self.shared), account:self.account.clone(), original_secret:secret.clone(),
+        let heartbeat = Heartbeat { realm, shared:Arc::downgrade(&self.shared), account:self.account.clone(), original_secret:secret.clone(),
             access:field("access_key_id")?,secret:field("secret_access_key")?,security:field("security_token")?,
             id:id.clone(),agent:crate::server::core::user_agent::override_value(
-                "codearts", record["public"]["userAgent"].as_str().unwrap_or(""),
+                realm.provider, record["public"]["userAgent"].as_str().unwrap_or(""),
             ).to_string(),client:client.clone(),_slot:slot };
         let stop = CancellationToken::new();
         let ended = Arc::new(Notify::new());
@@ -145,7 +147,7 @@ impl Context {
 impl Heartbeat {
     async fn send(&self,status: &str) -> Result<(),proto::WireError> {
         let shared = self.shared.upgrade().ok_or_else(invalid)?;
-        let record = shared.callbacks.store_get("codearts".into(), self.account.clone()).await?;
+        let record = shared.callbacks.store_get(self.realm.provider.into(), self.account.clone()).await?;
         if record["secret"] != self.original_secret || record["public"]["enabled"] == false { return Err(invalid()); }
         let date = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let mut random = [0u8;16]; getrandom::getrandom(&mut random).map_err(|_| invalid())?;
@@ -153,7 +155,7 @@ impl Heartbeat {
         let mut headers = vec![("content-type","application/json".to_string()),("accept","application/json".to_string()),
             ("x-language","en-us".to_string()),("x-client-type","kernel".to_string()),("user-session-id",self.id.clone()),
             ("x-snap-traceid",trace),("x-security-token",self.security.to_string()),("x-sdk-date",date.clone()),
-            ("host","snap-access.cn-north-4.myhuaweicloud.com".to_string())];
+            ("host",self.realm.authority.to_string())];
         headers.sort_by_key(|(name,_)| *name);
         let names = headers.iter().map(|(name,_)| *name).collect::<Vec<_>>().join(";");
         let canonical = headers.iter().map(|(name,value)| format!("{name}:{}\n",value.trim())).collect::<String>();
@@ -163,7 +165,7 @@ impl Heartbeat {
         mac.update(to_sign.as_bytes());
         let auth = format!("SDK-HMAC-SHA256 Access={}, SignedHeaders={names}, Signature={:x}",self.access.as_str(),mac.finalize().into_bytes());
         let client = self.client.client().map_err(|_| invalid())?;
-        let mut request = client.put(format!("{ORIGIN}{HEARTBEAT}?status={status}")).body("{}").header("authorization",auth);
+        let mut request = client.put(format!("{}{HEARTBEAT}?status={status}", self.realm.origin)).body("{}").header("authorization",auth);
         for (name,value) in headers { request = request.header(name,value); }
         if !self.agent.is_empty() { request = request.header("user-agent",&self.agent); }
         let result = tokio::time::timeout(Duration::from_secs(20),async {

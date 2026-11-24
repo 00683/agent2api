@@ -1382,7 +1382,7 @@ async fn attempt_queue(
                         // 「需要重新登录」上，用户明明已经重新登录、账号也能用，
                         // 界面却一直红着。
                         // CodeArts 的临时访问凭据仍可能有效，转发成功不代表刷新授权恢复。
-                        if adapter.provider_id() != "codearts"
+                        if !matches!(adapter.provider_id(), "codearts" | "codearts-intl")
                             && !crate::server::core::providers::subscriptions::contains(provider_id)
                             && target.account.as_ref()
                             .is_some_and(|account| account.get("needsRelogin").and_then(Value::as_bool) == Some(true)) {

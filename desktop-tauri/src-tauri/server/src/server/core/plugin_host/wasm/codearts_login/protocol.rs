@@ -10,10 +10,11 @@ use super::invalid;
 
 const TOKEN: &str = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens";
 const IDENTITY: &str = "https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity";
-const BASE: &str = "https://snap-access.cn-north-4.myhuaweicloud.com";
+use super::super::codearts_realm::Realm;
 
 pub(super) struct Login {
     pub(super) callback: String,
+    pub(super) realm: Realm,
     verifier: Zeroizing<String>,
     key: SigningKey,
     ticket: String,
@@ -32,12 +33,12 @@ pub(super) fn nonce() -> Result<String,proto::WireError> {
     Ok(URL_SAFE_NO_PAD.encode(random))
 }
 impl Login {
-    pub(super) fn new(port: u16) -> Result<Self,proto::WireError> {
+    pub(super) fn new(port: u16, realm: Realm) -> Result<Self,proto::WireError> {
         let verifier = Zeroizing::new(nonce()?);
         let mut bytes = [0u8;32]; getrandom::getrandom(&mut bytes).map_err(|_| invalid())?;
         let key = SigningKey::from_slice(&bytes).map_err(|_| invalid())?;
         use zeroize::Zeroize; bytes.zeroize();
-        Ok(Self {callback:format!("http://127.0.0.1:{port}/oauth/callback"),verifier,key,ticket:nonce()?})
+        Ok(Self {callback:format!("http://127.0.0.1:{port}/oauth/callback"),verifier,key,ticket:nonce()?,realm})
     }
     fn context(&self) -> Value {
         let point = self.key.verifying_key().to_encoded_point(false);
@@ -51,12 +52,12 @@ impl Login {
     pub(super) fn authorization(&self) -> String {
         let context = self.context();
         let port = url::Url::parse(&self.callback).ok().and_then(|url| url.port()).unwrap_or(0);
-        let pairs = [ ("theme","2".to_string()),("locale","zh-cn".to_string()),("uri_scheme","vscode-codebot".to_string()),
+        let pairs = [ ("theme","2".to_string()),("locale",self.realm.locale.to_string()),("uri_scheme","vscode-codebot".to_string()),
             ("client_id","vscode-codebot".to_string()),("port",port.to_string()),("code_challenge",context["pkce_pair"]["code_challenge"].as_str().unwrap_or("").to_string()),
             ("code_challenge_method","SHA-256".to_string()),("ticket_id",self.ticket.clone()),("auth_callback_url",self.callback.clone()),
-            ("plugin-name","snap_vscode".to_string()),("plugin-version","26.9.101".to_string())];
+            ("plugin-name","snap_vscode".to_string()),("plugin-version",self.realm.version.to_string())];
         let query = pairs.iter().map(|(name,value)|format!("{name}={}",encode(value))).collect::<Vec<_>>().join("&");
-        format!("https://codearts.huaweicloud.com/portal/authorize?{query}")
+        format!("{}/authorize?{query}", self.realm.portal)
     }
     fn proof(&self) -> Result<String,proto::WireError> {
         let context = self.context();
@@ -88,21 +89,21 @@ impl Login {
         secret["user_name"] = json!(name);
         let expires = chrono::DateTime::parse_from_rfc3339(required(&secret,"expires_at")?).map_err(|_| invalid())?.timestamp_millis();
         let refresh_expires = secret["refresh_token"].as_str().and_then(jwt_exp);
-        let identity = format!("codearts-{}-{}",required(&secret,"domain_id")?,required(&secret,"user_id")?);
+        let identity = format!("{}-{}-{}",self.realm.provider,required(&secret,"domain_id")?,required(&secret,"user_id")?);
         let public = json!({"name":secret["user_name"],"userId":secret["user_id"],"domainId":secret["domain_id"],"expiresAt":expires,
             "accessTokenExpiresAt":expires,"refreshTokenExpiresAt":refresh_expires,"hasAccessToken":true,"hasRefreshToken":true,"canRefresh":true,"refreshStatus":"ready"});
         Ok(Material {public,secret,identity})
     }
     pub(super) async fn ticket(&self,client: &FrozenHttpClient,secret: &str) -> Result<Option<Material>,proto::WireError> {
-        let url = format!("{BASE}/snap-manager/v1/login/ticket?ticket_id={}&secret={}",encode(&self.ticket),encode(secret));
-        let request = client.client().map_err(|_| invalid())?.get(url).header("Accept","application/json").header("plugin-name","snap_vscode").header("plugin-version","26.9.101").build().map_err(|_| invalid())?;
+        let url = format!("{}/snap-manager/v1/login/ticket?ticket_id={}&secret={}",self.realm.origin,encode(&self.ticket),encode(secret));
+        let request = client.client().map_err(|_| invalid())?.get(url).header("Accept","application/json").header("plugin-name","snap_vscode").header("plugin-version",self.realm.version).build().map_err(|_| invalid())?;
         let (status,value) = send_allow_pending(client,request).await?;
         if matches!(status,404|202) { return Ok(None); }
         let c = &value["credential"];
         let secret = json!({"access_key_id":required(c,"access")?,"secret_access_key":required(c,"secret")?,"security_token":required(c,"securitytoken")?,
             "expires_at":required(c,"expires_at")?,"domain_id":required(&value,"domain_id")?,"user_id":required(&value,"user_id")?,
             "user_name":value["user_name"],"login_type":"WEB","refresh_token":""});
-        let identity = format!("codearts-{}-{}",required(&secret,"domain_id")?,required(&secret,"user_id")?);
+        let identity = format!("{}-{}-{}",self.realm.provider,required(&secret,"domain_id")?,required(&secret,"user_id")?);
         let expires = chrono::DateTime::parse_from_rfc3339(required(&secret,"expires_at")?).map_err(|_| invalid())?.timestamp_millis();
         let public = json!({"name":secret["user_name"],"userId":secret["user_id"],"domainId":secret["domain_id"],"expiresAt":expires,
             "hasAccessToken":true,"hasRefreshToken":false,"canRefresh":false,"importWarning":"本次使用临时登录兜底，约一小时到期后需要重新登录"});
@@ -150,4 +151,25 @@ fn jwt_exp(token: &str) -> Option<i64> {
     let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
     let claims: Value = serde_json::from_slice(&bytes).ok()?;
     claims["exp"].as_i64()?.checked_mul(1000).filter(|at| *at > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn codearts_international_authorization_uses_hk_portal_and_shared_sts() {
+        let login = Login::new(43521, Realm::for_provider("codearts-intl").unwrap()).unwrap();
+        let url = url::Url::parse(&login.authorization()).unwrap();
+        assert_eq!(url.host_str(), Some("codearts.ap-southeast-1.huaweicloud.com"));
+        assert_eq!(url.path(), "/portal/authorize");
+        let fields: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(fields.get("plugin-version").map(|value| value.as_ref()), Some("26.10.300"));
+        assert_eq!(fields.get("auth_callback_url").map(|value| value.as_ref()), Some(login.callback.as_str()));
+        let proof = login.proof().unwrap();
+        let payload: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(proof.split('.').nth(1).unwrap()).unwrap()).unwrap();
+        assert_eq!(payload["htu"], TOKEN);
+        assert_eq!(payload["htm"], "POST");
+        let domestic = Login::new(43522, Realm::for_provider("codearts").unwrap()).unwrap();
+        assert!(domestic.authorization().starts_with("https://codearts.huaweicloud.com/portal/authorize?"));
+    }
 }

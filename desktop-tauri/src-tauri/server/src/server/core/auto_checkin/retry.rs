@@ -194,7 +194,7 @@ fn retry_at(store: &AccountStore, row: &Value, now: i64, gap_ms: i64) -> Option<
             .timestamp_millis();
         return (now < window).then(|| window.max(now + gap_ms));
     }
-    (provider == "codearts").then_some(now + gap_ms)
+    matches!(provider, "codearts" | "codearts-intl").then_some(now + gap_ms)
 }
 
 /// 把一轮结果并进 `lastResult`：维护当天的重试名单 + 次数记账。

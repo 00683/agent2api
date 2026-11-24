@@ -107,7 +107,7 @@ pub fn images_for_channel(provider: &str, item: &Value) -> Option<bool> {
     let user = item.pointer("/capSources/supportsImages").and_then(Value::as_str) == Some("user")
         || item.pointer("/capabilities/supportsImages").and_then(Value::as_bool).is_some();
     // CodeArts 的福利目录固定填 false，缺字段的 agent 目录也会补 false；它们不是拒图证据。
-    if provider == "codearts" && !user && item.get("supportsImages").and_then(Value::as_bool) == Some(false) { return None; }
+    if matches!(provider, "codearts" | "codearts-intl") && !user && item.get("supportsImages").and_then(Value::as_bool) == Some(false) { return None; }
     item.get("supportsImages").and_then(Value::as_bool)
 }
 

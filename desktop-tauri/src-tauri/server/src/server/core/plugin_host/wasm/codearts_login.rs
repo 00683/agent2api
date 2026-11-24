@@ -24,7 +24,7 @@ fn flows() -> &'static Mutex<HashMap<String,Arc<Flow>>> { static ITEMS: OnceLock
 
 pub(super) async fn invoke(context: &Context,method: &str,params: &Value) -> Result<Value,proto::WireError> {
     context.permission("login.codearts.v1")?;
-    if context.shared.options.provider != "codearts" { return Err(invalid()); }
+    if super::codearts_realm::Realm::for_provider(&context.shared.options.provider).is_none() { return Err(invalid()); }
     if method == "codearts.login.start" {
         if params["method"].as_str() != Some("browser")
             || params["payload"].get("methodIndex").is_some_and(|index| index.as_u64() != Some(1)) {
@@ -60,7 +60,7 @@ async fn start(context: &Context) -> Result<Value,proto::WireError> {
     let id = format!("codearts_login_{}",base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes));
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0)).await.map_err(|_| invalid())?;
     let port = listener.local_addr().map_err(|_| invalid())?.port();
-    let protocol = protocol::Login::new(port)?;
+    let protocol = protocol::Login::new(port, super::codearts_realm::Realm::for_provider(&context.shared.options.provider).ok_or_else(invalid)?)?;
     let selected = crate::server::core::proxies::ResolvedProxy::from_json(&context.proxy).map_err(|_| invalid())?;
     let client = FrozenHttpClient::from_selected(selected).await.map_err(|_| invalid())?;
     let cancel = context.shared.cancel.child_token();

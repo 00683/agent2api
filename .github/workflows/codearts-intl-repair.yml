@@ -1,0 +1,53 @@
+name: CodeArts international gateway
+on:
+  push:
+    branches: [fix/codearts-intl-20261124]
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-tauri/src-tauri -> ../../target
+          key: codearts-intl-windows
+      - name: Build desktop and mobile interfaces
+        shell: bash
+        run: |
+          npm --prefix desktop-tauri/ui-islands ci
+          npm --prefix desktop-tauri/ui-islands run build
+          npm --prefix desktop-tauri/mobile ci
+          npm --prefix desktop-tauri/mobile run build
+      - name: Save generated interfaces on the repair branch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop-tauri/ui/islands desktop-tauri/ui/m desktop-tauri/ui/sw.js
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git -c core.hooksPath=NUL commit -m "build: refresh interfaces for CodeArts international"
+            git push origin HEAD:fix/codearts-intl-20261124
+          }
+      - name: Verify regional login and session isolation
+        working-directory: desktop-tauri/src-tauri
+        run: cargo test --locked -p agent2api-server codearts --lib
+      - name: Build Windows using the official packaging command
+        run: |
+          npm --prefix desktop-tauri ci
+          npm --prefix desktop-tauri run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codearts-intl-gateway-windows
+          path: |
+            target/release/agent2api.exe
+            target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
