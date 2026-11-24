@@ -524,7 +524,7 @@ impl AccountStore {
                 record.set(PUBLIC_KEY, Value::Object(public));
             }
             // 授权状态与当前凭据一并条件写入，不能让旧刷新失败覆盖重新登录的新凭据。
-            if matches!(record.provider(), "codearts" | "codearts-intl") && record.get("pluginIdentityContract").and_then(Value::as_u64) != Some(1) {
+            if matches!(record.provider().as_str(), "codearts" | "codearts-intl") && record.get("pluginIdentityContract").and_then(Value::as_u64) != Some(1) {
                 if secret.get("needsRelogin").and_then(Value::as_bool) == Some(true) {
                     record.set("needsRelogin", Value::Bool(true));
                     record.set(

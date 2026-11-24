@@ -138,7 +138,7 @@ pub(crate) fn read_bytes(dir: &Path, manifest: &proto::PackManifest, text: &[u8]
             return Err(format!("Wasm 能力 {capability} 缺少依赖声明"));
         }
     }
-    if (requires("http.codearts-session.v1") || requires("login.codearts.v1")) && super::codearts_realm::Realm::for_provider(&manifest.providers[0].id).is_none() {
+    if (requires("http.codearts-session.v1") || requires("login.codearts.v1")) && super::codearts_realm::Realm::for_provider(manifest.providers[0].id.as_str()).is_none() {
         return Err("CodeArts 会话和登录能力不能跨提供商使用".into());
     }
     if requires("crypto.deepseek-pow.v1") && manifest.providers[0].id.as_str() != "deepseek-web" {

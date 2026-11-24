@@ -300,7 +300,7 @@ impl RpcAdapter {
         mut params: Value,
         cancel: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Value, GatewayError> {
-        if matches!(self.id.as_str(), "codearts" | "codearts-intl") && self.metadata().host.options.wasm.is_some()
+        if matches!(self.id, "codearts" | "codearts-intl") && self.metadata().host.options.wasm.is_some()
             && method == proto::methods::gateway::MODELS_REFRESH {
             let store = crate::server::core::account_store::plugin_accounts::shared()
                 .ok_or_else(|| GatewayError::with_status(503, "原账号存储尚未就绪"))?;

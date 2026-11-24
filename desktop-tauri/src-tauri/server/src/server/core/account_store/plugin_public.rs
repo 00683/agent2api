@@ -57,9 +57,9 @@ pub(super) fn credential_fields(record: &StoredAccount, public: &mut Map<String,
     public.insert("hasRefreshToken".to_string(), Value::Bool(has_refresh));
     public.insert("canRefresh".to_string(), Value::Bool(can_refresh));
     let has_access = token_present(record, public, &["accessToken", "access_token", "access", "token"], "hasAccessToken")
-        || matches!(record.provider(), "codearts" | "codearts-intl") && token_present(record, public, &["access_key_id"], "hasAccessToken");
+        || matches!(record.provider().as_str(), "codearts" | "codearts-intl") && token_present(record, public, &["access_key_id"], "hasAccessToken");
     public.insert("hasAccessToken".to_string(), Value::Bool(has_access));
-    if matches!(record.provider(), "codearts" | "codearts-intl") {
+    if matches!(record.provider().as_str(), "codearts" | "codearts-intl") {
         for key in ["needsRelogin", "needsReloginReason"] {
             if let Some(value) = secret.and_then(|fields| fields.get(key)) {
                 public.insert(key.to_string(), value.clone());
